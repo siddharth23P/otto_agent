@@ -1,0 +1,17 @@
+[project]
+name = "otto-cli-agent"
+version = "0.0.1"
+description = "Otto swarm agents"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=1.4.0",
+    "langchain-anthropic>=1.7.1",
+    "langchain-google-genai>=4.4.0",
+    "langchain-openai>=1.6.0",
+    "langfuse>=4.15.1",
+    "langgraph>=1.2.11",
+    "langgraph-cli[inmem]>=0.4.31",
+    "python-dotenv>=1.2.3",
+    "typer>=0.27.2",
+]
+
