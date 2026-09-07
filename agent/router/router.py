@@ -1,9 +1,9 @@
 from typing import Any, Mapping, Protocol, runtime_checkable
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from agent.router.llm_provider import get_provider, provider_class
-from agent.router.llm_provider.base import ModelInfo, ProviderError
+from agent.router.llm_provider import get_provider, provider_class, provider_names
+from agent.router.llm_provider.base import AuthError, ModelInfo, ProviderError
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 
 @dataclass(frozen=True,slots=True)
@@ -60,15 +60,36 @@ class FakeCatalogue:
     def models(self, provider):        return self.data[provider]
     
 class Router:
-    def __init__(self, catalogue: Catalogue | None = None):
+    REQUIRED = "inception"
+    #: Precedence for choosing the single secondary vendor. Gemini leads
+    #: because Flash is the cheapest tier with the widest window. This order is
+    #: a deliberate cost decision -- changing it changes which vendor a swarm
+    #: reaches for, so a test pins it.
+    OPTIONAL = ("gemini", "openai", "anthropic")
+    
+    def __init__(self, catalogue: Catalogue | None = None, *, strict: bool = False):
         self.catalogue = catalogue or RegistryCatalogue()
-        
+        self.strict = strict
+        # Read once. If this were a live lookup, a key appearing mid-run could
+        # make two candidates in the same chain disagree about the same vendor.
+        self._configured = tuple(p for p in provider_names() if self.catalogue.is_configured(p))
+        if self.REQUIRED not in self._configured:
+            raise AuthError("Otto requires Inception. Set INCEPTION_API_KEY in .env")
+        self.secondary = next((p for p in self.OPTIONAL if p in self._configured), None)
+        self.ignored = tuple(p for p in self.OPTIONAL if p in self._configured and p != self.secondary)
+    
+    def _usable(self, provider: str) -> bool:
+        return provider == self.REQUIRED or provider == self.secondary
+
     def _match(self, c: Candidate) -> ModelInfo | str:
+        
         provider = c.provider_name
         if provider is None:
             return "open queries not supported"
-        if not self.catalogue.is_configured(provider):
+        if provider not in self._configured:
             return f"{provider.upper()}_API_KEY not set"
+        if not self._usable(provider):
+            return f"{provider} is not the selected secondary"
         
         pool = self.catalogue.models(provider)
         model = self._select(pool, c)
