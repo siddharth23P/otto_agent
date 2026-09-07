@@ -1,9 +1,11 @@
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from dataclasses import dataclass
 
+from langchain.chat_models import BaseChatModel
+
 from agent.router.llm_provider import get_provider, provider_class, provider_names
-from agent.router.llm_provider.base import AuthError, ModelInfo, ProviderError
+from agent.router.llm_provider.base import AuthError, Capability, CapabilityNotSupported, ModelInfo, ProviderError
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 
 @dataclass(frozen=True,slots=True)
@@ -118,9 +120,53 @@ class Router:
             if isinstance(outcome, str):
                 skips.append(Skip(i, render(c), outcome))
                 continue
+            
+            if self.strict and i > 0:
+                raise RoutingDegraded(task, tuple(skips))
+            
             return RoutingDecision(
                 task=task, provider=outcome.provider, model=outcome,
                 endpoint=c.endpoint, params=dict(c.params),
                 index=i, skipped=tuple(skips),
             )
         raise NoViableRoute(task, tuple(skips))
+    
+    def model_for(self, d: RoutingDecision, **overrides) -> BaseChatModel:
+        if d.endpoint is not Endpoint.CHAT:
+            raise CapabilityNotSupported(f"{d.task.value} routes to {d.endpoint.value}, not chat")
+        provider = get_provider(d.provider)
+        return provider.chat_model(d.model.id, **{**d.params, **overrides})
+    
+    def chat_model(self, task: Task, **overrides) -> BaseChatModel:
+        return self.model_for(self.resolve(task), **overrides)
+    
+    def fim(self, prefix: str, suffix: str = "", *,task: Task = Task.CODE_COMPLETE, **overrides) -> str:
+        d = self.resolve(task)
+        if d.endpoint is not Endpoint.FIM:
+            raise CapabilityNotSupported(f"{task.value} is not a FIM route")
+        provider = get_provider(d.provider)
+        provider.require(Capability.FIM)
+        return provider.fim(d.model.id, prefix, suffix, **{**d.params, **overrides})
+    
+    def code_edit(self, code_to_edit: str, *, current_file: str = "",
+                  recently_viewed: Sequence[str] = (), edit_history: Sequence[str] = (),
+                  task: Task = Task.CODE_EDIT, **overrides) -> str:
+        d = self.resolve(task)
+        if d.endpoint is not Endpoint.EDIT:
+            raise CapabilityNotSupported(f"{task.value} is not an edit route")
+        provider = get_provider(d.provider)
+        provider.require(Capability.EDIT)
+        return provider.code_edit(
+            d.model.id, code_to_edit,
+            current_file=current_file,
+            recently_viewed=recently_viewed,
+            edit_history=edit_history,
+            **{**d.params, **overrides})
+        
+
+class RoutingDegraded(ProviderError):
+    def __init__(self, task: Task, skipped: tuple[Skip, ...]):
+        self.task, self.skipped = task, skipped
+        detail = "\n  ".join(str(s) for s in skipped)
+        super().__init__(
+            f"{task.value} fell back past its preferred candidate:\n  {detail}")

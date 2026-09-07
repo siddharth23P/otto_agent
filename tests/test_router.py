@@ -15,10 +15,17 @@ from __future__ import annotations
 import pytest
 
 from agent.router import router as router_mod
-from agent.router.llm_provider.base import AuthError, BaseProvider, Capability, ModelInfo
+from agent.router.llm_provider.base import (
+    AuthError,
+    BaseProvider,
+    Capability,
+    CapabilityNotSupported,
+    ModelInfo,
+)
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 from agent.router.router import (
     Catalogue,
+    RoutingDegraded,
     FakeCatalogue,
     NoViableRoute,
     RegistryCatalogue,
@@ -53,15 +60,19 @@ HAIKU = model("claude-haiku-4-5", "anthropic", {CHAT, TOOLS, Capability.REASONIN
 INCEPTION_ONLY = {"inception": [MERCURY, EDIT2]}
 
 
-def router(**catalogue) -> Router:
-    """A Router over a fake catalogue. Absent vendor == unconfigured.
+def catalogue(**providers) -> FakeCatalogue:
+    """A fake catalogue. Absent vendor == unconfigured.
 
     Inception is always present because `__init__` refuses to construct
     without it (3.2). Pass `inception=[]` for "configured but offering
     nothing" -- that is how you reach NoViableRoute now.
     """
-    catalogue.setdefault("inception", [MERCURY, EDIT2])
-    return Router(catalogue=FakeCatalogue(catalogue))
+    providers.setdefault("inception", [MERCURY, EDIT2])
+    return FakeCatalogue(providers)
+
+
+def router(**providers) -> Router:
+    return Router(catalogue=catalogue(**providers))
 
 
 # ---------------------------------------------------------------------------
@@ -368,3 +379,148 @@ def test_configured_is_a_snapshot_not_a_live_lookup():
         r.resolve(Task.PLAN)                 # PLAN leads with a Gemini query
     reasons = [s.reason for s in exc.value.skipped]
     assert any("GEMINI_API_KEY not set" in reason for reason in reasons), reasons
+
+
+# ---------------------------------------------------------------------------
+# Models and hard routes (Phase 4)
+# ---------------------------------------------------------------------------
+#
+# `Catalogue` covers reading the catalogue, but these methods call
+# get_provider() to *construct* a provider, which needs a real key. So the
+# seam here is a monkeypatched get_provider. Four call sites is fine; if this
+# spreads to a dozen tests, promote it to an injected provider_factory.
+
+
+class FakeProvider:
+    """Records what the router handed it, returns sentinels."""
+
+    def __init__(self) -> None:
+        self.chat: dict = {}
+        self.fim_call: dict = {}
+        self.edit_call: dict = {}
+        self.required: list[Capability] = []
+
+    def require(self, capability: Capability) -> None:
+        self.required.append(capability)
+
+    def chat_model(self, model_id, **kw):
+        self.chat = {"model": model_id, **kw}
+        return "a-chat-model"
+
+    def fim(self, model_id, prefix, suffix="", **kw):
+        self.fim_call = {"model": model_id, "prefix": prefix, "suffix": suffix, **kw}
+        return "  return a + b"
+
+    def code_edit(self, model_id, code_to_edit, **kw):
+        self.edit_call = {"model": model_id, "code": code_to_edit, **kw}
+        return "edited"
+
+
+@pytest.fixture
+def provider(monkeypatch) -> FakeProvider:
+    fake = FakeProvider()
+    monkeypatch.setattr(router_mod, "get_provider", lambda name: fake)
+    return fake
+
+
+# --- chat -------------------------------------------------------------------
+
+
+def test_chat_model_passes_the_resolved_id_and_route_params(provider):
+    assert router().chat_model(Task.CHAT_FAST) == "a-chat-model"
+    assert provider.chat["model"] == "mercury-2"
+    assert provider.chat["temperature"] == 0.2
+    assert provider.chat["diffusing"] is True
+
+
+def test_call_site_overrides_beat_route_params(provider):
+    router().chat_model(Task.CHAT_FAST, temperature=0.9)
+    assert provider.chat["temperature"] == 0.9      # override won
+    assert provider.chat["diffusing"] is True       # unrelated route param survived
+
+
+def test_chat_model_refuses_a_non_chat_route(provider):
+    with pytest.raises(CapabilityNotSupported) as exc:
+        router().chat_model(Task.CODE_COMPLETE)
+    assert "not chat" in str(exc.value)
+    assert provider.chat == {}, "must fail before constructing anything"
+
+
+def test_model_for_accepts_a_decision_made_earlier(provider):
+    """Phase 6 needs this split: resolve once, trace it, then build."""
+    r = router()
+    d = r.resolve(Task.CHAT_FAST)
+    r.model_for(d)
+    assert provider.chat["model"] == d.model.id
+
+
+# --- fim / edit -------------------------------------------------------------
+
+
+def test_fim_forwards_prefix_and_suffix_positionally(provider):
+    out = router().fim("def add(a, b):\n", "\nreturn c")
+    assert out == "  return a + b"
+    assert provider.fim_call["model"] == "mercury-edit-2"
+    assert provider.fim_call["prefix"] == "def add(a, b):\n"
+    assert provider.fim_call["suffix"] == "\nreturn c"
+    assert provider.fim_call["max_tokens"] == 256          # from the route
+    assert provider.required == [Capability.FIM]
+
+
+def test_fim_refuses_a_non_fim_route(provider):
+    with pytest.raises(CapabilityNotSupported):
+        router().fim("x", task=Task.CHAT_FAST)
+
+
+def test_code_edit_forwards_every_context_block(provider):
+    router().code_edit(
+        "print('hi')",
+        current_file="def greet():\n    print('hi')",
+        recently_viewed=["a.py"],
+        edit_history=["- old\n+ new"],
+    )
+    call = provider.edit_call
+    assert call["model"] == "mercury-edit-2"
+    assert call["code"] == "print('hi')"
+    assert call["recently_viewed"] == ["a.py"]
+    assert call["edit_history"] == ["- old\n+ new"]
+    assert call["temperature"] == 0.4                      # from the route
+    assert provider.required == [Capability.EDIT]
+
+
+def test_code_edit_has_no_instruction_parameter():
+    """Next-edit prediction infers the change from context. An instruction
+    argument would be an API that silently does nothing."""
+    import inspect
+    params = inspect.signature(Router.code_edit).parameters
+    assert "instruction" not in params
+
+
+# --- strict -----------------------------------------------------------------
+
+
+def test_strict_raises_when_the_chain_falls_back():
+    r = Router(catalogue=catalogue(), strict=True)       # no gemini
+    with pytest.raises(RoutingDegraded) as exc:
+        r.resolve(Task.PLAN)
+    assert "GEMINI_API_KEY" in str(exc.value)
+    assert exc.value.task is Task.PLAN
+
+
+def test_strict_is_quiet_when_the_first_candidate_wins():
+    Router(catalogue=catalogue(), strict=True).resolve(Task.CHAT_FAST)
+
+
+def test_strict_reaches_every_entry_point(provider):
+    """The flag lives in resolve(), so chat_model inherits it rather than
+    needing its own check."""
+    r = Router(catalogue=catalogue(), strict=True)
+    with pytest.raises(RoutingDegraded):
+        r.chat_model(Task.PLAN)
+    assert provider.chat == {}, "must fail before constructing anything"
+
+
+def test_non_strict_falls_back_silently_but_records_it():
+    d = router().resolve(Task.PLAN)
+    assert d.fell_back is True
+    assert d.skipped
