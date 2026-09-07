@@ -16,3 +16,17 @@ dependencies = [
     "typer>=0.27.2",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+otto = "agent.cli.main:app"
+
+# The project is named otto-cli-agent but the package directory is `agent`,
+# so hatchling's name-matching heuristic finds nothing. Name it explicitly.
+[tool.hatch.build.targets.wheel]
+packages = ["agent"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
