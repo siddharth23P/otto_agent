@@ -4,7 +4,7 @@ from rich import box
 
 from agent.cli.ui import err, out
 from agent.router.llm_provider import health_report
-from agent.router.llm_provider.base import ProviderStatus
+from agent.router.llm_provider.base import AuthError, ProviderStatus
 
 STYLE = {ProviderStatus.OK: "ok", ProviderStatus.NO_KEY: "muted",
          ProviderStatus.AUTH_FAILED: "bad",
@@ -30,7 +30,15 @@ def doctor(ctx: typer.Context) -> None:
         )
     out.print(t)
     
-    router = ctx.obj.router
+    # The table above is the diagnosis. If the required provider is missing,
+    # say so as the report's conclusion -- do not let the exception from
+    # `ctx.obj.router` replace the very finding the table was building toward.
+    try:
+        router = ctx.obj.router
+    except AuthError as exc:
+        out.print(f"[bad]router unavailable[/] {exc}")
+        raise typer.Exit(2) from None
+
     out.print(f"[muted]required[/]  {router.REQUIRED}")
     out.print(f"[muted]secondary[/] {router.secondary or '[muted]none[/]'}")
     if router.ignored:

@@ -4,6 +4,7 @@ from typing import Annotated
 import typer
 
 from agent.cli.context import AppContext
+from agent.cli.errors import friendly
 from agent.cli import doctor as doctor_cmd
 from agent.cli import models as model_cmd
 from agent.cli import route as route_cmd
@@ -17,10 +18,16 @@ def bootstrap(ctx: typer.Context, strict: Annotated[bool, typer.Option()] = Fals
     load_dotenv(ENV_PATH)
     ctx.obj = AppContext(strict=strict)
     
-app.command("doctor")(doctor_cmd.doctor)
-app.command("models")(model_cmd.models)
-app.command("route")(route_cmd.route)
-app.command("chat")(chat_cmd.chat)
+# `friendly` is applied here, once, rather than as a decorator on each command
+# module. One registration site means a new command cannot forget it, and the
+# command modules stay free of CLI exit-code concerns.
+for _name, _fn in (
+    ("doctor", doctor_cmd.doctor),
+    ("models", model_cmd.models),
+    ("route", route_cmd.route),
+    ("chat", chat_cmd.chat),
+):
+    app.command(_name)(friendly(_fn))
 
 if __name__ == "__main__":
     app()
