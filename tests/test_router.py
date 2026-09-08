@@ -13,6 +13,8 @@ four-candidate ones (REASON, PLAN, SUMMARIZE).
 from __future__ import annotations
 
 import pytest
+from collections import Counter
+from dataclasses import dataclass, field
 
 from agent.router import router as router_mod
 from agent.router.llm_provider.base import (
@@ -22,6 +24,7 @@ from agent.router.llm_provider.base import (
     CapabilityNotSupported,
     Completion,
     ModelInfo,
+    ProviderError,
 )
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 from agent.router.router import (
@@ -539,3 +542,126 @@ def test_fim_returns_text_but_carries_usage_for_the_span(provider):
 
 def test_code_edit_returns_text_not_a_completion(provider):
     assert router().code_edit("x = 1") == "edited"
+
+
+# ---------------------------------------------------------------------------
+# Warm-up and reset (Phase 7)
+# ---------------------------------------------------------------------------
+#
+# `prewarm()` and `reset()` both walk the catalogue rather than the routing
+# table, so the fakes here are catalogues with extra behaviour bolted on --
+# a call counter, an exception, or a `reset()` that actually mutates state --
+# rather than new `Candidate`/`Task` fixtures.
+
+
+@dataclass
+class CountingCatalogue(FakeCatalogue):
+    """Records every provider `models()` was actually called for.
+
+    `prewarm()`'s whole job is walking `usable()` instead of `_configured` --
+    a provider that is configured but not the selected secondary must never
+    reach the network. A counter catches that more precisely than "no
+    exception was raised": it proves the call was skipped, not just that it
+    happened to succeed.
+    """
+    calls: Counter = field(default_factory=Counter)
+
+    def models(self, provider):
+        self.calls[provider] += 1
+        return super().models(provider)
+
+
+@dataclass
+class ExplodingCatalogue(FakeCatalogue):
+    """A catalogue whose Gemini entry is configured but unreachable.
+
+    Distinct from "not configured": `is_configured` says yes, but the network
+    call behind `models()` fails, the way an expired key or a vendor outage
+    would. `prewarm()` exists to turn exactly this into a report instead of a
+    crash.
+    """
+
+    def models(self, provider):
+        if provider == "gemini":
+            raise ProviderError("gemini is down")
+        return super().models(provider)
+
+
+def test_prewarm_touches_only_reachable_providers():
+    """Configured-but-ignored (anthropic here) must never be called.
+
+    Gemini leads OPTIONAL, so with inception + anthropic + gemini all
+    configured, anthropic is `ignored`, not `secondary` -- prewarm must walk
+    `usable()`, not every configured provider.
+    """
+    cat = CountingCatalogue({"inception": [MERCURY], "anthropic": [HAIKU], "gemini": [FLASH]})
+    r = Router(catalogue=cat)
+
+    failures = r.prewarm()
+
+    assert failures == {}
+    assert cat.calls == Counter({"inception": 1, "gemini": 1})
+    assert "anthropic" not in cat.calls
+
+
+def test_prewarm_reports_a_dead_provider_instead_of_raising():
+    """A ProviderError from one provider must not stop the others or the caller."""
+    cat = ExplodingCatalogue({"inception": [MERCURY], "gemini": [FLASH]})
+    r = Router(catalogue=cat)
+
+    failures = r.prewarm()
+
+    assert failures == {"gemini": "gemini is down"}
+
+
+def test_usable_with_inception_only():
+    """No secondary configured: usable() is Inception alone, not every vendor."""
+    r = router()
+    assert r.usable() == ("inception",)
+
+
+@dataclass
+class PromotableCatalogue(FakeCatalogue):
+    """A catalogue whose `reset()` picks up a key that appeared after `__init__`.
+
+    `FakeCatalogue.reset()` is a no-op, which is right for tests that never
+    touch reset -- but `Router.reset()` itself needs a catalogue where
+    resetting actually changes what `is_configured` reports, the way
+    `RegistryCatalogue.reset()` clearing the provider cache lets a newly-set
+    env var be picked up.
+    """
+
+    def reset(self) -> None:
+        self.data = {**self.data, "gemini": [FLASH]}
+
+
+def test_reset_promotes_a_new_secondary():
+    cat = PromotableCatalogue({"inception": [MERCURY]})
+    r = Router(catalogue=cat)
+    assert r.secondary is None                # gemini not configured yet
+
+    r.reset()
+
+    assert r.secondary == "gemini"
+
+
+@dataclass
+class VanishingCatalogue(FakeCatalogue):
+    """A catalogue whose `reset()` drops the required provider.
+
+    Models the case reset exists to guard against: the required key was
+    unset (or revoked) between runs, and `reset()` must fail loudly the same
+    way `__init__` does, not silently leave the router in its old, stale
+    state.
+    """
+
+    def reset(self) -> None:
+        self.data = {k: v for k, v in self.data.items() if k != "inception"}
+
+
+def test_reset_raises_when_inception_disappears():
+    cat = VanishingCatalogue({"inception": [MERCURY]})
+    r = Router(catalogue=cat)
+
+    with pytest.raises(AuthError):
+        r.reset()
