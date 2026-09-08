@@ -6,7 +6,7 @@ That is what lets routing be tested with an empty .env and no network.
 
 from typing import Any, Mapping
 
-from .llm_provider.base import Capability
+from agent.router.llm_provider.base import Capability
 from enum import StrEnum
 from dataclasses import dataclass, field
 
@@ -112,6 +112,24 @@ class Candidate:
 # call. `stop` and `tools` are chat *invoke*-time options, not constructor
 # fields, so they do not belong in a CHAT route's params.
 
+# Two rendering modes, one per vendor family.
+#
+# `diffusing` (Inception only) streams the *denoising effect*: each chunk is a
+# full snapshot of the whole answer, progressively less noisy, NOT the next slice
+# of text. A consumer that appends chunks concatenates every refinement step and
+# produces garbage -- the renderer must REPLACE the previous frame. `chat.py`
+# selects its renderer on this flag, so never set it for a non-Inception route.
+#
+# The other three vendors stream incrementally and instead expose their
+# reasoning. Parameter names very nearly converge: `reasoning_effort` on OpenAI,
+# Gemini and Inception; Anthropic alone uses `thinking={"type": ..., ...}`.
+#
+# Two constraints that are not obvious:
+#   * Anthropic rejects an explicit temperature while thinking is enabled, and
+#     needs max_tokens > budget_tokens.
+#   * OpenAI reasoning models reject any temperature but the default.
+# Hence no temperature on those candidates.
+
 TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
     # COST POLICY. This is a leaderless swarm: every node routes independently,
     # so a flagship model in a chain is not one expensive call, it is one per
@@ -135,20 +153,20 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
         Candidate(
             provider="gemini",
             name_contains="flash",
-            requires=frozenset({Capability.CHAT}),
-            params={"temperature": 0.2},
+            requires=frozenset({Capability.CHAT, Capability.REASONING}),
+            params={"reasoning_effort": "low", "include_thoughts": True},
         ),
         Candidate(
             provider="anthropic",
             name_contains="haiku",
-            requires=frozenset({Capability.CHAT}),
-            params={"temperature": 0.2},
+            requires=frozenset({Capability.CHAT, Capability.REASONING}),
+            params={"thinking": {"type": "enabled", "budget_tokens": 2048}, "max_tokens": 4096},
         ),
         Candidate(
             provider="openai",
             name_contains="mini",
-            requires=frozenset({Capability.CHAT}),
-            params={"temperature": 0.2},
+            requires=frozenset({Capability.CHAT, Capability.REASONING}),
+            params={"reasoning_effort": "low"},
         ),
     ),
 
@@ -164,13 +182,13 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
             provider="anthropic",
             name_contains="haiku",
             requires=frozenset({Capability.CHAT, Capability.TOOLS, Capability.REASONING}),
-            params={"temperature": 0.7},
+            params={"thinking": {"type": "enabled", "budget_tokens": 2048}, "max_tokens": 4096},
         ),
         Candidate(
             provider="gemini",
             name_contains="flash",
-            requires=frozenset({Capability.CHAT, Capability.TOOLS}),
-            params={"temperature": 0.7},
+            requires=frozenset({Capability.CHAT, Capability.TOOLS, Capability.REASONING}),
+            params={"reasoning_effort": "low", "include_thoughts": True},
         ),
     ),
 
@@ -180,9 +198,9 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
         Candidate(
             provider="gemini",
             name_contains="flash",
-            requires=frozenset({Capability.CHAT, Capability.TOOLS}),
+            requires=frozenset({Capability.CHAT, Capability.TOOLS, Capability.REASONING}),
             min_context=900_000,
-            params={"temperature": 0.4},
+            params={"reasoning_effort": "low", "include_thoughts": True},
         ),
         Candidate(
             spec="inception:mercury-2",
@@ -192,9 +210,9 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
         Candidate(
             provider="anthropic",
             name_contains="haiku",
-            requires=frozenset({Capability.CHAT, Capability.TOOLS}),
+            requires=frozenset({Capability.CHAT, Capability.TOOLS, Capability.REASONING}),
             min_context=150_000,
-            params={"temperature": 0.4},
+            params={"thinking": {"type": "enabled", "budget_tokens": 2048}, "max_tokens": 4096},
         ),
     ),
 
@@ -203,9 +221,9 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
         Candidate(
             provider="gemini",
             name_contains="flash",
-            requires=frozenset({Capability.CHAT}),
+            requires=frozenset({Capability.CHAT, Capability.REASONING}),
             min_context=500_000,
-            params={"temperature": 0.1},
+            params={"reasoning_effort": "low", "include_thoughts": True},
         ),
         Candidate(
             spec="inception:mercury-2",
@@ -215,9 +233,9 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
         Candidate(
             provider="openai",
             name_contains="mini",
-            requires=frozenset({Capability.CHAT}),
+            requires=frozenset({Capability.CHAT, Capability.REASONING}),
             min_context=100_000,
-            params={"temperature": 0.1},
+            params={"reasoning_effort": "low"},
         ),
     ),
 

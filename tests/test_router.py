@@ -35,6 +35,8 @@ from agent.router.router import (
 )
 
 CHAT, TOOLS = Capability.CHAT, Capability.TOOLS
+THINKS = Capability.REASONING   # every gemini-* is tagged REASONING by the
+                                # provider heuristic; fixtures must match
 
 
 def model(id: str, provider: str, caps, ctx: int) -> ModelInfo:
@@ -51,9 +53,9 @@ def model(id: str, provider: str, caps, ctx: int) -> ModelInfo:
 
 MERCURY = model("mercury-2", "inception", {CHAT}, 128_000)
 EDIT2 = model("mercury-edit-2", "inception", {Capability.FIM, Capability.EDIT}, 128_000)
-FLASH = model("gemini-2.5-flash", "gemini", {CHAT, TOOLS}, 1_048_576)
-PRO = model("gemini-2.5-pro", "gemini", {CHAT, TOOLS}, 1_048_576)
-SMALL = model("gemini-1.0-flash", "gemini", {CHAT, TOOLS}, 32_000)
+FLASH = model("gemini-2.5-flash", "gemini", {CHAT, TOOLS, THINKS}, 1_048_576)
+PRO = model("gemini-2.5-pro", "gemini", {CHAT, TOOLS, THINKS}, 1_048_576)
+SMALL = model("gemini-1.0-flash", "gemini", {CHAT, TOOLS, THINKS}, 32_000)
 OPUS = model("claude-opus-4-6", "anthropic", {CHAT, TOOLS, Capability.REASONING}, 200_000)
 HAIKU = model("claude-haiku-4-5", "anthropic", {CHAT, TOOLS, Capability.REASONING}, 200_000)
 

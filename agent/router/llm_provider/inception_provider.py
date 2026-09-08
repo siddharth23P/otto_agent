@@ -40,7 +40,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import Field
 
-from .base import (
+from agent.router.llm_provider.base import (
     AuthError,
     BaseProvider,
     Capability,
