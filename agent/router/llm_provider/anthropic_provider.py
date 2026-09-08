@@ -25,7 +25,7 @@ from anthropic import (
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 
-from .base import (
+from agent.router.llm_provider.base import (
     AuthError,
     BaseProvider,
     Capability,
@@ -101,11 +101,11 @@ class AnthropicProvider(BaseProvider):
 
     def _fetch_models(self) -> list[ModelInfo]:
         try:
-            # The Models API paginates and defaults to 20 per page. Iterating
-            # the SyncPage directly would silently truncate the catalogue, so
-            # auto_paging_iter() is doing real work here.
-            page = self._client.models.list(limit=1000)
-            models = list(page.auto_paging_iter())
+            # The Models API paginates and defaults to 20 per page. In this SDK
+            # SyncPage.__iter__ walks iter_pages() itself, so plain iteration
+            # already spans every page -- but the `limit` still matters: it sets
+            # the page size, and without it you pay a round trip per 20 models.
+            models = list(self._client.models.list(limit=1000))
         except AnthropicError as exc:
             raise _translate(exc) from exc
 

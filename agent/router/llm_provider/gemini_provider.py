@@ -17,7 +17,7 @@ from google.genai import errors as genai_errors
 from langchain_core.language_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from .base import (
+from agent.router.llm_provider.base import (
     AuthError,
     BaseProvider,
     Capability,
@@ -63,7 +63,8 @@ def _capabilities_of(model: Any, model_id: str) -> set[Capability]:
     # current gemini-* model does function calling and image input; the
     # gemma-*, embedding-* and aqa entries in the same list do not.
     if Capability.CHAT in caps and model_id.startswith("gemini-"):
-        caps |= {Capability.TOOLS, Capability.VISION, Capability.STRUCTURED_OUTPUT}
+        caps |= {Capability.TOOLS, Capability.VISION,
+                 Capability.STRUCTURED_OUTPUT, Capability.REASONING}
 
     return caps
 

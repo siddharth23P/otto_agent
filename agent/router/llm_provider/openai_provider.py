@@ -23,7 +23,7 @@ from openai import (
     OpenAIError,
 )
 
-from .base import (
+from agent.router.llm_provider.base import (
     AuthError,
     BaseProvider,
     Capability,
