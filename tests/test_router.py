@@ -20,6 +20,7 @@ from agent.router.llm_provider.base import (
     BaseProvider,
     Capability,
     CapabilityNotSupported,
+    Completion,
     ModelInfo,
 )
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
@@ -411,11 +412,11 @@ class FakeProvider:
 
     def fim(self, model_id, prefix, suffix="", **kw):
         self.fim_call = {"model": model_id, "prefix": prefix, "suffix": suffix, **kw}
-        return "  return a + b"
+        return Completion(text="  return a + b", usage={"input": 9, "output": 4, "total": 13})
 
     def code_edit(self, model_id, code_to_edit, **kw):
         self.edit_call = {"model": model_id, "code": code_to_edit, **kw}
-        return "edited"
+        return Completion(text="edited", usage={"input": 20, "output": 3, "total": 23})
 
 
 @pytest.fixture
@@ -526,3 +527,15 @@ def test_non_strict_falls_back_silently_but_records_it():
     d = router().resolve(Task.PLAN)
     assert d.fell_back is True
     assert d.skipped
+
+
+def test_fim_returns_text_but_carries_usage_for_the_span(provider):
+    """The router's contract is `str`; the usage rides on the provider's
+    Completion so the Langfuse span can be costed. A node never sees it."""
+    out_text = router().fim("def add(a, b):\n")
+    assert out_text == "  return a + b"
+    assert isinstance(out_text, str)
+
+
+def test_code_edit_returns_text_not_a_completion(provider):
+    assert router().code_edit("x = 1") == "edited"
