@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from langchain.chat_models import BaseChatModel
 
+from agent.router.llm_provider import reset as registry_reset
 from agent.router.llm_provider import get_provider, provider_class, provider_names
 from agent.router.llm_provider.base import AuthError, Capability, CapabilityNotSupported, ModelInfo, ProviderError
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
@@ -49,18 +50,23 @@ class NoViableRoute(ProviderError):
 class Catalogue(Protocol):
     def is_configured(self, provider: str) -> bool: ...
     def models(self, provider: str) -> list[ModelInfo]: ...
+    def reset(self) -> None: ...
+    
     
 class RegistryCatalogue:
     def is_configured(self, provider: str) -> bool:
         return provider_class(provider).is_configured()
     def models(self, provider: str) -> list[ModelInfo]:
         return get_provider(provider).list_models()
+    def reset(self) -> None:
+        registry_reset()
 
 @dataclass
 class FakeCatalogue:
     data: dict[str, list[ModelInfo]]
     def is_configured(self, provider): return provider in self.data
     def models(self, provider):        return self.data[provider]
+    def reset(self) -> None: pass
     
 def _decision_metadata(d: "RoutingDecision") -> dict[str, Any]:
     """The routing facts worth filtering a trace by, in one place.
@@ -119,22 +125,38 @@ class Router:
     #: reaches for, so a test pins it.
     OPTIONAL = ("gemini", "openai", "anthropic")
     
-    def __init__(self, catalogue: Catalogue | None = None, *, strict: bool = False):
-        self.catalogue = catalogue or RegistryCatalogue()
-        self.strict = strict
-        # Read once. If this were a live lookup, a key appearing mid-run could
-        # make two candidates in the same chain disagree about the same vendor.
+    def _snapshot(self) -> None:
         self._configured = tuple(p for p in provider_names() if self.catalogue.is_configured(p))
         if self.REQUIRED not in self._configured:
             raise AuthError("Otto requires Inception. Set INCEPTION_API_KEY in .env")
         self.secondary = next((p for p in self.OPTIONAL if p in self._configured), None)
         self.ignored = tuple(p for p in self.OPTIONAL if p in self._configured and p != self.secondary)
     
+    def __init__(self, catalogue: Catalogue | None = None, *, strict: bool = False):
+        self.catalogue = catalogue or RegistryCatalogue()
+        self.strict = strict
+        self._snapshot()
+        
+    def reset(self):
+        self.catalogue.reset()
+        self._snapshot()
+    
     def _usable(self, provider: str) -> bool:
         return provider == self.REQUIRED or provider == self.secondary
+    
+    def usable(self) -> tuple[str, ...]:
+        return tuple(p for p in self._configured if self._usable(p))
 
+    def prewarm(self) -> dict[str, str]:
+        failures: dict[str, str] = {}
+        for name in self.usable():
+            try:
+                self.catalogue.models(name)
+            except ProviderError as exc:
+                failures[name] = str(exc)
+        return failures
+    
     def _match(self, c: Candidate) -> ModelInfo | str:
-        
         provider = c.provider_name
         if provider is None:
             return "open queries not supported"
