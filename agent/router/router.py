@@ -1,5 +1,6 @@
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from langchain.chat_models import BaseChatModel
@@ -61,6 +62,55 @@ class FakeCatalogue:
     def is_configured(self, provider): return provider in self.data
     def models(self, provider):        return self.data[provider]
     
+def _decision_metadata(d: "RoutingDecision") -> dict[str, Any]:
+    """The routing facts worth filtering a trace by, in one place.
+
+    Kept next to the router rather than in the CLI so a LangGraph node calling
+    fim()/code_edit() directly gets the same fields a REPL turn does.
+    """
+    return {
+        "otto_task": d.task.value,
+        "otto_provider": d.provider,
+        "otto_endpoint": d.endpoint.value,
+        "otto_candidate": d.index,
+        "otto_fell_back": d.fell_back,
+        "otto_context_window": d.model.context_window,
+        "otto_skipped": [str(s) for s in d.skipped],
+    }
+
+
+@contextmanager
+def _observe(name: str, *, model: str, input: Any,
+             model_parameters: Mapping[str, Any],
+             metadata: Mapping[str, Any] | None = None):
+    """Wrap a raw-SDK call in a Langfuse generation, or do nothing.
+
+    `fim()` and `code_edit()` bypass LangChain, and the Langfuse callback hooks
+    the runnable interface -- so without this they are invisible in a trace that
+    otherwise shows every chat call.
+
+    Deliberately best-effort: the router must not stop routing because tracing
+    is unavailable, so an absent package or an unconfigured client yields None
+    and the call proceeds untraced.
+    """
+    try:
+        from langfuse import get_client
+
+        with get_client().start_as_current_observation(
+            as_type="generation",
+            name=name,
+            model=model,
+            input=input,
+            model_parameters=dict(model_parameters),
+            metadata=dict(metadata or {}),
+        ) as generation:
+            yield generation
+        return
+    except Exception:                     # not installed, or no keys
+        pass
+    yield None
+
+
 class Router:
     REQUIRED = "inception"
     #: Precedence for choosing the single secondary vendor. Gemini leads
@@ -146,7 +196,17 @@ class Router:
             raise CapabilityNotSupported(f"{task.value} is not a FIM route")
         provider = get_provider(d.provider)
         provider.require(Capability.FIM)
-        return provider.fim(d.model.id, prefix, suffix, **{**d.params, **overrides})
+        params = {**d.params, **overrides}
+        with _observe("inception.fim", model=d.model.id, input=prefix,
+                      model_parameters=params,
+                      metadata=_decision_metadata(d)) as generation:
+            result = provider.fim(d.model.id, prefix, suffix, **params)
+            if generation is not None:
+                generation.update(output=result.text, usage_details=result.usage)
+            # The router's own contract stays `str`: a graph node wants the
+            # completion, not a usage envelope. The envelope exists so the span
+            # above can be costed.
+            return result.text
     
     def code_edit(self, code_to_edit: str, *, current_file: str = "",
                   recently_viewed: Sequence[str] = (), edit_history: Sequence[str] = (),
@@ -156,12 +216,19 @@ class Router:
             raise CapabilityNotSupported(f"{task.value} is not an edit route")
         provider = get_provider(d.provider)
         provider.require(Capability.EDIT)
-        return provider.code_edit(
-            d.model.id, code_to_edit,
-            current_file=current_file,
-            recently_viewed=recently_viewed,
-            edit_history=edit_history,
-            **{**d.params, **overrides})
+        params = {**d.params, **overrides}
+        with _observe("inception.code_edit", model=d.model.id, input=code_to_edit,
+                      model_parameters=params,
+                      metadata=_decision_metadata(d)) as generation:
+            result = provider.code_edit(
+                d.model.id, code_to_edit,
+                current_file=current_file,
+                recently_viewed=recently_viewed,
+                edit_history=edit_history,
+                **params)
+            if generation is not None:
+                generation.update(output=result.text, usage_details=result.usage)
+            return result.text
         
 
 class RoutingDegraded(ProviderError):
