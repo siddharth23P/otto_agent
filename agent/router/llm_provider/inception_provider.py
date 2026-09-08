@@ -14,6 +14,7 @@ nothing here is guessed from model-name prefixes.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any, Iterator, Literal, Sequence
 
@@ -42,6 +43,7 @@ from pydantic import Field
 
 from agent.router.llm_provider.base import (
     AuthError,
+    Completion,
     BaseProvider,
     Capability,
     ModelInfo,
@@ -55,6 +57,40 @@ __all__ = ["ChatInception", "InceptionProvider", "build_edit_prompt"]
 # --------------------------------------------------------------------------
 # Error translation
 # --------------------------------------------------------------------------
+
+
+def _field(obj: Any, key: str) -> Any:
+    """Read `key` off a usage payload that may be a model *or* a plain dict.
+
+    The SDK declares `usage` on ChatCompletion but not on ChatCompletionChunk,
+    so on the streaming path pydantic keeps the API's usage payload in model
+    extras as an untyped dict. Both shapes reach us, so never assume either.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, Mapping):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _usage(u: Any) -> dict[str, int] | None:
+    """Vendor usage payload -> Langfuse's usage_details key names."""
+    if u is None:
+        return None
+    details = {
+        "input": _field(u, "prompt_tokens"),
+        "output": _field(u, "completion_tokens"),
+        "total": _field(u, "total_tokens"),
+    }
+    details = {k: v for k, v in details.items() if v is not None}
+    if not details:
+        return None
+    for attr, key in (("cached_input_tokens", "cached_input"),
+                      ("reasoning_tokens", "reasoning")):
+        value = _field(u, attr)
+        if value:
+            details[key] = value
+    return details
 
 
 def _translate(exc: Exception) -> ProviderError:
@@ -214,6 +250,13 @@ class ChatInception(BaseChatModel):
     #: Anything else `chat.completions.create` accepts (response_format, ...).
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
+    #: Called with each denoising snapshot when `diffusing` is on, so a caller
+    #: can render the answer resolving in place. Excluded from serialisation:
+    #: LangChain builds invocation_params from the model's fields, and a
+    #: callable in there would be handed to every callback -- including
+    #: Langfuse, which would store its repr in the trace.
+    frame_sink: Callable[[str], None] | None = Field(default=None, exclude=True)
+
     @property
     def _llm_type(self) -> str:
         return "inception"
@@ -299,25 +342,81 @@ class ChatInception(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         payload = self._payload(messages, stop, **kwargs)
         payload["stream"] = True
+        # Without this the API never sends the usage chunk at all, and every
+        # streamed call reports zero tokens -- and therefore zero cost.
+        payload.setdefault("stream_options", {"include_usage": True})
 
         try:
             stream = self.client.chat.completions.create(**payload)
         except InceptionError as exc:
             raise _translate(exc) from exc
 
+        # Diffusion does not stream deltas. Every chunk is a full snapshot of
+        # the entire answer, re-denoised -- so yielding snapshots as content
+        # makes LangChain concatenate every intermediate draft into the final
+        # message, and that message is what Langfuse records as the output.
+        # Snapshots therefore go to `frame_sink` for display, and only the last
+        # one is ever yielded.
+        snapshot = ""
+        stamped = False
+
         for chunk in stream:
             if not chunk.choices:
-                # Final usage-only chunk when stream_options.include_usage is set.
+                # The usage-only chunk: `choices` is empty and `usage` is
+                # populated. The SDK's ChatCompletionChunk does not declare a
+                # `usage` field even though the API documents sending one, so
+                # read it defensively rather than trusting the type.
+                usage = getattr(chunk, "usage", None)
+                if usage is None and isinstance(getattr(chunk, "model_extra", None), Mapping):
+                    usage = chunk.model_extra.get("usage")
+                input_tokens = _field(usage, "prompt_tokens")
+                output_tokens = _field(usage, "completion_tokens")
+                if input_tokens is not None or output_tokens is not None:
+                    input_tokens = input_tokens or 0
+                    output_tokens = output_tokens or 0
+                    yield ChatGenerationChunk(
+                        message=AIMessageChunk(
+                            content="",
+                            usage_metadata={
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "total_tokens": _field(usage, "total_tokens")
+                                or input_tokens + output_tokens,
+                            },
+                        )
+                    )
                 continue
             choice = chunk.choices[0]
             text = choice.delta.content or ""
             if not text:
                 continue
+
+            if self.diffusing:
+                snapshot = text
+                if self.frame_sink is not None:
+                    self.frame_sink(text)
+                if run_manager and not stamped:
+                    # Stamps Langfuse's completion_start_time on the first
+                    # frame. Without it, time-to-first-token would equal total
+                    # latency for every diffusion call, since the only content
+                    # chunk is yielded after the stream is exhausted.
+                    stamped = True
+                    run_manager.on_llm_new_token("")
+                continue
+
             generation = ChatGenerationChunk(message=AIMessageChunk(content=text))
             if run_manager:
                 # Drives Langfuse / CLI token callbacks. Without this, streamed
                 # tokens never reach any handler.
                 run_manager.on_llm_new_token(text, chunk=generation)
+            yield generation
+
+        if snapshot:
+            # The settled answer, emitted once, so the accumulated message is
+            # the final text rather than every draft glued together.
+            generation = ChatGenerationChunk(message=AIMessageChunk(content=snapshot))
+            if run_manager:
+                run_manager.on_llm_new_token(snapshot, chunk=generation)
             yield generation
 
 
@@ -435,7 +534,7 @@ class InceptionProvider(BaseProvider):
         prefix: str,
         suffix: str = "",
         **kwargs: Any,
-    ) -> str:
+    ) -> Completion:
         """Fill-in-the-middle completion. No LangChain equivalent exists."""
         try:
             completion = self._client.fim.completions.create(
@@ -443,7 +542,10 @@ class InceptionProvider(BaseProvider):
             )
         except InceptionError as exc:
             raise _translate(exc) from exc
-        return completion.choices[0].text
+        return Completion(
+            text=completion.choices[0].text,
+            usage=_usage(getattr(completion, "usage", None)),
+        )
 
     def code_edit(
         self,
@@ -454,7 +556,7 @@ class InceptionProvider(BaseProvider):
         recently_viewed: Sequence[str] = (),
         edit_history: Sequence[str] = (),
         **kwargs: Any,
-    ) -> str:
+    ) -> Completion:
         """Predict the next edit to `code_to_edit`.
 
         There is no instruction parameter: this endpoint infers the edit from
@@ -478,4 +580,7 @@ class InceptionProvider(BaseProvider):
             )
         except InceptionError as exc:
             raise _translate(exc) from exc
-        return completion.choices[0].message.content or ""
+        return Completion(
+            text=completion.choices[0].message.content or "",
+            usage=_usage(getattr(completion, "usage", None)),
+        )
