@@ -301,3 +301,36 @@ def test_candidate_cannot_go_in_a_set():
     """
     with pytest.raises(TypeError, match="unhashable"):
         {Candidate(spec="inception:mercury-2", requires=CHAT, params={"temperature": 0.2})}
+
+
+#: Params that switch a model into a thinking/reasoning mode.
+THINKING_PARAMS = frozenset({"thinking", "reasoning_effort", "include_thoughts"})
+
+
+def test_thinking_routes_require_a_reasoning_model():
+    """A route that configures thinking must ask for a model that can think.
+
+    Otherwise the candidate resolves to whatever matched, the vendor rejects the
+    parameter, and you get a 400 only when that candidate finally wins -- which
+    may be weeks after the route was written.
+
+    Inception is exempt: `reasoning_effort` is a parameter of its chat endpoint
+    itself, not a per-model capability, and it publishes no reasoning flag.
+    """
+    for task, chain in TASK_ROUTES.items():
+        for i, candidate in enumerate(chain):
+            if candidate.provider_name == "inception":
+                continue
+            if set(candidate.params) & THINKING_PARAMS:
+                assert Capability.REASONING in candidate.requires, (
+                    f"{task.name}[{i}] enables thinking but does not require REASONING"
+                )
+
+
+def test_diffusing_is_inception_only():
+    """`diffusing` selects the replacing renderer in chat.py. On another vendor
+    it would be an unknown parameter *and* the wrong renderer."""
+    for task, chain in TASK_ROUTES.items():
+        for i, candidate in enumerate(chain):
+            if candidate.params.get("diffusing"):
+                assert candidate.provider_name == "inception", f"{task.name}[{i}]"
