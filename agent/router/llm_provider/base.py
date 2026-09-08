@@ -22,6 +22,7 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
+from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.language_models import BaseChatModel
@@ -36,6 +37,7 @@ __all__ = [
     "ModelNotFound",
     "CapabilityNotSupported",
     "ProviderUnavailable",
+    "Completion",
     "BaseProvider",
     "SupportsFIM",
     "SupportsEdit",
@@ -102,6 +104,26 @@ class ModelInfo:
 
     def __str__(self) -> str:
         return self.spec
+
+
+@dataclass(frozen=True, slots=True)
+class Completion:
+    """A raw-SDK completion: the text, plus the usage the endpoint reported.
+
+    FIM and edit bypass LangChain, so nothing collects their token counts for
+    us. Returning a bare `str` threw them away -- and a call with no usage has
+    no cost, which silently defeats the whole point of a cost-driven router.
+
+    `usage` uses Langfuse's key names (input / output / total, plus optional
+    cached_input and reasoning) so it can be handed to `usage_details` without
+    translation.
+    """
+
+    text: str
+    usage: Mapping[str, int] | None = None
+
+    def __str__(self) -> str:
+        return self.text
 
 
 class ProviderStatus(StrEnum):
@@ -375,7 +397,7 @@ class SupportsFIM(Protocol):
         prefix: str,
         suffix: str = "",
         **kwargs: Any,
-    ) -> str: ...
+    ) -> Completion: ...
 
 
 @runtime_checkable
@@ -396,7 +418,7 @@ class SupportsEdit(Protocol):
         *,
         current_file: str = "",
         **kwargs: Any,
-    ) -> str: ...
+    ) -> Completion: ...
 
 
 @runtime_checkable
