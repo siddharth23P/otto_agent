@@ -156,8 +156,10 @@ class Router:
                 failures[name] = str(exc)
         return failures
     
-    def _match(self, c: Candidate) -> ModelInfo | str:
+    def _match(self, c: Candidate, only: str | None = None) -> ModelInfo | str:
         provider = c.provider_name
+        if only is not None and provider != only:
+            return f"{provider} is not the pinned vendor"
         if provider is None:
             return "open queries not supported"
         if provider not in self._configured:
@@ -185,10 +187,10 @@ class Router:
                     key=lambda m: (m.context_window or 0, m.id),
                     reverse=biggest)[0]
         
-    def resolve(self, task: Task) -> RoutingDecision:
+    def resolve(self, task: Task, *, only: str | None = None) -> RoutingDecision:
         skips: list[Skip] = []
         for i, c in enumerate(TASK_ROUTES[task]):
-            outcome = self._match(c)
+            outcome = self._match(c, only=only)
             if isinstance(outcome, str):
                 skips.append(Skip(i, render(c), outcome))
                 continue
@@ -209,8 +211,8 @@ class Router:
         provider = get_provider(d.provider)
         return provider.chat_model(d.model.id, **{**d.params, **overrides})
     
-    def chat_model(self, task: Task, **overrides) -> BaseChatModel:
-        return self.model_for(self.resolve(task), **overrides)
+    def chat_model(self, task: Task, *, only: str | None = None, **overrides) -> BaseChatModel:
+        return self.model_for(self.resolve(task,only=only), **overrides)
     
     def fim(self, prefix: str, suffix: str = "", *,task: Task = Task.CODE_COMPLETE, **overrides) -> str:
         d = self.resolve(task)

@@ -7,7 +7,24 @@ from rich.table import Table
 
 from agent.cli.ui import err, out
 from agent.router.llm_provider import all_models, provider_names
-from agent.router.llm_provider.base import Capability
+from agent.router.llm_provider.base import Capability, ModelInfo
+
+
+def models_table(found: list[ModelInfo]) -> Table:
+    t = Table(box=box.SIMPLE, header_style="muted")
+    t.add_column("provider", style="muted")
+    t.add_column("model", style="spec")
+    t.add_column("context", justify="right")
+    t.add_column("max out", justify="right")
+    t.add_column("capabilities", style="muted")
+    for m in found:
+        t.add_row(
+            m.provider, m.id,
+            f"{m.context_window:,}" if m.context_window else "—",
+            f"{m.max_output_tokens:,}" if m.max_output_tokens else "—",
+            " ".join(sorted(c.value for c in m.capabilities)),
+        )
+    return t
 
 
 def models(
@@ -44,18 +61,4 @@ def models(
         out.print("[muted]no models matched[/]")
         return
     
-    
-    t = Table(box=box.SIMPLE, header_style="muted")
-    t.add_column("provider", style="muted")
-    t.add_column("model", style="spec")
-    t.add_column("context", justify="right")
-    t.add_column("max out", justify="right")
-    t.add_column("capabilities", style="muted")
-    for m in found:
-        t.add_row(
-            m.provider, m.id,
-            f"{m.context_window:,}" if m.context_window else "—",
-            f"{m.max_output_tokens:,}" if m.max_output_tokens else "—",
-            " ".join(sorted(c.value for c in m.capabilities)),
-        )
-    out.print(t)
+    out.print(models_table(found))
