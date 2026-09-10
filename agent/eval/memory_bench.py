@@ -91,6 +91,32 @@ _SCORED_CATEGORIES = (1, 2, 3, 4)
 #: public TieredQueue/NewBullet-shaped API).
 _ITEM_MARKER = re.compile(r"^\[(\d+)\] ", flags=re.MULTILINE)
 
+#: agent/memory/queue.py's own _compact_y_if_full() fallback text, verbatim,
+#: when a `summarize` callback's reply doesn't parse into any citable
+#: bullets at all -- one bullet covering EVERY item in that compaction,
+#: with no actual summary content. Fine as a fail-safe (nothing is lost --
+#: store_coverage stays 100%), but a bullet with this text carries close to
+#: zero semantic signal for recall()'s embedding ranking: a live run that
+#: hits this (an empty/malformed reply from the real summarizer -- `_call`,
+#: agent/pipeline/nodes.py, returns "" on a genuinely empty stream, which
+#: is a real, observed failure mode, not hypothetical) can look like
+#: "recall degraded" when it's really "the summarizer produced nothing
+#: usable for this generation." `unparsed_bullet_count` below surfaces
+#: this directly instead of leaving it to be inferred from a coverage
+#: number that dropped for an unrelated reason.
+_UNPARSED_BULLET = re.compile(r"^\(unparsed summary of \d+ items\)$")
+
+
+def recalled_text_has_unparsed_bullet(recalled_text: str) -> bool:
+    """True if any line of a QAResult.recalled_text (recall()'s raw output --
+    one `- {bullet.text}` line per matched bullet, module docstring's own
+    format) is the _UNPARSED_BULLET placeholder -- a public wrapper so a
+    caller (agent/cli/eval_memory.py's --show-items) can flag exactly which
+    printed items were affected without importing the private regex
+    directly.
+    """
+    return any(_UNPARSED_BULLET.match(line.lstrip("-* ")) for line in recalled_text.splitlines())
+
 
 def download_locomo(path: Path = DEFAULT_CACHE, *, force: bool = False) -> Path:
     """Fetch data/locomo10.json (snap-research/locomo) into `path`, once --
@@ -195,6 +221,13 @@ class ConversationResult:
     raw_tokens: int
     final_view_tokens: int
     qa_results: list[QAResult]
+    #: How many bullets are CURRENTLY stored for this conversation's `kind`
+    #: (store.current_bullets(), i.e. the live generation only -- superseded
+    #: ones aren't counted) and how many of those are the unparsed-fallback
+    #: placeholder (_UNPARSED_BULLET, above) rather than real summary
+    #: content. 0/0 at production budget, where nothing ever compacts.
+    bullet_count: int = 0
+    unparsed_bullet_count: int = 0
 
     @property
     def compression_ratio(self) -> float:
@@ -312,12 +345,16 @@ def run_one_conversation(
         ))
 
     final_view_tokens = count_tokens(queue.current_view())
+    bullets = store.current_bullets(kind)
+    bullet_count = len(bullets)
+    unparsed_bullet_count = sum(1 for b in bullets if _UNPARSED_BULLET.match(b.text))
     store.close()
     path.unlink(missing_ok=True)
 
     return ConversationResult(
         sample_id=sample["sample_id"], turn_count=turn_count, raw_tokens=raw_tokens,
         final_view_tokens=final_view_tokens, qa_results=qa_results,
+        bullet_count=bullet_count, unparsed_bullet_count=unparsed_bullet_count,
     )
 
 
@@ -336,6 +373,8 @@ class BenchmarkReport:
                     "raw_tokens": c.raw_tokens,
                     "final_view_tokens": c.final_view_tokens,
                     "compression_ratio": c.compression_ratio,
+                    "bullet_count": c.bullet_count,
+                    "unparsed_bullet_count": c.unparsed_bullet_count,
                     "qa": [dataclasses.asdict(r) for r in c.qa_results],
                 }
                 for c in self.conversations
@@ -380,6 +419,8 @@ class BenchmarkReport:
         all_scored = [r for conv in self.conversations for r in conv.scored_results()]
         raw_total = sum(c.raw_tokens for c in self.conversations)
         final_total = sum(c.final_view_tokens for c in self.conversations)
+        bullet_total = sum(c.bullet_count for c in self.conversations)
+        unparsed_total = sum(c.unparsed_bullet_count for c in self.conversations)
         return {
             "overall": _rates(all_scored),
             "by_category": {
@@ -388,6 +429,13 @@ class BenchmarkReport:
             },
             "overall_compression_ratio": (final_total / raw_total) if raw_total else None,
             "conversation_count": len(self.conversations),
+            #: See ConversationResult.unparsed_bullet_count / _UNPARSED_BULLET
+            #: above -- a non-zero unparsed_bullets here means at least one
+            #: compaction's summarizer reply didn't parse, so some of what
+            #: `recall_coverage` measures is being asked to rank against
+            #: content-free placeholder text rather than a real summary.
+            "bullet_count": bullet_total,
+            "unparsed_bullet_count": unparsed_total,
         }
 
 

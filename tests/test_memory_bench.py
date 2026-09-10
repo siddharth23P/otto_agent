@@ -22,6 +22,7 @@ from agent.eval.memory_bench import (
     _is_verbatim,
     _normalize,
     _session_keys,
+    recalled_text_has_unparsed_bullet,
     run_benchmark,
     run_one_conversation,
 )
@@ -215,6 +216,44 @@ def test_run_one_conversation_stress_budget_forces_compaction_and_still_stores_e
     # point of the stress-test budget is to force real compaction.
     assert not all(r.visible_verbatim for r in scored)
     assert result.compression_ratio < 1.0
+
+
+def test_run_one_conversation_at_production_budget_has_zero_bullets():
+    # Nothing compacts, so there's nothing in the bullet store to count.
+    result = run_one_conversation(_fake_sample(), summarize=_canned_summarize)
+    assert result.bullet_count == 0
+    assert result.unparsed_bullet_count == 0
+
+
+def test_run_one_conversation_reports_unparsed_bullets_when_the_summarizer_fails_to_parse():
+    # A summarizer that never produces a "[sources: N,N,...]"-tagged line
+    # forces every compaction into queue.py's own catch-all fallback bullet
+    # -- exactly the real, observed failure mode (a live summarizer call
+    # returning "" or otherwise-unparseable text for one generation) this
+    # diagnostic exists to surface.
+    result = run_one_conversation(
+        _fake_sample(), summarize=lambda prompt: "no citations here at all",
+        x_budget=1, y_budget=1,
+    )
+    assert result.bullet_count >= 1
+    assert result.unparsed_bullet_count == result.bullet_count  # every bullet is the fallback
+
+
+# ---- recalled_text_has_unparsed_bullet -----------------------------------
+
+def test_recalled_text_has_unparsed_bullet_true_for_the_fallback_placeholder():
+    text = "- (unparsed summary of 3 items)\n  > Alice: hi\n  > Bob: hello"
+    assert recalled_text_has_unparsed_bullet(text) is True
+
+
+def test_recalled_text_has_unparsed_bullet_false_for_a_real_summary():
+    text = "- Alice adopted a cat named Whiskers [sources: 1]\n  > Alice: I adopted a cat named Whiskers."
+    assert recalled_text_has_unparsed_bullet(text) is False
+
+
+def test_recalled_text_has_unparsed_bullet_false_for_the_nothing_compacted_message():
+    text = "(nothing has been compacted away yet -- there is nothing to recall)"
+    assert recalled_text_has_unparsed_bullet(text) is False
 
 
 # ---- run_benchmark / BenchmarkReport -------------------------------------
