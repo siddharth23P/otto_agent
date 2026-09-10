@@ -317,8 +317,14 @@ class OttoApp(App):
         # old shared transcript RichLog (module docstring).
         thinking_log = RichLog(wrap=True, markup=True, highlight=False)
         self.call_from_thread(self._post_thinking, thinking_log, "thinking…")
+        # self.session.history already ends with this turn's own
+        # HumanMessage(text) (on_input_submitted appends it before calling
+        # run_turn) -- everything before that is the conversation so far
+        # (agent/pipeline/run.py's `history` parameter; agent/pipeline/
+        # nodes.py's module docstring, sixth refinement).
+        history = self.session.history[:-1]
         try:
-            for update in run_pipeline_stream(text, session_id=self.session.session_id):
+            for update in run_pipeline_stream(text, session_id=self.session.session_id, history=history):
                 if "__final__" in update:
                     final = update["__final__"]
                     self.session.trace_id = update.get("__trace_id__")

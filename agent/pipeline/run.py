@@ -8,11 +8,40 @@ nothing to size -- one router dispatch, one specialist, one evaluator, per
 round -- so there is no swarm-width knob left to validate, thread through,
 or score. Callers that used to pass `agents=` (agent/eval/, agent/cli/chat.py,
 agent/cli/tui.py) all lose that parameter in the same change.
+
+Conversation memory (2026-09-10, same day, design call: live-tested with
+"Hi" / "Solve N Queens with brute force" / "improve above solution" -- the
+third turn had no idea what "above solution" meant and looped). Before
+this, `_initial()` only ever seeded `messages` with the CURRENT turn's
+text -- every turn started the graph from a blank slate, even though
+chat.py's/tui.py's own `Session.history` was already tracking the whole
+conversation client-side (used for nothing but /new resets and the visual
+transcript). `history` (new, optional, keyword-only on `_initial()`,
+`run_pipeline()` and `run_pipeline_stream()`) is that same list, handed
+straight to the graph: `messages` becomes `[*history, HumanMessage(text)]`
+instead of just `[HumanMessage(text)]`. `text` stays the required
+positional argument and `history` defaults to `()` so every existing
+caller that only ever runs one turn per session (agent/eval/'s golden
+runner, debug_pipeline.py) needs zero changes and sees zero behavior
+difference. agent/pipeline/nodes.py's prompt-builders read the rest of
+`state["messages"]` (everything before the last one) as prior
+conversation -- see its module docstring for that half.
+
+Deliberately NOT built here: any kind of summarization, truncation, or
+cross-SESSION persistence. `history` is exactly the in-memory list the
+REPL/TUI already had; a long-running chat's prompt grows every turn with
+nothing capping it. That's the same "project profile"/"personal lessons"
+territory claude/otto-memory-design.md already specs out for a *different*
+purpose (learning across runs, not remembering within one) against the
+now-replaced code hive -- worth revisiting there, not smuggled into this
+fix, which only closes the "does the graph even see what I said two turns
+ago" gap.
 """
 import logging
 import uuid
+from collections.abc import Sequence
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from langfuse import get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler
@@ -23,9 +52,9 @@ from agent.pipeline.state import AgentState
 logger = logging.getLogger(__name__)
 
 
-def _initial(text: str) -> dict:
+def _initial(text: str, *, history: Sequence[BaseMessage] = ()) -> dict:
     return {
-        "messages": [HumanMessage(text)],
+        "messages": [*history, HumanMessage(text)],
         "board": [],
         "round": 0,
         "node": None,
@@ -72,19 +101,22 @@ def _graph_thread_id(session_id: str) -> str:
     return f"{session_id}:{uuid.uuid4().hex[:8]}"
 
 
-def run_pipeline(text: str, *, session_id: str) -> AgentState:
+def run_pipeline(text: str, *, session_id: str, history: Sequence[BaseMessage] = ()) -> AgentState:
     """Prewarm, invoke, score, return the finished AgentState.
 
     One call in, one finished result out -- for scripted/benchmark callers
     (agent/eval/'s golden-dataset runner). The interactive shell wants to
     watch it happen instead -- that's run_pipeline_stream(), below, not a
     different mode of this function.
+
+    `history` is the conversation BEFORE `text` -- module docstring. Empty
+    by default, so every existing single-turn caller is unaffected.
     """
     failures = ROUTER.prewarm()
     if failures:
         logger.warning("prewarm: %s", failures)
 
-    initial = _initial(text)
+    initial = _initial(text, history=history)
     client = get_client()
     handler = CallbackHandler()
     config = _config(_graph_thread_id(session_id), handler)
@@ -103,10 +135,13 @@ def run_pipeline(text: str, *, session_id: str) -> AgentState:
     return final
 
 
-def run_pipeline_stream(text: str, *, session_id: str):
+def run_pipeline_stream(text: str, *, session_id: str, history: Sequence[BaseMessage] = ()):
     """Same prewarm, tracing and scoring as run_pipeline(), but yields each
     graph update as it happens (`stream_mode="updates"`) instead of
     invoking and returning. What the interactive shell/TUI watch live.
+
+    `history` is the conversation BEFORE `text` -- module docstring. Empty
+    by default, so every existing single-turn caller is unaffected.
 
     The last item yielded is always `{"__final__": AgentState,
     "__trace_id__": str | None}` -- a plain dict, not a Command/node delta,
@@ -117,7 +152,7 @@ def run_pipeline_stream(text: str, *, session_id: str):
     if failures:
         logger.warning("prewarm: %s", failures)
 
-    initial = _initial(text)
+    initial = _initial(text, history=history)
     client = get_client()
     handler = CallbackHandler()
     config = _config(_graph_thread_id(session_id), handler)

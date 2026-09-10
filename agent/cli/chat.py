@@ -27,8 +27,14 @@ from agent.pipeline.state import AgentState
 def _run_turn(s: Session, text: str) -> None:
     tally: Counter = Counter()
     final: AgentState | None = None
+    # s.history already ends with this turn's own HumanMessage(text) (the
+    # caller appends it before calling _run_turn) -- everything before
+    # that is the conversation so far (agent/pipeline/run.py's `history`
+    # parameter; agent/pipeline/nodes.py's module docstring, sixth
+    # refinement).
+    history = s.history[:-1]
 
-    for update in run_pipeline_stream(text, session_id=s.session_id):
+    for update in run_pipeline_stream(text, session_id=s.session_id, history=history):
         if "__final__" in update:
             final = update["__final__"]
             s.trace_id = update.get("__trace_id__")

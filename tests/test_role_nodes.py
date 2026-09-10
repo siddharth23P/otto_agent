@@ -98,6 +98,29 @@ def test_run_role_fresh_attempt_uses_the_role_prompt_and_the_raw_task(monkeypatc
     assert "summarizer" in result.update["board"][0]
 
 
+def test_run_role_shows_prior_conversation_ahead_of_the_task_when_present(monkeypatch):
+    # 2026-09-10, sixth refinement (nodes.py's module docstring) -- a
+    # specialist needs the same conversation context the overseer does to
+    # act on something like "improve above solution".
+    from langchain_core.messages import AIMessage
+
+    fake = _FakeModel("FINAL:\nan improved version")
+    _install(monkeypatch, fake)
+
+    state = _state(messages=[
+        HumanMessage("solve N queens with brute force"),
+        AIMessage("def solve(n): ..."),
+        HumanMessage("improve above solution"),
+    ])
+    pn._run_role(state, role="solver", task=pn.Task.REASON, temperature=0.5, prompt=pn.SOLVER_PROMPT)
+
+    _, human = fake.calls[0]
+    assert human.startswith("CONVERSATION SO FAR:\n")
+    assert "you: solve N queens with brute force" in human
+    assert "otto: def solve(n): ..." in human
+    assert "TASK:\nimprove above solution" in human
+
+
 def test_run_role_revise_branch_when_the_same_specialist_was_rejected(monkeypatch):
     fake = _FakeModel("FINAL:\na better summary")
     _install(monkeypatch, fake)
