@@ -398,3 +398,44 @@ def test_chat_template_tokens_are_stripped_from_a_command():
 
     assert "<|" not in body
     assert body.startswith("curl -v example.com")
+
+
+def test_a_second_failure_against_the_same_target_is_escalated_at_once(monkeypatch):
+    """Re-running something that succeeded is wasteful; re-running something
+    that failed, unchanged, means the error was never read -- and it is the
+    cheapest thing for a model to produce."""
+    monkeypatch.setitem(
+        pn.TOOL_DISPATCH, "execute_bash",
+        lambda body: pt.ToolResult(stdout="", stderr="boom", returncode=1),
+    )
+    monkeypatch.setattr(pn, "MAX_TOOL_ITERATIONS", 8)
+    llm = _FakeMultiStreamModel([
+        "ACTION: execute_bash\nCODE:\nmake",
+        "ACTION: execute_bash\nCODE:\nmake",
+        "FINAL:\ndone",
+    ])
+
+    pn._tool_loop(llm, [HumanMessage("go")])
+
+    assert "NOTE:" not in llm.calls[1][-1]                       # first failure
+    assert "has already failed once" in llm.calls[2][-1]          # second
+
+
+def test_a_failure_after_a_success_is_not_escalated(monkeypatch):
+    """Only a repeat of something that already failed -- a command that worked
+    before and broke now is new information, not a repeated mistake."""
+    outcomes = iter([0, 1])
+    monkeypatch.setitem(
+        pn.TOOL_DISPATCH, "execute_bash",
+        lambda body: pt.ToolResult(stdout="", stderr="", returncode=next(outcomes)),
+    )
+    monkeypatch.setattr(pn, "MAX_TOOL_ITERATIONS", 8)
+    llm = _FakeMultiStreamModel([
+        "ACTION: execute_bash\nCODE:\nmake",
+        "ACTION: execute_bash\nCODE:\nmake",
+        "FINAL:\ndone",
+    ])
+
+    pn._tool_loop(llm, [HumanMessage("go")])
+
+    assert all("has already failed" not in call[-1] for call in llm.calls)

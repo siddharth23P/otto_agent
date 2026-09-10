@@ -370,6 +370,22 @@ REPEATED_CALL_NOTE = (
     "execute it, test it -- and use what that actually reports."
 )
 
+#: Appended when a call fails against something that has already failed in
+#: this attempt.
+#:
+#: Separate from REPEATED_CALL_NOTE, and fires on the SECOND occurrence rather
+#: than the third, because the two are not the same mistake. Re-running
+#: something that succeeded is wasteful; re-running something that failed,
+#: unchanged, means the error was never read. It is also the cheapest thing
+#: for a model to produce, which is why it needs saying out loud.
+REPEATED_FAILURE_NOTE = (
+    "NOTE: `{target}` has already failed once in this attempt and has now "
+    "failed again. Do not run it a third time. Read the error above and work "
+    "out what is actually wrong -- check the state of the thing you are acting "
+    "on, and whether something else is undoing or blocking your change. Fix "
+    "what you find, then try."
+)
+
 #: How many calls in a row against the same target before the note appears.
 #: 3, not 2: a second attempt straight after the first is ordinary (a typo
 #: spotted on re-reading), while a third with still nothing run against it is
@@ -447,6 +463,36 @@ MAX_TOOL_ITERATIONS = int(os.environ.get("OTTO_MAX_TOOL_ITERATIONS", "5"))
 #: it is deliberately NOT in TOOL_DISPATCH -- it unwinds the whole tool loop
 #: by raising (see NeedsUserInput below) instead of returning a ToolResult.
 _TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user"))
+
+#: General debugging habits, shared by the prompts of the roles that actually
+#: change things. Not advice about any particular kind of task -- these are the
+#: two things a competent engineer does that a model, left alone, reliably
+#: does not.
+#:
+#: The first is looking at the system rather than at the thing that failed.
+#: Observed on a benchmark task: 99 commands, 28 of them re-running the one
+#: command that was broken, and not a single `ps`, `crontab` or look at what
+#: was running. The fix it applied was correct and kept being undone by
+#: processes it never went looking for.
+#:
+#: The second is not repeating an action that already failed. A model will
+#: re-issue a failing command verbatim several times over, because re-trying
+#: is cheaper to produce than diagnosing. Saying plainly that a repeat needs a
+#: reason is what turns the second attempt into a question about the first.
+_DIAGNOSTIC_HABITS = (
+    "Two habits, whatever the task:\n"
+    "1. Look at the system, not just at the thing that broke. Before you "
+    "conclude why something fails, find out what state it is actually in -- "
+    "what is running, what is scheduled, what a file really contains, what "
+    "changed recently. If a fix does not hold, or something reverts, then "
+    "something else is acting on it and finding THAT is the task.\n"
+    "2. Never run the same thing twice hoping for a different answer. If a "
+    "command failed, or did not achieve what you expected, work out why "
+    "before you touch it again -- read the actual error, check your "
+    "assumption about what it was going to do. Repeating an action is only "
+    "worth doing when you have changed something that would change its "
+    "result, and you should be able to say what.\n\n"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -554,7 +600,9 @@ PLANNER_PROMPT = (
 )
 SOLVER_PROMPT = (
     "You are the SOLVER. Work out a concrete answer to the request below, "
-    "writing and running code where that helps you check it. Reply with "
+    "writing and running code where that helps you check it.\n\n"
+    + _DIAGNOSTIC_HABITS +
+    "\nReply with "
     "exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input for "
     "that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
@@ -934,6 +982,7 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None) -> str:
     dead_replies = 0
     last_target: str | None = None
     repeats = 0
+    failed_targets: set[str] = set()
     for _ in range(MAX_TOOL_ITERATIONS):
         text = _call(llm, messages)
         kind_of_reply, tool_name, body = _parse_worker_reply(text)
@@ -980,7 +1029,15 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None) -> str:
             target = _action_target(tool_name, body)
             repeats = repeats + 1 if target == last_target else 1
             last_target = target
-            if repeats >= REPEATS_BEFORE_NOTE:
+            failed_before = target in failed_targets
+            if result.returncode != 0:
+                failed_targets.add(target)
+            if result.returncode != 0 and failed_before:
+                # A failing call repeated is the strongest possible signal
+                # that the last one was not understood -- act on it at once
+                # rather than waiting for a run of three.
+                evidence += "\n\n" + REPEATED_FAILURE_NOTE.format(target=target)
+            elif repeats >= REPEATS_BEFORE_NOTE:
                 evidence += "\n\n" + REPEATED_CALL_NOTE.format(
                     n=repeats, tool=tool_name, target=target,
                 )
