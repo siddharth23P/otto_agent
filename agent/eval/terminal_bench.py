@@ -292,3 +292,49 @@ def _split_pwd_marker(stdout: str, fallback: str) -> tuple[str, str]:
             del lines[index]
             return "\n".join(lines), directory
     return stdout, fallback
+
+
+class OttoSingleAgent(OttoTerminalAgent):
+    """The single-agent control (agent/eval/single_agent.py) behind the same
+    container plumbing, so the only difference from OttoTerminalAgent is the
+    architecture: one continuous conversation instead of a graph that restarts
+    every node from a two-message summary.
+
+        tb run --agent-import-path agent.eval.terminal_bench:OttoSingleAgent
+    """
+
+    @staticmethod
+    def name() -> str:
+        return "otto-single"
+
+    def perform_task(self, instruction, session, logging_dir=None) -> AgentResult:
+        from agent.eval.single_agent import run_single_agent
+
+        prompt = self._render_instruction(instruction) + _ENVIRONMENT_NOTE
+        budget = self._max_seconds or _task_budget_sec(logging_dir)
+        if budget is not None:
+            self._max_seconds = budget
+            usable = max(budget - DEADLINE_MARGIN_SEC, 1.0)
+            self._deadline = time.monotonic() + usable
+            self._wrap_up_at = time.monotonic() + usable * WRAP_UP_FRACTION
+
+        transcript = (logging_dir / "otto-transcript.txt") if logging_dir else None
+        try:
+            with bind_command_runner(self._runner(session, transcript)):
+                answer, taken = run_single_agent(prompt)
+        except Exception as exc:
+            stopped = any(
+                marker in f"{type(exc).__name__}: {exc}"
+                for marker in ("DeadlineExceeded", "ContainerGone")
+            )
+            if logging_dir is not None:
+                (logging_dir / "otto-error.txt").write_text(f"{type(exc).__name__}: {exc}")
+            return AgentResult(
+                failure_mode=FailureMode.AGENT_TIMEOUT if stopped
+                else FailureMode.UNKNOWN_AGENT_ERROR,
+            )
+
+        if logging_dir is not None:
+            (logging_dir / "otto-final.txt").write_text(answer)
+            (logging_dir / "otto-actions.txt").write_text("\n".join(taken))
+        return AgentResult(failure_mode=FailureMode.NONE)
