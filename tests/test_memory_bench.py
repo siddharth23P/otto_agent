@@ -102,6 +102,16 @@ def test_qa_result_answerable_false_when_neither():
     assert r.answerable is False
 
 
+def test_qa_result_evidence_and_recalled_text_default_to_empty_string():
+    # Callers that construct a QAResult directly without them (every test
+    # above this one) must still get a valid instance -- these two fields
+    # exist purely for --show-items debug output, not for `answerable`.
+    r = QAResult(question="q", category=1, evidence_ids=["D1:1"], stored=True,
+                 visible_verbatim=True, recalled=False)
+    assert r.evidence_text == ""
+    assert r.recalled_text == ""
+
+
 # ---- _is_verbatim / _is_reachable --------------------------------------
 
 def test_is_verbatim_true_for_text_still_in_x(tmp_path):
@@ -153,6 +163,22 @@ def test_run_one_conversation_at_production_budget_never_compacts():
     assert all(r.visible_verbatim for r in scored)  # still all in X
     assert all(r.answerable for r in scored)
     assert all(not r.recalled for r in scored)  # nothing compacted to recall from
+
+
+def test_run_one_conversation_populates_evidence_text_and_recalled_text():
+    # These two fields are what lets a person eyeball whether a `recalled`
+    # verdict is a real semantic-search find or a coincidental substring
+    # match -- both must actually be populated, not left at their default
+    # empty string, on every scored result.
+    result = run_one_conversation(_fake_sample(), summarize=_canned_summarize)
+
+    for r in result.scored_results():
+        assert r.evidence_text  # non-empty -- the raw cited turn(s)
+        assert r.recalled_text  # non-empty -- recall() always returns
+        # something, even just "(nothing has been compacted away yet...)"
+    # Spot-check one item's evidence_text actually IS the cited turn text.
+    single_hop = next(r for r in result.scored_results() if r.category == 1)
+    assert "Whiskers" in single_hop.evidence_text
 
 
 def test_run_one_conversation_skips_qa_items_with_no_evidence_in_range():
