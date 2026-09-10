@@ -480,7 +480,7 @@ _TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user"))
 #: is cheaper to produce than diagnosing. Saying plainly that a repeat needs a
 #: reason is what turns the second attempt into a question about the first.
 _DIAGNOSTIC_HABITS = (
-    "Two habits, whatever the task:\n"
+    "Four habits, whatever the task:\n"
     "1. Look at the system, not just at the thing that broke. Before you "
     "conclude why something fails, find out what state it is actually in -- "
     "what is running, what is scheduled, what a file really contains, what "
@@ -491,7 +491,17 @@ _DIAGNOSTIC_HABITS = (
     "before you touch it again -- read the actual error, check your "
     "assumption about what it was going to do. Repeating an action is only "
     "worth doing when you have changed something that would change its "
-    "result, and you should be able to say what.\n\n"
+    "result, and you should be able to say what.\n"
+    "3. Look wide before you look narrow. A filter hides everything you did "
+    "not think to ask for, so a `grep` that comes back empty or unsurprising "
+    "is not evidence -- it is a guess about what the answer looks like. When "
+    "a filtered search tells you nothing, run it again unfiltered and read "
+    "what is really there before you conclude anything.\n"
+    "4. If something goes back to how it was, that is not your change "
+    "failing -- it is something else changing it. Ask what could: a process "
+    "still running, a scheduled or repeating job, a service, something "
+    "watching the file. Enumerate them and look, rather than applying the "
+    "same fix harder.\n\n"
 )
 
 logger = logging.getLogger(__name__)
