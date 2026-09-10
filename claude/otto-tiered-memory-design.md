@@ -12,7 +12,7 @@ Phase 2 — wiring the `kind="history"` instance into the graph and CLI — is b
 
 A LoCoMo-based evaluation script is also built, tested, and committed (`agent/eval/memory_bench.py`, `otto eval-memory`, commit `71d1f59`) — see "Evaluation" below for what it measures and what a real run found.
 
-A citation-coverage bug found by that script is fixed and committed (`agent/memory/queue.py`, commit `bcfdf97`) — see "Finding: uncited items were silently unreachable" below.
+A citation-coverage bug found by that script is fixed and committed (`agent/memory/queue.py`), along with the retrieval rework that followed from it — see "Finding: uncited items were silently unreachable" below.
 
 Still not started: the `kind="context"` instance (in-turn context/board growth across unbounded overseer rounds, `agent/pipeline/nodes.py`) — see item 1 under "What's still pending."
 
@@ -124,41 +124,62 @@ The offline benchmark could not see this on its own: `_canned_summarize` cites p
 
 The live sweep's `recall_coverage` went from ~10% to 99% after the fix. That number is not as good as it looks — see below.
 
-## Recall precision is the real open problem
+## Recall precision: what was wrong and what it is now
 
-The post-fix 99% is a dump, not retrieval. Across all 101 questions, exactly **two** distinct bullets ever surfaced, and `recall()` returned 38,033 characters every single time — very nearly the whole conversation. `recall()` expands a matched bullet into the full text of every hash it cites, with no cap, and transitive accumulation means a late-generation bullet cites almost everything. So the benchmark scores a hit for the same reason a prompt would drown: the answer is in there because *everything* is in there.
+The 99% above was a dump, not retrieval. `recall()` expanded a matched bullet into the full text of every hash it cited, with no cap, and because compaction accumulates citations forward, a late-generation bullet cites nearly everything. Across all 101 questions exactly **two** distinct bullets ever surfaced and every call returned 38,033 characters — very nearly the whole conversation. It scored a hit for the same reason a real prompt would drown: the answer was in there because everything was.
 
-The honest measurement is what happens when expansion is capped. Ranking the permanent chunks directly against each question (independent of summarizer quality, so measurable offline), on the same 250-turn / 249-chunk replay:
+Three changes, each measured on the same 250-turn replay.
 
-| Retrieval | Coverage | Text returned |
-| --- | --- | --- |
-| Today: bullet match, uncapped expansion | 99% | 38,033 chars |
-| Chunk-level, top 1 | 27.7% | ~54 chars |
-| Chunk-level, top 3 | 53.5% | ~236 chars |
-| Chunk-level, top 5 | 61.4% | ~444 chars |
-| Chunk-level, top 10 | 71.3% | ~862 chars |
-| Chunk-level, top 20 | 82.2% | ~2,117 chars |
+**1. `recall()` is now two stages** (`agent/memory/retrieval.py`), which is what the spec described all along — "first pulling all the hash and compiling the list then finding relevant information (not all)". Stage 1 compiles the candidate list from every live bullet's `hash_refs`. Stage 2 ranks those raw chunks by their own stored embedding (written at flush time, `chunks.embedding`) and returns only the best handful.
 
-So ~61% at 1.2% of the context cost, against 99% at full cost. That is the trade to tune, and the levers, measured on the same replay at top-5:
+Ranking the *bullets* first to narrow the candidate set was tried, and it is a trap worth naming so it does not get reintroduced as an efficiency win. Compaction does not produce comparable bullets: on a real live replay the store held seven, six citing one to three chunks each and one citing 237. Which bullet a question matched had almost nothing to do with where its answer was.
 
-| Lever | Coverage | Text returned |
-| --- | --- | --- |
-| Plain question embedding (what we send today) | 61.4% | ~735 chars |
-| Add the BGE query prefix the model card asks for | 65.3% | ~735 chars |
-| Also return the turns either side of each hit | **79.2%** | ~2,205 chars |
-| Also blend in a lexical (BM25) score, alpha 0.4 | 70.3% | ~2,205 chars |
+| Stage 1 | Coverage on the live store |
+| --- | --- |
+| Narrow to the best 3 bullets | 5.0% |
+| Narrow to the best 5 | 67.3% |
+| Search every live bullet's hashes | 90.1% |
 
-Two things worth knowing from that:
+Bullets summarize; they do not index. `top_k` now only controls how many bullet summaries print as context above the results.
 
-* **We never send the query prefix.** `BAAI/bge-small-en-v1.5` is trained to receive `"Represent this sentence for searching relevant passages: "` in front of the *query* (not the documents). Adding it is a one-line change in `agent/memory/embeddings.py` for ~4 points, free.
-* **Neighbour turns are the biggest single win.** A dialogue turn is a terrible retrieval unit — the answer to "when did Caroline go to the support group?" often sits in the turn *after* the one that mentions it. Returning each hit with its immediate neighbours took top-5 from 65% to 79%, still at 6% of the cost of today's dump.
-* **Lexical blending hurt here** and should not be adopted on this evidence. LoCoMo questions paraphrase rather than quote, so exact-token overlap mostly adds noise; it may still help for questions about dates and proper nouns, which is a narrower use than a global blend.
+**2. Each hit comes back with its neighbours.** A dialogue turn is a poor retrieval unit — the answer to "when did she join the group?" is routinely in the turn *after* the one that names it. `chunks.seq` records flush order so `chunks_near()` can find them. This was the single largest win available, and widening the window buys coverage more cheaply than returning more hits.
 
-Suggested order of work: cap per-bullet expansion in `recall()` first (it is the actual context-window risk in production, and every number above is unmeasurable while it is uncapped), then the query prefix, then neighbour expansion, then re-run the live sweep to see what the bullet-ranking path scores honestly.
+**3. We now send the query prefix.** `BAAI/bge-small-en-v1.5` is trained asymmetrically: a stored passage is embedded as-is, but a query is meant to arrive behind `"Represent this sentence for searching relevant passages: "`. We were embedding questions as plain passages. `embed_query()` is a separate function precisely so documents never get the prefix. Worth about four points for nothing.
+
+Measured against the live store, scoring how often `recall()` surfaces a question's cited evidence and how much text it returns to do it:
+
+| max_chunks | neighbours | Coverage | Chars returned |
+| --- | --- | --- | --- |
+| 5 | 0 | 65.3% | 922 |
+| 5 | 1 | 79.2% | 2,112 |
+| 5 | 2 | 84.2% | 3,189 |
+| 10 | 2 | 90.1% | 6,293 |
+| 20 | 2 | **96.0%** | 11,526 |
+| 40 | 2 | 98.0% | 19,660 |
+| uncapped (before) | — | 99.0% | 38,033 |
+
+Shipped defaults are 20 chunks, window 2: **96% coverage at about 2,600 tokens**, under 3% of `TOTAL_BUDGET`, against 99% for the whole conversation. The last two points cost more than the first eighty.
+
+**A token budget is the ceiling that actually holds.** Both knobs above are counts of items, which is only a proxy for size. LoCoMo's dialogue turns average ~150 characters; an Otto turn is a person's whole message or a full assistant reply and can be thousands, so the same 20 items could be ten times the text here. `DEFAULT_TOKEN_BUDGET` (3,000) is spent best-first, so a session of long turns returns fewer, longer items rather than blowing the budget, and the budget binds on the least relevant material. On LoCoMo it barely binds at all (11,459 characters against 11,526 unbounded), which is what a safety ceiling should look like.
+
+Confirmed end to end on a fresh `--live` run (a different summarizer pass, so a different set of bullets — which is the point, now that bullet quality no longer gates what can be found):
+
+| Category | n | store | recalled |
+| --- | --- | --- | --- |
+| single-hop | 28 | 100% | 96% |
+| temporal | 24 | 100% | 92% |
+| multi-hop | 8 | 100% | 88% |
+| open-domain | 41 | 100% | 100% |
+| **overall** | **101** | **100%** | **96%** |
+
+Temporal and multi-hop are the weakest, which is what you would expect: both need more than one turn, and multi-hop needs turns that are far apart, so neighbour expansion does not help them the way it helps the rest.
+
+All of it is tunable from the CLI: `otto eval-memory --max-chunks --neighbours --token-budget`. `run_one_conversation(keep_store=True)` leaves the SQLite file behind so a live replay can be re-scored under different settings without paying for another pass of the summarizer — the expensive part of a `--live` run is producing the chunks and bullets, not scoring them.
 
 ## What's still pending
 
 1. In-turn `context`/`board` growth (`agent/pipeline/nodes.py`) — currently no cap across overseer retry rounds. Needs a `TieredQueue(kind="context", ...)` per run, which needs a place to persist a live `TieredQueue` across multiple node calls within one LangGraph run — `history`'s per-`Session` object didn't have to solve this (a `Session` already lives for the whole CLI process); still open.
 2. The `ask_user` Q&A history gap (found while answering an earlier memory question, pre-Phase-2): a question asked mid-turn via `ask_user` and its answer aren't yet synced back into the history queue for future turns. Worth revisiting — may be naturally subsumed by how `record_turn()` is called rather than needing a separate fix.
 3. Tuning `X_BUDGET`/`Y_BUDGET` themselves from real usage, per the person's own framing of the 104K figure as "use this as a first pass" — the LoCoMo finding above (real conversations never fill even the current budget) suggests there's real headroom to learn from once Otto sees heavier day-to-day use, though it doesn't by itself argue for changing the numbers.
-4. Recall precision — the uncapped expansion and the retrieval levers in the section above.
+4. Lexical (BM25) blending was measured and **rejected** on this evidence: it moved top-5 from 65.3% to 51.5%. LoCoMo questions paraphrase rather than quote, so exact-token overlap mostly adds noise. It may still help for dates and proper nouns, which is a narrower use than a global blend, and would need its own evidence.
+5. Every number here comes from one LoCoMo conversation at a deliberately tiny budget. The defaults are tuned to that shape of data; a real Otto session has far longer, far fewer turns, and the count knobs in particular should be re-checked once there is real usage to replay.
