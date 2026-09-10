@@ -15,6 +15,18 @@ benchmark doesn't run the pipeline or the router at all in its default,
 offline mode (`--live` opts into one real LLM call per compaction, via
 agent.memory.wiring.summarize_for_memory, agent/eval/memory_bench.py's own
 module docstring), so there's no per-item trace worth syncing there.
+
+`--show-items failures|all` prints each scored QA item's evidence text next
+to recall()'s raw output -- worth reaching for whenever a coverage number
+looks suspicious, since `recalled` is an exact-substring match (module
+docstring point 3), not a fuzzy one: reading the two side by side is how
+you tell a real semantic-search find from a coincidental match. It also
+surfaces a real gap in the OFFLINE (`--no-live`, default) summarizer:
+_canned_summarize groups raw turns into fixed-size blocks with placeholder
+bullet text, and recall() returns a matched bullet's ENTIRE underlying raw
+text -- so offline, "recalled" mostly tests "did the right block rank in
+top-k," not "did it find the right sentence." `--live`'s real, topic-
+scoped bullet summaries are the stricter version of this same test.
 """
 from __future__ import annotations
 
@@ -27,7 +39,7 @@ from rich import box
 from rich.table import Table
 
 from agent.cli.ui import err, out
-from agent.eval.memory_bench import DEFAULT_CACHE, download_locomo, load_locomo, run_benchmark
+from agent.eval.memory_bench import BenchmarkReport, DEFAULT_CACHE, download_locomo, load_locomo, run_benchmark
 
 
 def eval_memory_cmd(
@@ -63,8 +75,23 @@ def eval_memory_cmd(
     json: Annotated[
         bool, typer.Option("--json", help="Print the full report as JSON instead of a table.")
     ] = False,
+    show_items: Annotated[
+        str,
+        typer.Option(
+            help="Print per-question detail after the table: 'none' (default), 'failures' "
+                 "(answerable=False items only -- the interesting/debug case), or 'all'. Each "
+                 "item shows its evidence text and recall()'s raw output side by side, since "
+                 "`recalled` is an exact-substring match, not a fuzzy one -- useful for checking "
+                 "whether a pass/miss is real or an artifact of the conversation repeating similar "
+                 "phrasing. Ignored when --json is set (the JSON report already includes both).",
+        ),
+    ] = "none",
 ) -> None:
     """Score agent/memory/'s tiered queue against the LoCoMo long-conversation-memory dataset."""
+    if show_items not in ("none", "failures", "all"):
+        err.print("[bad]--show-items must be 'none', 'failures', or 'all'[/]")
+        raise typer.Exit(2)
+
     path = data_path or DEFAULT_CACHE
     with err.status(f"fetching LoCoMo dataset ({path})…"):
         try:
@@ -123,6 +150,41 @@ def eval_memory_cmd(
         f"[muted]{summary['conversation_count']} conversation(s) -- "
         f"final_view/raw token ratio: {ratio_text}[/]"
     )
+
+    if show_items != "none":
+        _print_items(report, show_items)
+
     if overall["n"] and overall["store_coverage"] is not None and overall["store_coverage"] < 1.0:
         err.print("[bad]store_coverage < 100% -- the engine lost cited evidence; this is a real bug[/]")
         raise typer.Exit(1)
+
+
+def _snippet(text: str, limit: int = 280) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _print_items(report: BenchmarkReport, which: str) -> None:
+    """Per-question detail: for every scored QA item matching `which`, the
+    exact evidence text next to recall()'s raw output -- the pair
+    `recalled` was computed from (an exact substring check, module
+    docstring point 3), so reading them side by side is how you tell a
+    real find from a coincidental match in a conversation that repeats
+    similar phrasing often.
+    """
+    out.print("")
+    shown = 0
+    for conv in report.conversations:
+        for r in conv.scored_results():
+            if which == "failures" and r.answerable:
+                continue
+            shown += 1
+            verdict = "[ok]answerable[/]" if r.answerable else "[bad]MISS[/]"
+            via = "verbatim" if r.visible_verbatim else ("recalled" if r.recalled else "neither")
+            out.print(f"[spec]{conv.sample_id}[/] [muted]({via})[/] {verdict}")
+            out.print(f"  Q: {r.question}")
+            out.print(f"  evidence: {_snippet(r.evidence_text)}")
+            out.print(f"  recalled: {_snippet(r.recalled_text)}")
+            out.print("")
+    if shown == 0:
+        out.print("[muted](nothing matched --show-items filter)[/]")

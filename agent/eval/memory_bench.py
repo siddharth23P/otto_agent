@@ -155,6 +155,29 @@ class QAResult:
     #: Only meaningful (and only scored in the summary) when
     #: `visible_verbatim` is False -- see `answerable`.
     recalled: bool
+    #: The exact evidence text(s) `recalled` was computed from, joined --
+    #: NOT what got shown to the summarizer (which sees "speaker: text" per
+    #: item, one at a time); this is one or more full turns concatenated,
+    #: for a human comparing this result against `recalled_text` below to
+    #: see it in full. Kept even when `visible_verbatim` is True, so a
+    #: still-verbatim item's evidence is inspectable the same way.
+    evidence_text: str = ""
+    #: recall()'s raw return value for this question -- always computed
+    #: (recall() is a local embedding search, not an LLM call, so this
+    #: costs nothing extra even for a `visible_verbatim` item). When
+    #: nothing has been compacted yet for this `kind`, recall() itself
+    #: returns a fixed "(nothing has been compacted away yet...)" message,
+    #: never an empty string, so a blank value here would mean this field
+    #: wasn't populated, not that recall() found nothing.  The point of
+    #: keeping this at all: `recalled` is an exact-substring match against
+    #: this text (module docstring point 3), not a fuzzy/semantic one, so
+    #: seeing the actual text answers "did it find the RIGHT thing, or does
+    #: this conversation just repeat similar phrasing often enough that a
+    #: substring match is easy to satisfy by accident" -- read the two
+    #: side by side (CLI: `otto eval-memory --show-items failures`) rather
+    #: than trusting the boolean alone when a conversation has a lot of
+    #: near-duplicate turns.
+    recalled_text: str = ""
 
     @property
     def answerable(self) -> bool:
@@ -285,6 +308,7 @@ def run_one_conversation(
             question=qa["question"], category=qa.get("category", 0),
             evidence_ids=evidence_ids, stored=stored,
             visible_verbatim=visible_verbatim, recalled=recalled,
+            evidence_text="\n".join(evidence_texts), recalled_text=recalled_text,
         ))
 
     final_view_tokens = count_tokens(queue.current_view())
