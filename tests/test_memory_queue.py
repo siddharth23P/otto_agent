@@ -171,6 +171,98 @@ def test_second_compaction_carries_prior_bullet_hash_refs_forward_unchanged(stor
     assert {b.text for b in store.current_bullets("history")} == {"combined"}
 
 
+# ---- compaction: citation coverage is enforced, not just requested ------
+
+
+def test_uncited_raw_item_still_gets_a_bullet_pointing_at_it(store):
+    """The summarizer is ASKED to cite every item (_build_summarize_prompt)
+    but nothing made it comply -- an item no surviving bullet cites is one
+    recall() can never find again, since it only searches the live
+    generation (agent/memory/retrieval.py)."""
+    tq = q.TieredQueue(
+        "history", store, summarize=lambda p: "only about the first [sources: 1]",
+        x_budget=1000, y_budget=5,
+    )
+    tq._y_raw = ["raw one", "raw two", "raw three"]
+
+    tq._compact_y_if_full()
+
+    h1, h2, h3 = (content_hash(t) for t in ("raw one", "raw two", "raw three"))
+    covered = {h for b in store.current_bullets("history") for h in b.hash_refs}
+    assert covered == {h1, h2, h3}
+    # the uncited ones are carried as their OWN text, not folded into a
+    # contentless catch-all -- that text is what recall() ranks on.
+    assert [b.text for b in tq._y_bullets] == ["only about the first", "raw two", "raw three"]
+
+
+def test_uncited_prior_bullet_is_carried_forward_with_its_whole_chain(store):
+    """The cliff case: a prior bullet is itself a numbered item carrying every
+    hash it has accumulated, so one compaction that summarizes it without
+    citing its number used to sever the entire chain behind it."""
+    calls = []
+
+    def _summarize(prompt):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return "generation one [sources: 1,2]"
+        return "only the new one [sources: 2]"  # never cites item 1, the prior bullet
+
+    tq = q.TieredQueue("history", store, summarize=_summarize, x_budget=1000, y_budget=5)
+
+    tq._y_raw = ["raw one", "raw two"]
+    tq._compact_y_if_full()
+
+    tq._y_raw = ["raw three"]
+    tq._compact_y_if_full()
+
+    h1, h2, h3 = (content_hash(t) for t in ("raw one", "raw two", "raw three"))
+    covered = {h for b in store.current_bullets("history") for h in b.hash_refs}
+    assert covered == {h1, h2, h3}
+    # carried forward verbatim -- its text is already a summary and its
+    # hash_refs already resolve, so neither is re-derived.
+    carried = [b for b in tq._y_bullets if b.text == "generation one"]
+    assert [b.hash_refs for b in carried] == [sorted([h1, h2])]
+
+
+def test_carried_forward_raw_text_is_truncated_to_an_excerpt(store):
+    """Carrying an omitted turn forward must not undo the compaction that
+    just ran -- the bullet holds an excerpt, not the whole turn again."""
+    long_text = "x" * (q.CARRY_FORWARD_EXCERPT_CHARS + 50)
+    tq = q.TieredQueue(
+        "history", store, summarize=lambda p: "about the short one [sources: 1]",
+        x_budget=10_000, y_budget=5,
+    )
+    tq._y_raw = ["short one", long_text]
+
+    tq._compact_y_if_full()
+
+    [carried] = [b for b in tq._y_bullets if b.text != "about the short one"]
+    assert carried.text.endswith("...")
+    assert len(carried.text) == q.CARRY_FORWARD_EXCERPT_CHARS + 3
+    assert carried.hash_refs == [content_hash(long_text)]
+
+
+def test_every_item_index_is_covered_across_many_lossy_generations(store):
+    """The end-to-end invariant, against a summarizer that deliberately omits
+    items the way a real one does: whatever a compaction flushed, the live
+    generation's combined hash_refs still point at all of it."""
+    def _summarize(prompt):
+        numbers = [int(n) for n in q.re.findall(r"^\[(\d+)\] ", prompt, flags=q.re.MULTILINE)]
+        kept = [n for i, n in enumerate(numbers) if i % 3]  # drops every third item
+        return "partial summary [sources: " + ",".join(str(n) for n in kept) + "]"
+
+    tq = q.TieredQueue("history", store, summarize=_summarize, x_budget=20, y_budget=40)
+
+    appended = [f"turn number {i} about topic {i}" for i in range(60)]
+    for text in appended:
+        tq.append(text)
+
+    flushed = set(store.get_chunks([content_hash(t) for t in appended]))
+    assert flushed, "the budgets above must actually force compactions"
+    covered = {h for b in store.current_bullets("history") for h in b.hash_refs}
+    assert flushed <= covered
+
+
 # ---- current_view() ------------------------------------------------------
 
 
