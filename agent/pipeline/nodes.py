@@ -830,6 +830,16 @@ def _parse_ask_user_body(body: str) -> tuple[str, list[str]]:
 _NEXT_DIRECTIVE = re.compile(r"^[ \t]*(?:ACTION|FINAL):", re.MULTILINE)
 
 
+#: Chat-template control tokens a model sometimes emits into its own visible
+#: output -- "<|tool_call_start|>" and friends. They are markup for the
+#: serialiser, never content, and they arrive mid-body where nothing else
+#: strips them: observed once in a Terminal-Bench run, where the first command
+#: of the task became `curl -v example.com\n\n<|tool_call_start|> 2>&1 | head`
+#: and bash answered "syntax error near unexpected token `|'". Rare, and free
+#: to remove.
+_SPECIAL_TOKEN = re.compile(r"<\|[a-z_]+\|>")
+
+
 def _code_body(text: str) -> str:
     """The CODE: body of the FIRST action in `text`, ending where the next
     ACTION:/FINAL: begins.
@@ -849,7 +859,8 @@ def _code_body(text: str) -> str:
         return ""
     after = text.split("CODE:", 1)[1]
     match = _NEXT_DIRECTIVE.search(after)
-    return (after[: match.start()] if match else after).strip()
+    body = after[: match.start()] if match else after
+    return _SPECIAL_TOKEN.sub("", body).strip()
 
 
 def _parse_worker_reply(text: str) -> tuple[Literal["action", "final", "unparseable"], str, str]:
