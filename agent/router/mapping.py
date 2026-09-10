@@ -42,11 +42,12 @@ class Endpoint(StrEnum):
 class Preference(StrEnum):
     """How to choose when a query matches several models.
 
-    Context window is a proxy for tier, not a price. It is the only comparable
-    number every provider publishes -- `ModelInfo.raw` carries pricing for
-    Inception but nothing else, so a real cost-aware rule needs a price field on
-    `ModelInfo` first. Until then this is an honest approximation, and pinning
-    is the answer wherever the choice actually costs money.
+    Nothing in today's `TASK_ROUTES` exercises this -- every candidate is now
+    a pinned Inception spec, and a pin resolves to its exact model id
+    (`Router._select`), never a tiebreak. Kept for the day a query candidate
+    (e.g. "whichever Mercury variant is smallest") earns its place again --
+    removing the mechanism to save a few lines now would just mean rebuilding
+    it later under time pressure.
     """
 
     #: Biggest window that qualifies -- proxy for "most capable".
@@ -59,12 +60,15 @@ class Preference(StrEnum):
 class Candidate:
     """One proposal in a chain. Three forms, in decreasing determinism:
 
-        pinned          spec="inception:mercury-2"   exact model
-        provider query  provider="anthropic"         best match within one vendor
-        open query      neither                      best match anywhere
+        pinned          spec="inception:mercury-2.5"   exact model
+        provider query  provider="inception"           best match within one vendor
+        open query      neither                        best match anywhere
 
     Pin when you need reproducibility. Query when the vendor churns model ids
-    faster than you want to edit this file -- capabilities outlive ids.
+    faster than you want to edit this file -- capabilities outlive ids. Every
+    route in `TASK_ROUTES` today is a pin: Inception is the only vendor, and
+    its two chat-capable generations (mercury-2, mercury-2.5) are different
+    enough in quality that "whichever one exists" is never what a route wants.
     """
 
     spec: str | None = None
@@ -74,9 +78,7 @@ class Candidate:
     endpoint: Endpoint = Endpoint.CHAT
     min_context: int | None = None
     #: Substring the model id must contain, matched case-insensitively.
-    #: Vendors keep tier names stable across versions -- "flash", "haiku",
-    #: "mini" have outlived several generations of version numbers -- so this
-    #: expresses "the cheap tier" more reliably than a pin or a context bound.
+    #: Ignored on a pinned candidate -- see `Router._select`.
     name_contains: str | None = None
     #: Tiebreak for queries. Ignored for a pin, which matches exactly one model.
     prefer: Preference = Preference.SMALLEST_CONTEXT
@@ -95,9 +97,16 @@ class Candidate:
         return self.spec is None
 
 
-# Chains are ordered: first viable candidate wins, the rest are the fallback path.
-# Must be tuples -- a set literal both scrambles that order and fails to build,
-# since `params` makes a frozen Candidate unhashable.
+# Chains are ordered: first viable candidate wins, the rest are the fallback
+# path. Must be tuples -- a set literal both scrambles that order and fails to
+# build, since `params` makes a frozen Candidate unhashable.
+#
+# Otto is Inception-only (2026-09-09: "going all in with Mercury" -- the
+# multi-vendor fallback chains from Phases 2-7 are gone, along with the
+# anthropic/openai/gemini provider modules themselves). Every chain below is
+# a single pinned candidate; there is no secondary vendor left to fall back
+# to, so `NoViableRoute` now means exactly one thing: Inception itself is
+# unreachable or the pinned id has gone stale.
 #
 # `params` are bound per route and must be valid for that candidate's endpoint.
 # The three Inception endpoints accept disjoint parameter sets:
@@ -111,137 +120,77 @@ class Candidate:
 # Note the asymmetry: CHAT params reach a constructor, FIM/EDIT params reach a
 # call. `stop` and `tools` are chat *invoke*-time options, not constructor
 # fields, so they do not belong in a CHAT route's params.
-
-# Two rendering modes, one per vendor family.
 #
-# `diffusing` (Inception only) streams the *denoising effect*: each chunk is a
-# full snapshot of the whole answer, progressively less noisy, NOT the next slice
-# of text. A consumer that appends chunks concatenates every refinement step and
-# produces garbage -- the renderer must REPLACE the previous frame. `chat.py`
-# selects its renderer on this flag, so never set it for a non-Inception route.
-#
-# The other three vendors stream incrementally and instead expose their
-# reasoning. Parameter names very nearly converge: `reasoning_effort` on OpenAI,
-# Gemini and Inception; Anthropic alone uses `thinking={"type": ..., ...}`.
-#
-# Two constraints that are not obvious:
-#   * Anthropic rejects an explicit temperature while thinking is enabled, and
-#     needs max_tokens > budget_tokens.
-#   * OpenAI reasoning models reject any temperature but the default.
-# Hence no temperature on those candidates.
+# `diffusing=True` streams the *denoising effect*: each chunk is a full
+# snapshot of the whole answer, progressively less noisy, NOT the next slice
+# of text. A consumer that appends chunks concatenates every refinement step
+# and produces garbage -- the renderer must REPLACE the previous frame.
+# `chat.py` selects its renderer on this flag.
 
 TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
-    # COST POLICY. This is a leaderless swarm: every node routes independently,
-    # so a flagship model in a chain is not one expensive call, it is one per
-    # node per turn. Cheap tier only -- Mercury, Flash, Haiku, Mini.
-    #
-    # Tier is expressed with `name_contains`, not pins and not context bounds.
-    # Pins go stale silently. Context fails outright as a cost proxy: every
-    # Anthropic model has the same 200k window, so no context rule can tell
-    # Haiku from Opus. Vendor tier names are the one stable, comparable signal.
-    #
-    # Mercury is pinned (ids verified against Inception's docs) and leads every
-    # chat chain: diffusion decoding is the fastest and cheapest option here.
-    # The others exist for a revoked or rate-limited Inception key.
-
+    # `reasoning_effort` is the dial every chat route tunes, cheapest to most
+    # thoughtful: "instant" for a swarm node's fast turnaround (classify,
+    # review), "medium"/"high" for the calls that actually have to think
+    # (reconcile, plan) -- one model, four settings, not four models.
     Task.CHAT_FAST: (
         Candidate(
-            spec="inception:mercury-2",
+            spec="inception:mercury-2.5",
             requires=frozenset({Capability.CHAT}),
             params={"temperature": 0.2, "reasoning_effort": "instant", "diffusing": True},
         ),
-        Candidate(
-            provider="gemini",
-            name_contains="flash",
-            requires=frozenset({Capability.CHAT, Capability.REASONING}),
-            params={"reasoning_effort": "low", "include_thoughts": True},
-        ),
-        Candidate(
-            provider="anthropic",
-            name_contains="haiku",
-            requires=frozenset({Capability.CHAT, Capability.REASONING}),
-            params={"thinking": {"type": "enabled", "budget_tokens": 2048}, "max_tokens": 4096},
-        ),
-        Candidate(
-            provider="openai",
-            name_contains="mini",
-            requires=frozenset({Capability.CHAT, Capability.REASONING}),
-            params={"reasoning_effort": "low"},
-        ),
     ),
 
-    # Cheap models that can still think. Mercury's reasoning_effort is a dial on
-    # a cheap model rather than a switch to an expensive one, so it stays first.
     Task.REASON: (
         Candidate(
-            spec="inception:mercury-2",
+            spec="inception:mercury-2.5",
             requires=frozenset({Capability.CHAT}),
-            params={"temperature": 0.7, "reasoning_effort": "medium", "diffusing": True},
-        ),
-        Candidate(
-            provider="anthropic",
-            name_contains="haiku",
-            requires=frozenset({Capability.CHAT, Capability.TOOLS, Capability.REASONING}),
-            params={"thinking": {"type": "enabled", "budget_tokens": 2048}, "max_tokens": 4096},
-        ),
-        Candidate(
-            provider="gemini",
-            name_contains="flash",
-            requires=frozenset({Capability.CHAT, Capability.TOOLS, Capability.REASONING}),
-            params={"reasoning_effort": "low", "include_thoughts": True},
+            # max_tokens set explicitly, generous: this route authors whole
+            # code files and reconciles (stitches) them, and an unset
+            # max_tokens fell back to whatever Inception defaults to
+            # unspecified -- too low for a real script, and a diffusing call
+            # cut off at length is not a clean prefix, it's an unconverged
+            # snapshot (code_nodes.py's _call() retries on that finish_reason,
+            # this just makes hitting it in the first place rarer).
+            #
+            # 2026-09-09: diffusing flipped False and reasoning_effort bumped
+            # to "high" (the ceiling -- there is no "max", see
+            # inception_provider.py's Literal) while chasing a bug where
+            # worker()'s multi-round tool-calling replies intermittently
+            # come back as a bare fragment with neither "ACTION:" nor
+            # "FINAL:" in it (agent/pipeline/nodes.py's _parse_worker_reply
+            # then silently treats that fragment as the answer -- a real,
+            # separate harness bug, but this route change is the other half
+            # of the experiment: does turning off snapshot-streaming and
+            # asking for more deliberation reduce how often the model
+            # produces that malformed reply in the first place). Revert if
+            # it doesn't measurably help -- this is a live experiment, not
+            # a settled tuning decision.
+            params={"temperature": 0.7, "reasoning_effort": "high",
+                    "diffusing": False, "max_tokens": 8192},
         ),
     ),
 
-    # Long-context planning. Flash leads on window size alone -- it is the only
-    # cheap-tier model with a seven-figure context.
     Task.PLAN: (
         Candidate(
-            provider="gemini",
-            name_contains="flash",
-            requires=frozenset({Capability.CHAT, Capability.TOOLS, Capability.REASONING}),
-            min_context=900_000,
-            params={"reasoning_effort": "low", "include_thoughts": True},
-        ),
-        Candidate(
-            spec="inception:mercury-2",
+            spec="inception:mercury-2.5",
             requires=frozenset({Capability.CHAT}),
-            params={"temperature": 0.4, "reasoning_effort": "high", "diffusing": True},
-        ),
-        Candidate(
-            provider="anthropic",
-            name_contains="haiku",
-            requires=frozenset({Capability.CHAT, Capability.TOOLS, Capability.REASONING}),
-            min_context=150_000,
-            params={"thinking": {"type": "enabled", "budget_tokens": 2048}, "max_tokens": 4096},
+            params={"temperature": 0.4, "reasoning_effort": "high",
+                    "diffusing": True, "max_tokens": 4096},
         ),
     ),
 
-    # Wide and uncreative. min_context is the floor; the cheap tier supplies it.
     Task.SUMMARIZE: (
         Candidate(
-            provider="gemini",
-            name_contains="flash",
-            requires=frozenset({Capability.CHAT, Capability.REASONING}),
-            min_context=500_000,
-            params={"reasoning_effort": "low", "include_thoughts": True},
-        ),
-        Candidate(
-            spec="inception:mercury-2",
+            spec="inception:mercury-2.5",
             requires=frozenset({Capability.CHAT}),
             params={"temperature": 0.1, "reasoning_effort": "instant", "diffusing": True},
-        ),
-        Candidate(
-            provider="openai",
-            name_contains="mini",
-            requires=frozenset({Capability.CHAT, Capability.REASONING}),
-            min_context=100_000,
-            params={"reasoning_effort": "low"},
         ),
     ),
 
     # No fallback exists for either of these -- no other vendor implements the
     # endpoints. `validate()` enforces that, so nobody can add one that looks
-    # like coverage.
+    # like coverage. Unchanged by the Mercury 2.5 switch: Inception's docs
+    # list no mercury-edit-2.5, only mercury-edit-2, for FIM/edit.
     Task.CODE_COMPLETE: (
         Candidate(
             spec="inception:mercury-edit-2",
@@ -260,7 +209,7 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
     ),
 }
 
-KNOWN_PROVIDERS = frozenset({"inception", "openai", "anthropic", "gemini"})
+KNOWN_PROVIDERS = frozenset({"inception"})
 INCEPTION_ONLY_ENDPOINTS = frozenset({Endpoint.FIM, Endpoint.EDIT})
 ENDPOINT_CAPABILITY: dict[Endpoint, Capability] = {
     Endpoint.CHAT: Capability.CHAT,

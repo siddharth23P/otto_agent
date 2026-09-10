@@ -1,13 +1,18 @@
 """The interactive shell: session state, slash commands, completion, and the
-per-turn renderers -- the plain status lines and the swarm animation.
+per-turn renderer.
 
-Reconciled against Phase 11B (see 9.4's Trap): the interactive default is no
-longer a single resolved (RoutingDecision, chat model) pair -- it is
-run_smart_stream()/run_code_stream(), a sequence of CodeTask graph updates.
-Session carries no `d`/`llm`/`config` for that reason, and `/task` from the
-original 9.5 spec is gone with it: there is no longer a single task route for
-a turn to switch, since the code-hive already routes each of its own calls
-(propose on Task.PLAN, author on Task.REASON, review on Task.CHAT_FAST)
+Reconciled against the router/planner/solver/summarizer/finder/evaluator
+graph (agent/pipeline/, replaced the orchestrator/worker/evaluate/
+subtask_consensus/synthesize swarm pipeline on 2026-09-10, which had itself
+replaced the Phase 11B code hive on 2026-09-09): the interactive default is
+no longer a single resolved (RoutingDecision, chat model) pair, nor a
+swarm of N workers -- it is run_pipeline_stream(), a sequence of
+AgentState graph updates from a single router-dispatched specialist per
+round. Session carries no `d`/`llm`/`config`/`agents` for that reason:
+there is nothing left to size or fix, and `/task` from the original 9.5
+spec is gone with it -- there is no longer a single task route for a turn
+to switch, since each node already routes its own calls (router on
+Task.CHAT_FAST, planner on Task.PLAN, solver on Task.REASON, ...)
 independently of anything a REPL command could select.
 """
 
@@ -32,7 +37,6 @@ from agent.cli.doctor import health_table, router_view
 from agent.cli.models import models_table
 from agent.cli.route import _chain, _summary
 from agent.cli.ui import err, out
-from agent.graph.state import ALLOWED_AGENTS
 from agent.router.llm_provider import all_models
 from agent.router.mapping import Task
 from agent.router.router import NoViableRoute
@@ -41,13 +45,12 @@ from agent.router.router import NoViableRoute
 @dataclass
 class Session:
     ctx: AppContext
-    #: None = size every turn (run_smart_stream); a value from ALLOWED_AGENTS
-    #: = skip size() entirely and always run_code_stream with exactly this
-    #: many agents (set by --agents at launch, or /agents mid-session).
-    agents: int | None = None
     history: list[BaseMessage] = field(default_factory=list)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     trace_id: str | None = None
+    #: Counts turns that actually produced output, for output.py's filenames
+    #: -- not every dispatched line (slash commands don't count).
+    turn: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -130,28 +133,11 @@ def _score_cmd(session: Session, arg: str) -> None:
     _score_common(session, value, comment_text.strip() or None)
 
 
-def _agents_cmd(session: Session, arg: str) -> None:
-    arg = arg.strip().lower()
-    if not arg or arg == "auto":
-        session.agents = None
-        err.print("[muted]agents: sized per turn[/]")
-        return
-    try:
-        n = int(arg)
-    except ValueError:
-        err.print(f"[warn]usage: /agents <n>|auto, n in {ALLOWED_AGENTS}[/]")
-        return
-    if n not in ALLOWED_AGENTS:
-        err.print(f"[warn]{n} is not allowed; one of {ALLOWED_AGENTS}[/]")
-        return
-    session.agents = n
-    err.print(f"[muted]agents: {n} (fixed)[/]")
-
-
 def _new_cmd(session: Session, arg: str) -> None:
     session.history.clear()
     session.session_id = uuid.uuid4().hex
     session.trace_id = None
+    session.turn = 0
     err.print("[muted]new session[/]")
 
 
@@ -171,8 +157,6 @@ COMMANDS: dict[str, Slash] = {
     "/good": Slash("/good", "score the last answer 1.0", _good_cmd),
     "/bad": Slash("/bad", "score the last answer 0.0", _bad_cmd),
     "/score": Slash("/score", r"score the last answer <0-1> \[comment]", _score_cmd),
-    "/agents": Slash("/agents", "fix the agent count, or 'auto' to size per turn", _agents_cmd,
-                      lambda: [str(n) for n in ALLOWED_AGENTS] + ["auto"]),
     "/new": Slash("/new", "clear history, start a fresh session", _new_cmd),
     "/help": Slash("/help", "list these commands", _help_cmd),
 }
@@ -228,134 +212,63 @@ def build_prompt_session() -> PromptSession:
 
 
 # --------------------------------------------------------------------------
-# Rendering a turn -- plain lines/panels, no animation
+# Rendering a turn -- plain lines/panels, no animation (there is no fan-out
+# left to animate: exactly one specialist runs per round).
 # --------------------------------------------------------------------------
 
-def render_update(node: str, delta: dict, tally: Counter) -> None:
-    """Print one graph update. Handles both shapes that can appear on a
-    stream: Phase 8's Hive (spawn/clone/consensus) and Phase 11B's CodeTask
-    (propose.../stitch) -- the shell only ever drives the latter, but this
-    stays honest about both since run()'s generator form (were it wired up
-    the same way) would produce the former."""
+#: The four specialists (mirrors agent.pipeline.nodes.ROLE_NODES -- not
+#: imported directly to avoid this display module pulling in the whole
+#: pipeline, including its module-level Router()/provider clients, just to
+#: know four literal strings).
+_ROLE_NODES = ("planner", "solver", "summarizer", "finder")
+
+
+def render_update(node: str, delta: dict, tally: Counter, sink: Callable[[object], None] = out.print) -> None:
+    """Render one graph update by calling `sink(renderable_or_string)` once
+    (zero times for a node with nothing to show). Handles both shapes that
+    can appear on a stream: Phase 8's Hive (spawn/clone/consensus, dead code
+    today -- nothing calls agent/graph/run.py's run() from either front end
+    -- kept here only because a future caller wiring it back up would want
+    the same renderer) and the pipeline's AgentState (router/planner/
+    solver/summarizer/finder/evaluator) -- the REPL only ever drives the
+    latter.
+
+    `sink` defaults to the REPL's `out.print`; the TUI (tui.py) passes its
+    transcript widget's `.write` instead, so the same branch logic drives two
+    different front ends over one Rich renderable per call."""
 
     if node == "spawn":
         for line in delta.get("board", []):
-            out.print(f"[muted]{line}[/]")
+            sink(f"[muted]{line}[/]")
         return
     if node == "clone":
         vote = delta["votes"][0]
         tally[vote["answer"]] += 1
-        out.print(Panel(
+        sink(Panel(
             Markdown(f"**{vote['answer']}**\n\n{vote['rationale']}"),
             title=f"[spec]clone · seed {vote['seed']}[/]", border_style="spec",
         ))
         return
     if node == "consensus":
         for line in delta.get("board", []):
-            out.print(f"[muted]{line}[/]")
+            sink(f"[muted]{line}[/]")
         tally.clear()
         return
 
-    if node in ("propose", "decomp_consensus", "spawn_parts", "part_consensus", "stitch"):
+    if node == "router":
         for line in delta.get("board", []):
-            out.print(f"[muted]{line}[/]")
+            sink(f"[muted]{line}[/]")
         return
-    if node == "propose_review":
-        vote = delta["proposal_votes"][0]
-        mark = "[ok]yes[/]" if vote["approve"] else "[bad]no[/]"
-        out.print(f"[muted]  split review · seed {vote['voter']}: {mark} — {vote['reason']}[/]")
+    if node in _ROLE_NODES:
+        for line in delta.get("board", []):
+            sink(f"[muted]{line}[/]")
+        text = (delta.get("output") or "").strip()
+        if text:
+            if len(text) > 400:
+                text = text[:400] + "\n…"
+            sink(Panel(Markdown(text), title=f"[spec]{node}[/]", border_style="spec"))
         return
-    if node == "author":
-        sub = delta["submissions"][0]
-        code = sub["code"].strip()
-        if len(code) > 400:
-            code = code[:400] + "\n…"
-        out.print(Panel(
-            Markdown(f"```\n{code}\n```"),
-            title=f"[spec]author · part {sub['part']} · round {sub['round']}[/]",
-            border_style="spec",
-        ))
+    if node == "evaluator":
+        for line in delta.get("board", []):
+            sink(f"[muted]{line}[/]")
         return
-    if node == "review":
-        rv = delta["reviews"][0]
-        mark = "[ok]yes[/]" if rv["approve"] else "[bad]no[/]"
-        out.print(f"[muted]  part {rv['part']} review · seed {rv['voter']}: {mark} — {rv['reason']}[/]")
-        return
-
-
-# --------------------------------------------------------------------------
-# The swarm animation -- "N cute things peeking" while their part is pending,
-# settling into a status label as each one starts working and finishes.
-# --------------------------------------------------------------------------
-
-_CRITTERS = ("🐹", "🐨", "🦊", "🐰", "🐼", "🐻", "🐸", "🦉", "🐵")
-
-
-class SwarmAnimator:
-    """A small Live animation over `out`, one critter per agent.
-
-    Purely cosmetic: it only reads the same deltas render_update() already
-    prints and never touches graph state. `feed()` is meant to be called once
-    per streamed update (in addition to render_update(), not instead of it)
-    for as long as the turn's part-authoring/review phase is running; each
-    call both updates a part's status and advances the animation by one
-    frame, so a burst of review votes visibly animates the row rather than
-    only redrawing on a timer.
-    """
-
-    def __init__(self, console, agents: int) -> None:
-        self._console = console
-        self._agents = agents
-        self._status: dict[int, str] = {i: "assigned" for i in range(agents)}
-        self._tick = 0
-        self._live = None
-
-    def __enter__(self) -> "SwarmAnimator":
-        from rich.live import Live
-        self._live = Live(self._frame(), console=self._console, refresh_per_second=8, transient=True)
-        self._live.__enter__()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        if self._live is not None:
-            self._live.__exit__(*exc)
-
-    def _frame(self) -> Panel:
-        grid = Table.grid(padding=(0, 2))
-        for _ in range(self._agents):
-            grid.add_column(justify="center")
-        peeking = self._tick % 2 == 0
-        row_critter, row_wall, row_label = [], [], []
-        for i in range(self._agents):
-            status = self._status[i]
-            critter = _CRITTERS[i % len(_CRITTERS)]
-            if status == "assigned":
-                row_critter.append(f"[muted]{critter if peeking else ' '}[/]")
-            elif status in ("authoring", "reviewing"):
-                row_critter.append(f"[spec]{critter}[/]")
-            elif status == "accepted":
-                row_critter.append(f"[ok]{critter}✅[/]")
-            else:  # exhausted
-                row_critter.append(f"[warn]{critter}⚠️[/]")
-            row_wall.append("[muted]▔▔▔[/]")
-            row_label.append(f"[muted]part {i} · {status}[/]")
-        grid.add_row(*row_critter)
-        grid.add_row(*row_wall)
-        grid.add_row(*row_label)
-        return Panel(grid, title="[spec]swarm[/]", border_style="muted", padding=(0, 1))
-
-    def feed(self, node: str, delta: dict) -> None:
-        self._tick += 1
-        if node == "author":
-            part = delta["submissions"][0]["part"]
-            self._status[part] = "authoring"
-        elif node == "review":
-            part = delta["reviews"][0]["part"]
-            if self._status.get(part) == "authoring":
-                self._status[part] = "reviewing"
-        elif node == "part_consensus":
-            for i, s in delta.get("part_status", {}).items():
-                if s in ("accepted", "exhausted"):
-                    self._status[i] = s
-        if self._live is not None:
-            self._live.update(self._frame())

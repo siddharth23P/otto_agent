@@ -1,84 +1,60 @@
 """The interactive shell: `otto chat`.
 
-Every turn goes through the code hive (Phase 11B) -- sized fresh each turn by
-default, or fixed for the whole session with --agents / mid-session with
-/agents. There is no single-model turn anymore; see shell.py's module
-docstring for what that superseded and why.
+Every turn goes through the pipeline (agent/pipeline/ -- the router/
+planner/solver/summarizer/finder/evaluator graph that replaced the
+orchestrator/worker/evaluate/subtask_consensus/synthesize swarm on
+2026-09-10, which had itself replaced the Phase 11B code hive on
+2026-09-09). There is no `agents` concept anymore -- one router dispatch,
+one specialist, one evaluator, per round -- so there is nothing to size or
+fix for a session; see agent/pipeline/nodes.py's module docstring for the
+design discussion behind the swap.
 """
 
 from collections import Counter
-from typing import Annotated, Optional
 
 import typer
 from langchain_core.messages import AIMessage, HumanMessage
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from agent.cli.shell import Session, SwarmAnimator, build_prompt_session, dispatch, render_update
+from agent.cli.output import save_final
+from agent.cli.shell import Session, build_prompt_session, dispatch, render_update
 from agent.cli.ui import err, out
-from agent.graph.code_run import run_code_stream
-from agent.graph.code_state import CodeTask
-from agent.graph.size import DEFAULT as SIZE_DEFAULT
-from agent.graph.smart_run import run_smart_stream
-from agent.graph.state import ALLOWED_AGENTS
+from agent.pipeline.run import run_pipeline_stream
+from agent.pipeline.state import AgentState
 
 
 def _run_turn(s: Session, text: str) -> None:
     tally: Counter = Counter()
-    stream = (
-        run_code_stream(text, thread_id=s.session_id, agents=s.agents)
-        if s.agents is not None
-        else run_smart_stream(text, thread_id=s.session_id)
-    )
+    final: AgentState | None = None
 
-    animator: SwarmAnimator | None = None
-    final: CodeTask | None = None
-    agents_hint = s.agents
+    for update in run_pipeline_stream(text, session_id=s.session_id):
+        if "__final__" in update:
+            final = update["__final__"]
+            s.trace_id = update.get("__trace_id__")
+            continue
 
-    try:
-        for update in stream:
-            if "__sizing__" in update:
-                agents_hint = update["__sizing__"]
-                plural = "" if agents_hint == 1 else "s"
-                err.print(f"[muted]sized: {agents_hint} agent{plural}[/]")
-                continue
-            if "__final__" in update:
-                final = update["__final__"]
-                s.trace_id = update.get("__trace_id__")
-                continue
-
-            node, delta = next(iter(update.items()))
-            if node == "spawn_parts" and animator is None:
-                animator = SwarmAnimator(out, agents_hint or SIZE_DEFAULT)
-                animator.__enter__()
-            if animator is not None:
-                animator.feed(node, delta)
-            render_update(node, delta, tally)
-    finally:
-        if animator is not None:
-            animator.__exit__(None, None, None)
+        node, delta = next(iter(update.items()))
+        render_update(node, delta, tally)
 
     if final is not None:
-        code = (final.get("final_code") or "").strip() or "*(no output produced)*"
-        out.print(Panel(Markdown(f"```\n{code}\n```"), title="[spec]final[/]", border_style="ok"))
+        raw_output = (final.get("final_output") or "").strip()
+        code = raw_output or "*(no output produced)*"
+        out.print(Panel(Markdown(code), title="[spec]final[/]", border_style="ok"))
         s.history.append(AIMessage(code))
+        if raw_output:
+            # On disk, not just on screen -- selecting a Rich panel's text
+            # out of a live terminal mangles box-drawing borders and wrapped
+            # lines (13.4's bug hunt). A plain file sidesteps that.
+            s.turn += 1
+            path = save_final(s.session_id, s.turn, raw_output, None)
+            err.print(f"[muted]saved to {path}[/]")
 
 
-def chat(
-    ctx: typer.Context,
-    agents: Annotated[
-        Optional[int],
-        typer.Option(help="Fix the agent count for the whole session; omit to size every turn."),
-    ] = None,
-) -> None:
-    """Talk to the swarm."""
-    if agents is not None and agents not in ALLOWED_AGENTS:
-        err.print(f"[bad]{agents} agents are not allowed; one of {ALLOWED_AGENTS}[/]")
-        raise typer.Exit(2)
-
-    s = Session(ctx=ctx.obj, agents=agents)
-    banner = f"{s.agents} agents (fixed)" if s.agents is not None else "sized per turn"
-    err.print(f"[muted]otto:code · {banner}[/]")
+def chat(ctx: typer.Context) -> None:
+    """Talk to the pipeline."""
+    s = Session(ctx=ctx.obj)
+    err.print("[muted]otto:pipeline[/]")
     err.print("[muted]/help for commands[/]")
 
     prompt_session = build_prompt_session()

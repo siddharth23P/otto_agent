@@ -15,6 +15,7 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4.31",
     "prompt-toolkit>=3.0.53",
     "python-dotenv>=1.2.3",
+    "textual>=8.2.8",
     "typer>=0.27.2",
 ]
 
@@ -32,3 +33,14 @@ packages = ["agent"]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
+
+# A bare `pytest`/`uv run pytest -q` (what CI runs) otherwise walks the whole
+# repo, including _to_delete/ (retired files kept around because device_bash
+# can't rm without an extra permission grant -- see its own module notes)
+# and langfuse/ (a large cloned reference repo, gitignored but still on
+# disk locally). Both can contain stale or unrelated test-shaped files that
+# break collection for reasons that have nothing to do with this project's
+# own tests. Pinning collection to tests/ is what every CI run and every
+# local `uv run pytest -q` actually means to do anyway.
+[tool.pytest.ini_options]
+testpaths = ["tests"]

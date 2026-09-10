@@ -3,3 +3,5 @@
 __pycache__
 .DS_Store
 langfuse
+# per-run final-answer files (13.5) -- not something to commit
+otto_output/

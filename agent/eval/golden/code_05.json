@@ -1,0 +1,6 @@
+{
+  "id": "code_05",
+  "domain": "code",
+  "prompt": "Write a Python function `is_palindrome(s: str) -> bool` that returns True if s is a palindrome when ignoring case and any non-alphanumeric characters, e.g. \"A man, a plan, a canal: Panama\" is a palindrome.",
+  "checker": "assert is_palindrome('A man, a plan, a canal: Panama') == True\nassert is_palindrome('race a car') == False\nassert is_palindrome('') == True\nassert is_palindrome('Was it a car or a cat I saw?') == True\nprint('OK')\n"
+}
