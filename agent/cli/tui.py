@@ -77,7 +77,6 @@ waiting on a person) until the modal dismisses it.
 from __future__ import annotations
 
 import threading
-import uuid
 from collections import Counter
 from typing import Iterable
 
@@ -368,9 +367,7 @@ class OttoApp(App):
         self.push_screen(ScoreDialog(), done)
 
     def action_new_session(self) -> None:
-        self.session.history.clear()
-        self.session.session_id = uuid.uuid4().hex
-        self.session.trace_id = None
+        self.session.reset()
         self._last_output = None
         self._post("[dim]new session[/]")
 
@@ -381,7 +378,6 @@ class OttoApp(App):
         event.input.value = ""
         if not text:
             return
-        self.session.history.append(HumanMessage(text))
         self._post(f"[bold]you[/] {text}")
         self.run_turn(text)
 
@@ -394,14 +390,15 @@ class OttoApp(App):
         # old shared transcript RichLog (module docstring).
         thinking_log = RichLog(wrap=True, markup=True, highlight=False)
         self.call_from_thread(self._post_thinking, thinking_log, "thinking…")
-        # self.session.history already ends with this turn's own
-        # HumanMessage(text) (on_input_submitted appends it before calling
-        # run_turn) -- everything before that is the conversation so far
-        # (agent/pipeline/run.py's `history` parameter; agent/pipeline/
-        # nodes.py's module docstring, sixth refinement).
-        history = self.session.history[:-1]
+        human_message = HumanMessage(text)
+        # Bounded, not the raw ever-growing list (agent/cli/chat.py's own
+        # module docstring has the full Phase 2 reasoning -- shared 1:1
+        # with this TUI, both front ends over the same Session).
+        history, memory_context = self.session.history_for_graph()
         try:
-            stream = run_pipeline_stream(text, session_id=self.session.session_id, history=history)
+            stream = run_pipeline_stream(
+                text, session_id=self.session.session_id, history=history, memory_context=memory_context,
+            )
             while stream is not None:
                 next_stream = None
                 for update in stream:
@@ -428,7 +425,7 @@ class OttoApp(App):
                             self._post,
                             Panel(Markdown(code), title="[green]final[/]", border_style="green"),
                         )
-                        self.session.history.append(AIMessage(code))
+                        self.session.record_turn(human_message, AIMessage(code) if raw_output else None)
                         if raw_output:
                             # Same reasoning as chat.py: a file survives copying,
                             # a live RichLog selection does not.

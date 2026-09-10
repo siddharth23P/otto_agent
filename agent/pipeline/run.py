@@ -37,6 +37,23 @@ now-replaced code hive -- worth revisiting there, not smuggled into this
 fix, which only closes the "does the graph even see what I said two turns
 ago" gap.
 
+Bounding that conversation memory (2026-09-10, same day, Phase 2 of
+claude/otto-tiered-memory-design.md -- the paragraph above flagged
+"deliberately NOT built here" as its own explicit follow-up): `history` no
+longer needs to be the whole raw, unbounded list. `_initial()` gained a
+`memory_context` parameter, seeded from whatever `agent/memory/wiring.py`'s
+`history_for_graph()` produces out of a session's TieredQueue -- the
+recent, still-verbatim tail becomes `history` exactly as before (so
+`messages`/`_conversation_so_far()` need no changes at all), and anything
+older that's been compacted away becomes `memory_context`, landing in
+`state["context"]`'s existing "CONTEXT GATHERED SO FAR:" display instead.
+Both `run_pipeline()` and `run_pipeline_stream()` also now open this
+session's MemoryStore (agent/memory/store.py's `~/.otto/memory/
+<session_id>.db`) and bind it for the duration of the graph call
+(agent/memory/session.py's `bind_store()`) -- how agent/pipeline/tools.py's
+new `recall_memory` tool finds out which session's history to search,
+since a plain TOOL_DISPATCH function has no other way to see `session_id`.
+
 Pausing for a person mid-run (2026-09-10, same day, agent/pipeline/
 nodes.py's seventh refinement -- has its own module docstring section
 with the full design discussion): app.compile() already carries a
@@ -72,13 +89,15 @@ from langfuse.langchain import CallbackHandler
 
 from langgraph.types import Command
 
+from agent.memory.session import bind_store
+from agent.memory.store import MemoryStore
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
 from agent.pipeline.state import AgentState
 
 logger = logging.getLogger(__name__)
 
 
-def _initial(text: str, *, history: Sequence[BaseMessage] = ()) -> dict:
+def _initial(text: str, *, history: Sequence[BaseMessage] = (), memory_context: str = "") -> dict:
     return {
         "messages": [*history, HumanMessage(text)],
         "board": [],
@@ -86,7 +105,7 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = ()) -> dict:
         "node": None,
         "feedback": "",
         "output": None,
-        "context": "",
+        "context": memory_context,
         "plan": None,
         "active_step": None,
         "node_error": None,
@@ -151,7 +170,9 @@ def _graph_thread_id(session_id: str) -> str:
     return f"{session_id}:{uuid.uuid4().hex[:8]}"
 
 
-def run_pipeline(text: str, *, session_id: str, history: Sequence[BaseMessage] = ()) -> AgentState:
+def run_pipeline(
+    text: str, *, session_id: str, history: Sequence[BaseMessage] = (), memory_context: str = "",
+) -> AgentState:
     """Prewarm, invoke, score, return the finished AgentState.
 
     One call in, one finished result out -- for scripted/benchmark callers
@@ -159,39 +180,45 @@ def run_pipeline(text: str, *, session_id: str, history: Sequence[BaseMessage] =
     watch it happen instead -- that's run_pipeline_stream(), below, not a
     different mode of this function.
 
-    `history` is the conversation BEFORE `text` -- module docstring. Empty
-    by default, so every existing single-turn caller is unaffected.
+    `history`/`memory_context` are the conversation BEFORE `text` -- module
+    docstring's "Bounding that conversation memory". Both empty by default,
+    so every existing single-turn caller is unaffected.
     """
     failures = ROUTER.prewarm()
     if failures:
         logger.warning("prewarm: %s", failures)
 
-    initial = _initial(text, history=history)
+    initial = _initial(text, history=history, memory_context=memory_context)
     client = get_client()
     handler = CallbackHandler()
     config = _config(_graph_thread_id(session_id), handler)
+    store = MemoryStore.for_session(session_id)
 
-    with propagate_attributes(
-        trace_name="otto:pipeline",
-        session_id=session_id,
-        tags=["pipeline"],
-    ):
-        with client.start_as_current_observation(
-            name="otto:pipeline", as_type="agent", input=text
-        ) as run_span:
-            final = app.invoke(initial, config)
-            _score(run_span, final)
+    with bind_store(store):
+        with propagate_attributes(
+            trace_name="otto:pipeline",
+            session_id=session_id,
+            tags=["pipeline"],
+        ):
+            with client.start_as_current_observation(
+                name="otto:pipeline", as_type="agent", input=text
+            ) as run_span:
+                final = app.invoke(initial, config)
+                _score(run_span, final)
 
     return final
 
 
-def run_pipeline_stream(text: str, *, session_id: str, history: Sequence[BaseMessage] = ()):
+def run_pipeline_stream(
+    text: str, *, session_id: str, history: Sequence[BaseMessage] = (), memory_context: str = "",
+):
     """Same prewarm, tracing and scoring as run_pipeline(), but yields each
     graph update as it happens (`stream_mode="updates"`) instead of
     invoking and returning. What the interactive shell/TUI watch live.
 
-    `history` is the conversation BEFORE `text` -- module docstring. Empty
-    by default, so every existing single-turn caller is unaffected.
+    `history`/`memory_context` are the conversation BEFORE `text` -- module
+    docstring's "Bounding that conversation memory". Both empty by default,
+    so every existing single-turn caller is unaffected.
 
     The last item yielded is usually `{"__final__": AgentState,
     "__trace_id__": str | None}` -- a plain dict, not a Command/node delta,
@@ -200,36 +227,40 @@ def run_pipeline_stream(text: str, *, session_id: str, history: Sequence[BaseMes
     mid-run"): a run that hits nodes.py's ask_user node instead yields
     `{"__ask__": {"question", "choices", "thread_id"}}` and ENDS there,
     mid-turn -- no `__final__` this call. `resume_pipeline_stream()`,
-    below, is how a caller with an answer continues that same run.
+    below, is how a caller with an answer continues that same run -- it
+    re-binds this same session's MemoryStore itself, so recall_memory stays
+    usable across a resume too.
     """
     failures = ROUTER.prewarm()
     if failures:
         logger.warning("prewarm: %s", failures)
 
-    initial = _initial(text, history=history)
+    initial = _initial(text, history=history, memory_context=memory_context)
     client = get_client()
     handler = CallbackHandler()
     graph_thread_id = _graph_thread_id(session_id)
     config = _config(graph_thread_id, handler)
+    store = MemoryStore.for_session(session_id)
 
-    with propagate_attributes(
-        trace_name="otto:pipeline",
-        session_id=session_id,
-        tags=["pipeline"],
-    ):
-        with client.start_as_current_observation(
-            name="otto:pipeline", as_type="agent", input=text
-        ) as run_span:
-            for update in app.stream(initial, config, stream_mode="updates"):
-                ask = _as_ask_event(update, graph_thread_id)
-                if ask is not None:
-                    run_span.update(output="(paused -- awaiting your answer)")
-                    yield ask
-                    return
-                yield update
-            final = app.get_state(config).values
-            _score(run_span, final)
-            trace_id = run_span.trace_id
+    with bind_store(store):
+        with propagate_attributes(
+            trace_name="otto:pipeline",
+            session_id=session_id,
+            tags=["pipeline"],
+        ):
+            with client.start_as_current_observation(
+                name="otto:pipeline", as_type="agent", input=text
+            ) as run_span:
+                for update in app.stream(initial, config, stream_mode="updates"):
+                    ask = _as_ask_event(update, graph_thread_id)
+                    if ask is not None:
+                        run_span.update(output="(paused -- awaiting your answer)")
+                        yield ask
+                        return
+                    yield update
+                final = app.get_state(config).values
+                _score(run_span, final)
+                trace_id = run_span.trace_id
 
     yield {"__final__": final, "__trace_id__": trace_id}
 
@@ -248,29 +279,34 @@ def resume_pipeline_stream(answer, *, thread_id: str, session_id: str):
     `{"__final__": ...}`, but can itself end in another `{"__ask__": ...}`
     if the re-invoked specialist gets stuck again -- callers loop on this
     the same way they loop on run_pipeline_stream() (agent/cli/chat.py,
-    agent/cli/tui.py).
+    agent/cli/tui.py). Re-binds `session_id`'s own MemoryStore for this
+    continuation too (module docstring, "Bounding that conversation
+    memory") -- recall_memory stays usable after a resume, not just on a
+    run's first `run_pipeline_stream()` call.
     """
     client = get_client()
     handler = CallbackHandler()
     config = _config(thread_id, handler)
+    store = MemoryStore.for_session(session_id)
 
-    with propagate_attributes(
-        trace_name="otto:pipeline",
-        session_id=session_id,
-        tags=["pipeline", "resumed"],
-    ):
-        with client.start_as_current_observation(
-            name="otto:pipeline:resume", as_type="agent", input=str(answer)
-        ) as run_span:
-            for update in app.stream(Command(resume=answer), config, stream_mode="updates"):
-                ask = _as_ask_event(update, thread_id)
-                if ask is not None:
-                    run_span.update(output="(paused -- awaiting your answer)")
-                    yield ask
-                    return
-                yield update
-            final = app.get_state(config).values
-            _score(run_span, final)
-            trace_id = run_span.trace_id
+    with bind_store(store):
+        with propagate_attributes(
+            trace_name="otto:pipeline",
+            session_id=session_id,
+            tags=["pipeline", "resumed"],
+        ):
+            with client.start_as_current_observation(
+                name="otto:pipeline:resume", as_type="agent", input=str(answer)
+            ) as run_span:
+                for update in app.stream(Command(resume=answer), config, stream_mode="updates"):
+                    ask = _as_ask_event(update, thread_id)
+                    if ask is not None:
+                        run_span.update(output="(paused -- awaiting your answer)")
+                        yield ask
+                        return
+                    yield update
+                final = app.get_state(config).values
+                _score(run_span, final)
+                trace_id = run_span.trace_id
 
     yield {"__final__": final, "__trace_id__": trace_id}

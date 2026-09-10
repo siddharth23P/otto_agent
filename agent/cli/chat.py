@@ -17,6 +17,18 @@ gets stuck on something only the person can answer -- `_run_turn` is a
 `while` loop around that same `for` now, so it can render the question,
 collect an answer with `_ask_user`, and keep going via
 `resume_pipeline_stream()` for as long as the run keeps asking.
+
+Bounded conversation memory (2026-09-10, same day, Phase 2 of claude/
+otto-tiered-memory-design.md): `_run_turn` used to read `s.history[:-1]` --
+an unbounded, ever-growing raw list `chat()` appended this turn's own
+HumanMessage onto just before calling `_run_turn`, then appended the reply
+onto after. `Session` now keeps that history in a bounded
+`agent.memory.queue.TieredQueue` instead (agent/cli/shell.py); `_run_turn`
+builds its own `HumanMessage(text)` locally rather than reading it back off
+`s.history`, asks `s.history_for_graph()` for this turn's bounded
+`(history, memory_context)`, and records the finished turn with
+`s.record_turn()` once it has both halves -- `chat()`'s own loop no longer
+touches history at all.
 """
 
 from collections import Counter
@@ -62,14 +74,15 @@ def _ask_user(prompt_session, question: str, choices: list[str]) -> str:
 def _run_turn(s: Session, text: str, prompt_session) -> None:
     tally: Counter = Counter()
     final: AgentState | None = None
-    # s.history already ends with this turn's own HumanMessage(text) (the
-    # caller appends it before calling _run_turn) -- everything before
-    # that is the conversation so far (agent/pipeline/run.py's `history`
-    # parameter; agent/pipeline/nodes.py's module docstring, sixth
-    # refinement).
-    history = s.history[:-1]
+    human_message = HumanMessage(text)
+    # Bounded, not the raw ever-growing list -- module docstring. `history`
+    # is however many recent turns still fit verbatim; `memory_context` is
+    # whatever's older than that, already compacted (agent/memory/queue.py).
+    history, memory_context = s.history_for_graph()
 
-    stream = run_pipeline_stream(text, session_id=s.session_id, history=history)
+    stream = run_pipeline_stream(
+        text, session_id=s.session_id, history=history, memory_context=memory_context,
+    )
     while stream is not None:
         next_stream = None
         for update in stream:
@@ -94,7 +107,7 @@ def _run_turn(s: Session, text: str, prompt_session) -> None:
         raw_output = (final.get("final_output") or "").strip()
         code = raw_output or "*(no output produced)*"
         out.print(Panel(Markdown(code), title="[spec]final[/]", border_style="ok"))
-        s.history.append(AIMessage(code))
+        s.record_turn(human_message, AIMessage(code) if raw_output else None)
         if raw_output:
             # On disk, not just on screen -- selecting a Rich panel's text
             # out of a live terminal mangles box-drawing borders and wrapped
@@ -123,5 +136,4 @@ def chat(ctx: typer.Context) -> None:
         if dispatch(s, text):
             continue
 
-        s.history.append(HumanMessage(text))
         _run_turn(s, text, prompt_session)

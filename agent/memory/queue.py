@@ -19,8 +19,15 @@ namespaces them in the store -- agent/memory/store.py) rather than one
 merged pool: mixing conversation turns and task-internal context into one
 summary would make either harder to read cleanly. Graph/CLI-side wiring of
 these two instances is tracked separately from this file -- see the
-project's claude/otto-tiered-memory-design.md for what's built (this
-engine) vs. what's still pending.
+project's claude/otto-tiered-memory-design.md for what's built vs. what's
+still pending. As of Phase 2 (agent/memory/wiring.py, agent/memory/
+session.py): the `kind="history"` instance IS wired in -- agent/cli/
+shell.py's Session owns one per session, seeded via `run_pipeline_stream`'s
+new `memory_context` parameter. The `kind="context"` instance (in-turn
+context/board growth, agent/pipeline/nodes.py) is still NOT wired -- it
+needs a place to persist a live TieredQueue across multiple node calls
+within one LangGraph run, which `history`'s per-Session object didn't have
+to solve (a Session already lives for the whole CLI process); still open.
 
 Two tiers, then permanent storage:
 
@@ -249,18 +256,45 @@ class TieredQueue:
 
     # ---- reading -------------------------------------------------------
 
-    def current_view(self) -> str:
-        """What a prompt actually reads, oldest to newest: Y's bullets
-        (compacted), then Y's own raw overflow that hasn't triggered a
-        compaction YET (still verbatim -- Y filling up doesn't erase
-        anything, only Y's OWN budget being exceeded does), then X's raw
-        items (newest, verbatim). Never the DB directly.
+    @property
+    def recent_items(self) -> list[str]:
+        """X's current raw items, oldest to newest, verbatim, exactly as
+        appended -- unlike `earlier_view()`/`current_view()` (below) this
+        is a plain list, not pre-formatted text, so a caller that needs to
+        rebuild something item-shaped from it (agent/memory/wiring.py's
+        reconstruction of real Human/AIMessage objects for the graph, one
+        per recent turn) doesn't have to re-parse a rendered blob to get
+        back what it just put in.
+        """
+        return list(self._x)
+
+    def earlier_view(self) -> str:
+        """Everything OLDER than X -- Y's bullets (compacted) followed by
+        Y's own raw overflow that hasn't triggered a compaction yet (still
+        verbatim -- Y filling up doesn't erase anything, only Y's OWN
+        budget being exceeded does). Empty string if neither has anything
+        yet. `current_view()` is this plus X; a caller that wants to keep
+        "recent, verbatim" (X) and "older, likely-compacted" (this) in two
+        separate places in its own prompt -- rather than one combined blob
+        -- calls this directly instead of re-splitting current_view()'s
+        output back apart.
         """
         parts = []
         if self._y_bullets:
             parts.append("EARLIER (summarized):\n" + "\n".join(f"- {b.text}" for b in self._y_bullets))
         if self._y_raw:
             parts.append("EARLIER (not yet summarized):\n" + "\n\n".join(self._y_raw))
+        return "\n\n".join(parts)
+
+    def current_view(self) -> str:
+        """What a prompt actually reads, oldest to newest: `earlier_view()`
+        (Y's bullets, then Y's own not-yet-compacted raw overflow) followed
+        by X's raw items (newest, verbatim). Never the DB directly.
+        """
+        parts = []
+        earlier = self.earlier_view()
+        if earlier:
+            parts.append(earlier)
         if self._x:
             parts.append("RECENT:\n" + "\n\n".join(self._x))
         return "\n\n".join(parts)

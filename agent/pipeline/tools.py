@@ -8,7 +8,7 @@ still iterating, and an irreversible action taken before judgment can't be
 undone if the evaluator later rejects that attempt. Same reasoning the
 retired swarm pipeline's identical module docstring gave for its workers.
 
-Six tools exist (2026-09-10, replacing the swarm pipeline's execute_python
+Seven tools exist (2026-09-10, replacing the swarm pipeline's execute_python
 tool as this graph's whole tool box, per the router/planner/solver/
 summarizer/finder/evaluator design):
 
@@ -40,6 +40,19 @@ summarizer/finder/evaluator design):
                      next from that alone. Good for "what's the obvious
                      next fix/continuation here", useless for "make this
                      specific change" -- see its own docstring.
+  recall_memory   -- real, added later the same day, Phase 2 of claude/
+                     otto-tiered-memory-design.md: semantic search
+                     (agent/memory/retrieval.py's recall()) over THIS
+                     session's own compacted-away conversation history --
+                     what a caller reaches for when something from earlier
+                     in a long conversation got summarized away and the
+                     summary alone isn't enough. Takes a plain query
+                     string, nothing else. Reads whichever MemoryStore
+                     agent/pipeline/run.py bound for this run
+                     (agent/memory/session.py's `current_store()`) -- None
+                     bound (a caller that never wired memory in at all,
+                     e.g. agent/eval/'s golden runner) is not an error,
+                     same "fail clean, not crash" shape as web_search/rag.
 
 Both new tools go through the SAME `Router` instance's `.fim()`/
 `.code_edit()` (agent/router/router.py) that already served CODE_COMPLETE/
@@ -71,6 +84,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from agent.memory.retrieval import recall
+from agent.memory.session import current_store
 from agent.router.llm_provider.base import ProviderError
 from agent.router.router import Router
 
@@ -188,6 +203,37 @@ def rag(query: str) -> ToolResult:
     )
 
 
+def recall_memory(query: str) -> ToolResult:
+    """Semantic search (agent/memory/retrieval.py's recall()) over THIS
+    session's own compacted-away conversation history -- kind="history",
+    always; there is no "context" (in-turn) memory to search yet (module
+    docstring's Phase 2 note). `query` is a plain search string, nothing
+    else -- not code, not a shell command.
+
+    Two distinct ways this can come back empty-handed, both reported as a
+    normal failing ToolResult rather than a crash (same shape as web_search/
+    rag's stub failure, so a caller's tool loop reacts to it the same way):
+    no store bound at all for this run (agent/memory/session.py's
+    current_store() returns None -- e.g. agent/eval/'s golden runner, which
+    never wires memory in), or a store that IS bound but genuinely has
+    nothing compacted yet (recall()'s own "nothing to recall yet" message,
+    which still comes back as ok=True -- that's a real, if unhelpful,
+    answer, not a failure).
+    """
+    store = current_store()
+    if store is None:
+        return ToolResult(
+            stdout="",
+            stderr=f"recall_memory: no session memory is bound for this run (query={query!r})",
+            returncode=1,
+        )
+    try:
+        text = recall(store, "history", query)
+    except Exception as exc:  # a memory-layer bug must not crash the tool loop
+        return ToolResult(stdout="", stderr=f"recall_memory failed: {exc}", returncode=1)
+    return ToolResult(stdout=text, stderr="", returncode=0)
+
+
 #: Lazily constructed, NOT at import time (unlike nodes.py's module-level
 #: ROUTER) -- see the module docstring's note on why: this module is also
 #: imported for its zero-network golden-checker path (agent/eval/runner.py's
@@ -252,6 +298,7 @@ TOOL_TIERS: dict[str, str] = {
     "rag": READ_ONLY,
     "complete_code": READ_ONLY,
     "predict_edit": READ_ONLY,
+    "recall_memory": READ_ONLY,
 }
 
 #: What nodes.py's _tool_loop actually calls, keyed by the tool name an
@@ -266,4 +313,5 @@ TOOL_DISPATCH: dict[str, Callable[[str], ToolResult]] = {
     "rag": rag,
     "complete_code": complete_code,
     "predict_edit": predict_edit,
+    "recall_memory": recall_memory,
 }

@@ -58,13 +58,61 @@ def test_rag_stub_fails_cleanly_with_a_legible_reason():
     assert "not implemented" in result.stderr
 
 
-def test_all_six_tools_are_registered_read_only():
+def test_all_seven_tools_are_registered_read_only():
     assert set(TOOL_TIERS) == {
         "execute_python", "execute_bash", "web_search", "rag",
-        "complete_code", "predict_edit",
+        "complete_code", "predict_edit", "recall_memory",
     }
     assert all(tier == "read_only" for tier in TOOL_TIERS.values())
     assert set(TOOL_DISPATCH) == set(TOOL_TIERS)
+
+
+def test_recall_memory_fails_cleanly_with_no_store_bound_for_this_run():
+    # No agent.memory.session.bind_store() context active -- the state
+    # every offline test (and agent/eval/'s golden runner) starts from.
+    result = pt.recall_memory("what did we discuss earlier")
+
+    assert not result.ok
+    assert result.returncode != 0
+    assert "no session memory is bound" in result.stderr
+
+
+def test_recall_memory_searches_the_bound_store(tmp_path, monkeypatch):
+    from agent.memory.session import bind_store
+    from agent.memory.store import MemoryStore
+
+    store = MemoryStore(tmp_path / "session.db")
+    try:
+        store.add_bullet("history", 1, "talked about N Queens", ["h1"], None)
+        store.add_chunk("history", "h1", "the user asked to solve N Queens with brute force")
+
+        with bind_store(store):
+            result = pt.recall_memory("N Queens")
+    finally:
+        store.close()
+
+    assert result.ok
+    assert "N Queens" in result.stdout
+
+
+def test_recall_memory_wraps_an_unexpected_failure_cleanly(tmp_path, monkeypatch):
+    from agent.memory.session import bind_store
+    from agent.memory.store import MemoryStore
+
+    store = MemoryStore(tmp_path / "session.db")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("store is on fire")
+
+    monkeypatch.setattr(pt, "recall", _boom)
+    try:
+        with bind_store(store):
+            result = pt.recall_memory("anything")
+    finally:
+        store.close()
+
+    assert not result.ok
+    assert "recall_memory failed" in result.stderr
 
 
 # --------------------------------------------------------------------------

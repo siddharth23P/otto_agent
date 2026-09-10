@@ -267,6 +267,30 @@ overseer sees this run's own rejection history in its prompt and can act on
 it for the rest of THIS run -- because nothing durable persists once the
 run ends. Building the durable version is follow-up work against that doc,
 not a silent scope-expansion of this change.
+
+Eighth refinement, same day: Phase 2 of claude/otto-tiered-memory-design.md
+(the project doc has the full design) -- this graph's own two halves of
+that wiring, a DIFFERENT memory system from the paragraph just above (that
+one is cross-turn LEARNING; this one is cross-turn conversation MEMORY,
+short-term, not persisted past a session). agent/pipeline/run.py's
+`_initial()` gained a `memory_context` parameter: agent/cli/shell.py's
+`Session` now keeps conversation history in an `agent.memory.queue.
+TieredQueue` instead of an unbounded list, and seeds `state["context"]`
+with whatever's fallen out of that queue's verbatim recent tier (`X`) --
+the queue's own bounded, real Human/AIMessage reconstruction still becomes
+`history`/`state["messages"]` exactly as before this refinement, so
+`_conversation_so_far()` above needed zero changes; only what counts as
+"recent enough to stay verbatim" is now capped. tools.py's new
+`recall_memory` tool is the other half -- registered like any other tool
+(TOOL_DISPATCH/TOOL_TIERS) and mentioned in every role/evaluator prompt's
+ACTION list, same as every other tool (tests/test_prompt_tool_sync.py's
+existing "every prompt mentions every dispatchable tool" check is what
+keeps this in sync, unchanged by this refinement). FINDER_PROMPT's own
+listing gives it the most emphasis (Prefer, in this order: ...) since the
+spec's own framing was specifically "if AGENT decides it needs more
+details... FINDER will find the relevant stuff" -- but any role stuck on
+something from earlier in a long conversation can reach for it directly
+rather than routing through finder first.
 """
 from __future__ import annotations
 
@@ -414,8 +438,11 @@ PLANNER_PROMPT = (
     "each step (the overseer assigns that later, one step at a time, as "
     "each one runs). You may check your reasoning with a tool: reply with "
     "exactly\nACTION: <execute_python|execute_bash|web_search|rag|"
-    "complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool -- "
-    "complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
+    "recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input for "
+    "that tool -- recall_memory: a plain search query, nothing else -- "
+    "semantic search over this session's own compacted-away conversation "
+    "history; complete_code: prefix code, optionally then a line "
+    "\"---SUFFIX---\" "
     "and trailing code; predict_edit: code, optionally with a <|cursor|> "
     "marker, no instruction -- it only predicts the next edit; ask_user: "
     "a question for the person, optionally followed by a line \"CHOICES: "
@@ -437,8 +464,11 @@ SOLVER_PROMPT = (
     "You are the SOLVER. Work out a concrete answer to the request below, "
     "writing and running code where that helps you check it. Reply with "
     "exactly\nACTION: <execute_python|execute_bash|web_search|rag|"
-    "complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool -- "
-    "complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
+    "recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input for "
+    "that tool -- recall_memory: a plain search query, nothing else -- "
+    "semantic search over this session's own compacted-away conversation "
+    "history; complete_code: prefix code, optionally then a line "
+    "\"---SUFFIX---\" "
     "and trailing code; predict_edit: code, optionally with a <|cursor|> "
     "marker, no instruction -- it only predicts the next edit; ask_user: "
     "a question for the person, optionally followed by a line \"CHOICES: "
@@ -457,8 +487,11 @@ SUMMARIZER_PROMPT = (
     "satisfy the request -- you are not looking anything new up or solving "
     "a new problem. You may still use a tool if it helps verify something: "
     "reply with exactly\nACTION: <execute_python|execute_bash|web_search|"
-    "rag|complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool "
-    "-- complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
+    "rag|recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input "
+    "for that tool -- recall_memory: a plain search query, nothing else -- "
+    "semantic search over this session's own compacted-away conversation "
+    "history; complete_code: prefix code, optionally then a line "
+    "\"---SUFFIX---\" "
     "and trailing code; predict_edit: code, optionally with a <|cursor|> "
     "marker, no instruction -- it only predicts the next edit; ask_user: "
     "a question for the person, optionally followed by a line \"CHOICES: "
@@ -474,15 +507,19 @@ SUMMARIZER_PROMPT = (
 )
 FINDER_PROMPT = (
     "You are the FINDER. Look up whatever the request below needs before "
-    "answering. Prefer, in this order: execute_bash for anything on the "
-    "local system -- a directory, a codebase, git history/blame, or GitHub "
-    "via the gh CLI if it's on PATH (grep, find, ls, cat, git, gh, ...); "
-    "rag for a knowledge base; web_search for the open web (rag and "
-    "web_search are both stubbed today and will tell you so -- if that "
-    "happens, fall back to your own knowledge and say plainly in your "
-    "answer that you could not verify it). Reply with exactly\nACTION: "
-    "<execute_python|execute_bash|web_search|rag|complete_code|"
-    "predict_edit|ask_user>\nCODE:\n<input for that tool -- complete_code: "
+    "answering. Prefer, in this order: recall_memory if what's missing is "
+    "something from EARLIER IN THIS CONVERSATION that got compacted away "
+    "(agent/memory/'s tiered history queue -- a plain search query, not a "
+    "shell command); execute_bash for anything on the local system -- a "
+    "directory, a codebase, git history/blame, or GitHub via the gh CLI "
+    "if it's on PATH (grep, find, ls, cat, git, gh, ...); rag for a "
+    "knowledge base; web_search for the open web (rag and web_search are "
+    "both stubbed today and will tell you so -- if that happens, fall "
+    "back to your own knowledge and say plainly in your answer that you "
+    "could not verify it). Reply with exactly\nACTION: "
+    "<execute_python|execute_bash|web_search|rag|recall_memory|"
+    "complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool -- "
+    "recall_memory: a plain search query, nothing else; complete_code: "
     "prefix code, optionally then a line \"---SUFFIX---\" and trailing "
     "code; predict_edit: code, optionally with a <|cursor|> marker, no "
     "instruction -- it only predicts the next edit; ask_user: a question "
@@ -519,8 +556,11 @@ EVALUATOR_PROMPT = (
     "Judge whether the {target} below actually satisfies the original "
     "request -- {target_note}. You may check your judgment with a tool: "
     "reply with exactly\nACTION: <execute_python|execute_bash|web_search|"
-    "rag|complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool "
-    "-- complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
+    "rag|recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input "
+    "for that tool -- recall_memory: a plain search query, nothing else -- "
+    "semantic search over this session's own compacted-away conversation "
+    "history; complete_code: prefix code, optionally then a line "
+    "\"---SUFFIX---\" "
     "and trailing code; predict_edit: code, optionally with a <|cursor|> "
     "marker, no instruction -- it only predicts the next edit; ask_user: "
     "a question for the person, optionally followed by a line \"CHOICES: "
