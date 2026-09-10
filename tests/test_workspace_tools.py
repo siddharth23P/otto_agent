@@ -274,3 +274,21 @@ def test_remote_python_survives_a_snippet_containing_the_heredoc_delimiter(conta
 
     assert result.ok
     assert "still running" in result.stdout
+
+
+
+def test_write_file_accepts_the_json_shape_a_model_reaches_for(workspace):
+    """Observed in a Terminal-Bench transcript: handed two values to put in one
+    string, the model produced JSON, and the literal body created a file named
+    `{`. The prompts now spell the real format out; this is the safety net."""
+    pt.write_file('{"path": "pkg/m.py", "content": "def f():\\n    return 1\\n"}')
+
+    assert (workspace / "pkg/m.py").read_text() == "def f():\n    return 1\n"
+
+
+def test_write_file_still_treats_a_json_looking_first_line_as_a_path(workspace):
+    """Only a real object with both keys is redirected -- anything else is
+    still a path, so a file genuinely named after a brace still works."""
+    result = pt.write_file('{"not": "a write body"}\nsome content\n')
+
+    assert not result.ok or (workspace / '{"not": "a write body"}').exists()

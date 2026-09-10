@@ -295,6 +295,7 @@ rather than routing through finder first.
 from __future__ import annotations
 
 import os
+import re
 
 import json
 import logging
@@ -464,7 +465,7 @@ PLANNER_PROMPT = (
     "each step (the overseer assigns that later, one step at a time, as "
     "each one runs). You may check your reasoning with a tool: reply with "
     "exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input for "
-    "that tool -- recall_memory: a plain search query, nothing else -- "
+    "that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
     "history; complete_code: prefix code, optionally then a line "
     "\"---SUFFIX---\" "
@@ -489,7 +490,7 @@ SOLVER_PROMPT = (
     "You are the SOLVER. Work out a concrete answer to the request below, "
     "writing and running code where that helps you check it. Reply with "
     "exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input for "
-    "that tool -- recall_memory: a plain search query, nothing else -- "
+    "that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
     "history; complete_code: prefix code, optionally then a line "
     "\"---SUFFIX---\" "
@@ -511,7 +512,7 @@ SUMMARIZER_PROMPT = (
     "satisfy the request -- you are not looking anything new up or solving "
     "a new problem. You may still use a tool if it helps verify something: "
     "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input "
-    "for that tool -- recall_memory: a plain search query, nothing else -- "
+    "for that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
     "history; complete_code: prefix code, optionally then a line "
     "\"---SUFFIX---\" "
@@ -541,6 +542,12 @@ FINDER_PROMPT = (
     "back to your own knowledge and say plainly in your answer that you "
     "could not verify it). Reply with exactly\nACTION: <" + _TOOL_MENU +
     ">\nCODE:\n<input for that tool -- "
+    "read_file: a path, optionally with \":START-END\" for a line range; "
+    "list_files: a directory path; write_file: the path on the FIRST line "
+    "and the whole file content after it -- nothing in between, no JSON; "
+    "edit_file: the path on the first line, then a line \"---OLD---\", the "
+    "exact text to replace, a line \"---NEW---\", then what to replace it "
+    "with; "
     "recall_memory: a plain search query, nothing else; complete_code: "
     "prefix code, optionally then a line \"---SUFFIX---\" and trailing "
     "code; predict_edit: code, optionally with a <|cursor|> marker, no "
@@ -578,7 +585,7 @@ EVALUATOR_PROMPT = (
     "Judge whether the {target} below actually satisfies the original "
     "request -- {target_note}. You may check your judgment with a tool: "
     "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input "
-    "for that tool -- recall_memory: a plain search query, nothing else -- "
+    "for that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
     "history; complete_code: prefix code, optionally then a line "
     "\"---SUFFIX---\" "
@@ -635,8 +642,27 @@ def _call(llm, messages: list) -> str:
     current = llm
     for attempt in range(MAX_DIFFUSION_RETRIES):
         reply = None
-        for chunk in current.stream(messages):
-            reply = chunk if reply is None else reply + chunk
+        try:
+            for chunk in current.stream(messages):
+                reply = chunk if reply is None else reply + chunk
+        except ValueError as exc:
+            # langchain_core raises ValueError("No generation chunks were
+            # returned") from inside stream() when the provider yields nothing
+            # at all -- so the `reply is None` check below never gets the
+            # chance to see it. This module always meant to treat an empty
+            # stream as an empty answer (the caller's unparseable-reply retry
+            # then does its job); an uncaught ValueError instead unwinds the
+            # whole graph, which is how one benchmark task died outright
+            # rather than scoring badly.
+            if "No generation chunks" not in str(exc):
+                raise
+            logger.warning(
+                "inception: %s returned an empty stream (attempt %d/%d)",
+                current.model, attempt + 1, MAX_DIFFUSION_RETRIES,
+            )
+            if attempt < MAX_DIFFUSION_RETRIES - 1:
+                continue  # transient often enough to be worth one more try
+            return ""
         if reply is None:
             return ""
 
@@ -732,6 +758,34 @@ def _parse_ask_user_body(body: str) -> tuple[str, list[str]]:
     return "\n".join(question_lines).strip(), choices
 
 
+#: A line that STARTS a new directive, and therefore ENDS the CODE: body
+#: above it. Anchored to the start of a line so a mention of the word inside
+#: a command ("echo ACTION: done") doesn't truncate anything.
+_NEXT_DIRECTIVE = re.compile(r"^[ \t]*(?:ACTION|FINAL):", re.MULTILINE)
+
+
+def _code_body(text: str) -> str:
+    """The CODE: body of the FIRST action in `text`, ending where the next
+    ACTION:/FINAL: begins.
+
+    It used to be "everything after the first CODE:, to the end of the reply".
+    That is correct only while the model emits exactly one tool call per reply,
+    which it does not: asked for one step it will sometimes lay out the whole
+    plan at once, and the entire rest of the reply -- the literal lines
+    "ACTION: execute_bash", "CODE:", and a trailing "FINAL:" block -- was then
+    handed to the shell as part of the command. Terminal-Bench transcripts
+    caught it: bash reporting `ACTION:: command not found` mid-task, an exit
+    code of 127 for a command whose real work had actually succeeded, and an
+    agent reading that as failure. Only the first call is executed either way;
+    the loop feeds its result back and the model reissues the rest.
+    """
+    if "CODE:" not in text:
+        return ""
+    after = text.split("CODE:", 1)[1]
+    match = _NEXT_DIRECTIVE.search(after)
+    return (after[: match.start()] if match else after).strip()
+
+
 def _parse_worker_reply(text: str) -> tuple[Literal["action", "final", "unparseable"], str, str]:
     """Split a reply into (kind, tool_name, body).
 
@@ -744,7 +798,7 @@ def _parse_worker_reply(text: str) -> tuple[Literal["action", "final", "unparsea
     """
     if "ACTION:" in text:
         action_line = text.split("ACTION:", 1)[1].split("\n", 1)[0].strip()
-        code = text.split("CODE:", 1)[-1].strip() if "CODE:" in text else ""
+        code = _code_body(text)
         return "action", action_line, code
     if "FINAL:" in text:
         body = text.split("FINAL:", 1)[-1].strip()

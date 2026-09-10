@@ -88,6 +88,7 @@ nothing in a role/evaluator node's reach may call it.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import shlex
@@ -354,6 +355,30 @@ def read_file(body: str) -> ToolResult:
     return ToolResult(stdout=numbered[-_TAIL:], stderr="", returncode=0)
 
 
+def _split_write_body(body: str) -> tuple[str, str]:
+    """(path, content) from a write_file body.
+
+    The documented form is the path on the first line and the content after
+    it. A JSON object with "path"/"content" keys is also accepted, because
+    that is what a model actually reaches for when it has to put two values
+    in one string: observed in a Terminal-Bench transcript, where a JSON body
+    was taken literally and created a file named `{`. The prompts now spell
+    the real format out, so this is a safety net rather than a second
+    supported format -- accepting it costs nothing and the alternative is
+    writing rubbish to a plausible-looking path.
+    """
+    stripped = body.strip()
+    if stripped.startswith("{"):
+        try:
+            parsed = json.loads(stripped)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict) and "path" in parsed and "content" in parsed:
+            return str(parsed["path"]), str(parsed["content"])
+    head, _, content = body.partition("\n")
+    return head, content
+
+
 def write_file(body: str) -> ToolResult:
     """Create or overwrite a file in the bound workspace. CODE: body is the
     path on its OWN FIRST LINE, and everything after that first newline is
@@ -366,7 +391,7 @@ def write_file(body: str) -> ToolResult:
     Missing parent directories are created -- a model that writes
     "pkg/mod/x.py" means for it to exist.
     """
-    head, _, content = body.partition("\n")
+    head, content = _split_write_body(body)
     remote = current_command_runner()
     if remote is not None:
         if (bad := _remote_paths_are_the_containers_own("write_file", head)) is not None:

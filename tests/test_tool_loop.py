@@ -17,9 +17,10 @@ for the same reason: it was caught live in the swarm pipeline
 _tool_loop from the start rather than rediscovered, but "written correctly"
 and "verified correct" are not the same claim.
 """
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from agent.pipeline import nodes as pn
+from agent.pipeline import tools as pt
 
 
 def test_marker_less_reply_is_unparseable_not_final():
@@ -160,3 +161,64 @@ def test_tool_loop_falls_back_to_the_last_final_attempt_not_a_later_action_reply
     output = pn._tool_loop(llm, [])
 
     assert output == "def f(:"
+
+
+# ---- a reply that contains SEVERAL tool calls ----------------------------
+
+
+def test_code_body_stops_at_the_next_action_rather_than_running_the_whole_reply():
+    """Asked for one step, the model will sometimes lay out its whole plan at
+    once. The body used to be "everything after the first CODE:", so the
+    literal lines "ACTION: execute_bash" and "CODE:" were handed to the shell
+    as part of the command -- caught in a Terminal-Bench transcript as
+    `ACTION:: command not found` and an exit code of 127 for a command whose
+    real work had actually succeeded.
+    """
+    reply = (
+        "ACTION: execute_bash\nCODE:\n"
+        "tar -czf a.tgz -C /opt data\n\n"
+        "ACTION: execute_bash\nCODE:\n"
+        "gpg --symmetric a.tgz\n"
+    )
+
+    kind, tool_name, body = pn._parse_worker_reply(reply)
+
+    assert (kind, tool_name) == ("action", "execute_bash")
+    assert body == "tar -czf a.tgz -C /opt data"
+
+
+def test_code_body_stops_at_a_trailing_final_block():
+    reply = "ACTION: execute_bash\nCODE:\nls -la\n\nFINAL:\neverything is done\n"
+
+    _, _, body = pn._parse_worker_reply(reply)
+
+    assert body == "ls -la"
+
+
+def test_a_directive_word_inside_a_command_is_not_a_directive():
+    """Anchored to the start of a line, so a command that merely mentions one
+    keeps working."""
+    reply = 'ACTION: execute_bash\nCODE:\necho "ACTION: done" && echo "FINAL: yes"\n'
+
+    _, _, body = pn._parse_worker_reply(reply)
+
+    assert body == 'echo "ACTION: done" && echo "FINAL: yes"'
+
+
+def test_only_the_first_tool_call_of_a_multi_call_reply_is_executed(monkeypatch):
+    """The rest is not lost -- the loop feeds the first result back and the
+    model reissues what it still wants."""
+    calls = []
+
+    def _fake_bash(body):
+        calls.append(body)
+        return pt.ToolResult(stdout="ok", stderr="", returncode=0)
+
+    monkeypatch.setitem(pn.TOOL_DISPATCH, "execute_bash", _fake_bash)
+    llm = _FakeMultiStreamModel([
+        "ACTION: execute_bash\nCODE:\nfirst\n\nACTION: execute_bash\nCODE:\nsecond",
+        "FINAL:\ndone",
+    ])
+
+    assert pn._tool_loop(llm, [HumanMessage("go")]) == "done"
+    assert calls == ["first"]
