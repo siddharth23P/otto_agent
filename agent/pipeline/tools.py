@@ -189,11 +189,25 @@ def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
             )
         except subprocess.TimeoutExpired as exc:
             return ToolResult(
-                stdout=(exc.stdout or "")[-_TAIL:],
-                stderr=((exc.stderr or "") + "\n[timed out]")[-_TAIL:],
+                stdout=_as_text(exc.stdout)[-_TAIL:],
+                stderr=(_as_text(exc.stderr) + "\n[timed out]")[-_TAIL:],
                 returncode=-1,
                 timed_out=True,
             )
+
+
+def _as_text(stream: "str | bytes | None") -> str:
+    """A TimeoutExpired's captured output as text.
+
+    subprocess.run(text=True) decodes what it returns normally, but the output
+    hung off a TimeoutExpired can still be bytes -- so the timeout branch,
+    which is exactly the branch nobody exercises until a real command hangs,
+    raised TypeError instead of reporting the timeout. Found when a benchmark
+    task ran a command long enough to hit it.
+    """
+    if stream is None:
+        return ""
+    return stream.decode(errors="replace") if isinstance(stream, bytes) else stream
 
 
 def _env_with_pythonpath(run_dir: str) -> dict[str, str]:
@@ -266,8 +280,8 @@ def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
             )
         except subprocess.TimeoutExpired as exc:
             return ToolResult(
-                stdout=(exc.stdout or "")[-_TAIL:],
-                stderr=((exc.stderr or "") + "\n[timed out]")[-_TAIL:],
+                stdout=_as_text(exc.stdout)[-_TAIL:],
+                stderr=(_as_text(exc.stderr) + "\n[timed out]")[-_TAIL:],
                 returncode=-1,
                 timed_out=True,
             )

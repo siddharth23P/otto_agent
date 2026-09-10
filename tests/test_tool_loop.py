@@ -17,7 +17,7 @@ for the same reason: it was caught live in the swarm pipeline
 _tool_loop from the start rather than rediscovered, but "written correctly"
 and "verified correct" are not the same claim.
 """
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, HumanMessage
 
 from agent.pipeline import nodes as pn
 from agent.pipeline import tools as pt
@@ -127,14 +127,41 @@ def test_tool_loop_refuses_a_tool_outside_the_allowed_set():
     assert "is not available" in llm.calls[1][-1]
 
 
-def test_tool_loop_exhausts_gracefully_when_every_reply_is_unparseable():
+def test_tool_loop_gives_up_after_a_run_of_unparseable_replies():
+    """It used to spend the whole budget telling a silent model off. It now
+    stops after MAX_CONSECUTIVE_DEAD_REPLIES, still handing back the last
+    attempt, which is what the caller falls back on."""
     replies = [f"unparseable attempt {i}" for i in range(pn.MAX_TOOL_ITERATIONS)]
     llm = _FakeMultiStreamModel(replies)
 
     output = pn._tool_loop(llm, [])
 
-    assert output == replies[-1]
-    assert len(llm.calls) == pn.MAX_TOOL_ITERATIONS
+    assert output == replies[pn.MAX_CONSECUTIVE_DEAD_REPLIES - 1]
+    assert len(llm.calls) == pn.MAX_CONSECUTIVE_DEAD_REPLIES
+
+
+def test_one_bad_reply_is_still_retried_and_recovered():
+    """The early exit must not cost the case the retry was built for."""
+    llm = _FakeMultiStreamModel(["no markers here", "FINAL:\nthe answer"])
+
+    assert pn._tool_loop(llm, [HumanMessage("go")]) == "the answer"
+
+
+def test_the_dead_reply_run_resets_after_a_good_one(monkeypatch):
+    """Only CONSECUTIVE non-answers end it -- a model alternating between a
+    bad reply and a real tool call is making progress, slowly."""
+    monkeypatch.setattr(pn, "MAX_TOOL_ITERATIONS", 10)
+    monkeypatch.setitem(
+        pn.TOOL_DISPATCH, "execute_bash",
+        lambda body: pt.ToolResult(stdout="ok", stderr="", returncode=0),
+    )
+    llm = _FakeMultiStreamModel([
+        "", "", "ACTION: execute_bash\nCODE:\nls",
+        "", "", "ACTION: execute_bash\nCODE:\nls",
+        "FINAL:\ndone",
+    ])
+
+    assert pn._tool_loop(llm, [HumanMessage("go")]) == "done"
 
 
 def test_tool_loop_never_leaks_raw_action_protocol_text_when_it_exhausts_mid_action():

@@ -152,20 +152,38 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
             # snapshot (code_nodes.py's _call() retries on that finish_reason,
             # this just makes hitting it in the first place rarer).
             #
-            # 2026-09-09: diffusing flipped False and reasoning_effort bumped
-            # to "high" (the ceiling -- there is no "max", see
-            # inception_provider.py's Literal) while chasing a bug where
-            # worker()'s multi-round tool-calling replies intermittently
-            # come back as a bare fragment with neither "ACTION:" nor
-            # "FINAL:" in it (agent/pipeline/nodes.py's _parse_worker_reply
-            # then silently treats that fragment as the answer -- a real,
-            # separate harness bug, but this route change is the other half
-            # of the experiment: does turning off snapshot-streaming and
-            # asking for more deliberation reduce how often the model
-            # produces that malformed reply in the first place). Revert if
-            # it doesn't measurably help -- this is a live experiment, not
-            # a settled tuning decision.
-            params={"temperature": 0.7, "reasoning_effort": "high",
+            # 2026-09-09 flipped diffusing False and bumped reasoning_effort
+            # to "high" while chasing malformed tool-calling replies -- a bare
+            # fragment with neither "ACTION:" nor "FINAL:" in it -- and said
+            # explicitly: "Revert if it doesn't measurably help."
+            #
+            # 2026-09-10, measured: "high" is the cause, not the cure. Six
+            # trials per setting on a real solver-shaped conversation,
+            # counting replies with any content at all, and replies that were
+            # well-formed:
+            #
+            #     diffusing  effort    non-empty  well-formed   avg
+            #       False    high         2/6         2/6      13.8s
+            #       True     high         1/6         1/6      10.5s
+            #       False    medium       6/6         6/6       6.3s
+            #       True     medium       6/6         6/6       9.7s
+            #       False    (unset)      6/6         6/6      10.0s
+            #       True     (unset)      6/6         6/6       7.2s
+            #
+            # At "high" the stream yields two chunks, no content and no
+            # finish_reason. That empty reply IS the malformed fragment the
+            # experiment was chasing -- _parse_worker_reply can only call it
+            # unparseable -- so asking for more deliberation made the very bug
+            # it was aimed at four times worse. It also wrecked the agent's
+            # ratio of thinking to doing: on a hard task the solver spent 39
+            # of its 40 tool-loop turns on empty replies and issued 2 real
+            # commands in six minutes.
+            #
+            # "medium" it is: every reply usable, and the fastest of the
+            # working settings. `diffusing` is left where the experiment put
+            # it -- nothing here shows it doing harm, and changing two things
+            # at once is how this became hard to attribute in the first place.
+            params={"temperature": 0.7, "reasoning_effort": "medium",
                     "diffusing": False, "max_tokens": 8192},
         ),
     ),
@@ -174,7 +192,12 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
         Candidate(
             spec="inception:mercury-2.5",
             requires=frozenset({Capability.CHAT}),
-            params={"temperature": 0.4, "reasoning_effort": "high",
+            # "medium", not "high", for the reason spelled out on Task.REASON
+            # above: at "high" this model returns an empty stream most of the
+            # time. Measured on REASON's prompt shape rather than this one,
+            # but it is the same model and endpoint, and 1-2 usable replies
+            # out of 6 is not a risk worth carrying here either.
+            params={"temperature": 0.4, "reasoning_effort": "medium",
                     "diffusing": True, "max_tokens": 4096},
         ),
     ),
