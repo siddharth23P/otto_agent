@@ -249,3 +249,140 @@ def test_only_the_first_tool_call_of_a_multi_call_reply_is_executed(monkeypatch)
 
     assert pn._tool_loop(llm, [HumanMessage("go")]) == "done"
     assert calls == ["first"]
+
+
+# ---- the record of what has already been done ----------------------------
+
+
+def test_tool_loop_records_each_call_it_makes(monkeypatch):
+    monkeypatch.setitem(
+        pn.TOOL_DISPATCH, "write_file",
+        lambda body: pt.ToolResult(stdout="wrote m.py (3 lines)", stderr="", returncode=0),
+    )
+    llm = _FakeMultiStreamModel([
+        "ACTION: write_file\nCODE:\nm.py\nprint(1)",
+        "FINAL:\ndone",
+    ])
+    taken = []
+
+    pn._tool_loop(llm, [HumanMessage("go")], taken)
+
+    assert taken == ["write_file m.py -> ok: wrote m.py (3 lines)"]
+
+
+def test_a_failing_call_records_the_error_not_the_success():
+    """A compiler error is the thing worth carrying into the next attempt."""
+    result = pt.ToolResult(
+        stdout="", stderr="error[E0433]: failed to resolve\n  --> main.rs:4:5", returncode=1,
+    )
+
+    line = pn._summarise_action("execute_bash", "rustc main.c.rs", result)
+
+    assert line.startswith("execute_bash rustc main.c.rs -> FAILED (exit 1)")
+    assert "E0433" in line
+
+
+def test_a_role_is_shown_what_has_already_been_done():
+    """The loop this fixes: a role's tool conversation dies with the node, so
+    a re-invoked solver used to have no idea it had already written the file.
+    """
+    state = {
+        "messages": [HumanMessage("build it")],
+        "actions": ["solver: write_file main.c.rs -> ok: wrote main.c.rs (56 lines)"],
+    }
+
+    body = pn._role_body(
+        state, "build it", role="solver", revising=False,
+        executing_step=False, active_step=None,
+    )
+
+    assert "WHAT HAS ALREADY BEEN DONE" in body
+    assert "write_file main.c.rs" in body
+
+
+def test_the_overseer_is_shown_it_too():
+    """It is the half that kept re-dispatching solver, so it needs to see what
+    solver had already tried."""
+    state = {"messages": [HumanMessage("build it")], "actions": ["solver: execute_bash rustc -> FAILED (exit 1): boom"]}
+
+    assert "WHAT HAS ALREADY BEEN DONE" in pn._router_body(state, "build it")
+
+
+def test_nothing_is_shown_before_anything_has_been_done():
+    state = {"messages": [HumanMessage("build it")], "actions": []}
+
+    assert _actions_absent(pn._router_body(state, "build it"))
+    assert _actions_absent(pn._role_body(
+        state, "build it", role="solver", revising=False,
+        executing_step=False, active_step=None,
+    ))
+
+
+def _actions_absent(body):
+    return "WHAT HAS ALREADY BEEN DONE" not in body
+
+
+def test_only_the_most_recent_actions_are_shown():
+    """Bounded: this goes into every prompt and a long run accumulates
+    hundreds."""
+    state = {
+        "messages": [HumanMessage("go")],
+        "actions": [f"solver: execute_bash step{i} -> ok" for i in range(pn._ACTIONS_SHOWN + 10)],
+    }
+
+    body = pn._router_body(state, "go")
+
+    assert "step0 " not in body
+    assert f"step{pn._ACTIONS_SHOWN + 9} " in body
+
+
+def test_repeated_writes_to_one_file_are_named_in_the_result(monkeypatch):
+    """The loop worth catching does not repeat verbatim: a slightly different
+    draft every time looks different byte for byte and is the same
+    non-progress -- 166 writes to one path, none of them ever compiled."""
+    drafts = iter(range(100))
+
+    monkeypatch.setitem(
+        pn.TOOL_DISPATCH, "write_file",
+        lambda body: pt.ToolResult(stdout="wrote m.rs", stderr="", returncode=0),
+    )
+    monkeypatch.setattr(pn, "MAX_TOOL_ITERATIONS", 8)
+    llm = _FakeMultiStreamModel([
+        f"ACTION: write_file\nCODE:\nm.rs\nversion {next(drafts)}" for _ in range(4)
+    ] + ["FINAL:\ndone"])
+
+    pn._tool_loop(llm, [HumanMessage("go")])
+
+    assert "NOTE:" not in llm.calls[1][-1]                      # 1st write
+    assert "NOTE:" not in llm.calls[2][-1]                      # 2nd, still fine
+    assert "3 write_file calls in a row against `m.rs`" in llm.calls[3][-1]
+
+
+def test_a_different_target_resets_the_run(monkeypatch):
+    """Only CONSECUTIVE calls against one target count -- alternating between
+    writing and running is exactly the behaviour this is trying to produce."""
+    monkeypatch.setitem(
+        pn.TOOL_DISPATCH, "write_file",
+        lambda body: pt.ToolResult(stdout="wrote", stderr="", returncode=0),
+    )
+    monkeypatch.setitem(
+        pn.TOOL_DISPATCH, "execute_bash",
+        lambda body: pt.ToolResult(stdout="ok", stderr="", returncode=0),
+    )
+    monkeypatch.setattr(pn, "MAX_TOOL_ITERATIONS", 8)
+    llm = _FakeMultiStreamModel([
+        "ACTION: write_file\nCODE:\nm.rs\na",
+        "ACTION: execute_bash\nCODE:\nrustc m.rs",
+        "ACTION: write_file\nCODE:\nm.rs\nb",
+        "ACTION: execute_bash\nCODE:\nrustc m.rs",
+        "FINAL:\ndone",
+    ])
+
+    pn._tool_loop(llm, [HumanMessage("go")])
+
+    assert all("NOTE:" not in call[-1] for call in llm.calls)
+
+
+def test_action_target_is_the_path_for_file_tools_and_the_command_otherwise():
+    assert pn._action_target("write_file", "src/m.rs\nbody here") == "src/m.rs"
+    assert pn._action_target("execute_bash", "rustc m.rs").startswith("execute_bash:rustc")

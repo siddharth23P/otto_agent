@@ -157,4 +157,21 @@ class AgentState(TypedDict):
     pending_question: str | None
     pending_choices: list[str] | None
     asking_role: str | None
+    #: One compact line per tool call any role has made, across the WHOLE
+    #: run -- "solver: write_file main.c.rs -> ok (56 lines)",
+    #: "solver: execute_bash rustc main.c.rs -> exit 1: error[E0433]...".
+    #:
+    #: A role's tool conversation lives in a local list inside _tool_loop and
+    #: is thrown away when that node returns, so a re-invoked role used to
+    #: start blind: it could see the task, the plan, the gathered context and
+    #: a rejected attempt, but nothing about what it had actually DONE.
+    #: Measured on a hard task: the solver wrote the same file 166 times over
+    #: five overseer rounds, a different draft each time, never compiling any
+    #: of them -- each round genuinely did not know the work had been tried.
+    #: This is what it reads instead (nodes.py's _role_body).
+    #:
+    #: Accumulating (operator.add) like `board`, and deliberately separate
+    #: from it: `board` is a human-readable narration of which node ran,
+    #: this is the agent's own record of what it did and what came back.
+    actions: Annotated[list[str], operator.add]
     final_output: str | None

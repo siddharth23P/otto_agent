@@ -350,6 +350,55 @@ _RECURSION_SAFETY_NET = 150
 #: unconverged snapshot, and must be retried rather than accepted.
 MAX_DIFFUSION_RETRIES = 3
 
+#: Appended to a tool result the model has already produced, verbatim, earlier
+#: in this same attempt.
+#:
+#: A plain success gives it nothing to react to. Measured on a hard task: the
+#: solver wrote the same file over and over -- every write succeeding, every
+#: result saying so -- because "wrote main.c.rs (30 lines)" is not a reason to
+#: do anything different, and continuing an established pattern is the easiest
+#: thing for a model to do. Naming the repetition is: it turns an
+#: indistinguishable success into a fact about the attempt's own history.
+#:
+#: Deliberately not an error and not a refusal -- the call really did succeed,
+#: and re-running something is sometimes right (re-reading a file after
+#: changing it). This only says it happened and that repeating cannot change
+#: the outcome.
+REPEATED_CALL_NOTE = (
+    "NOTE: that is {n} {tool} calls in a row against `{target}`, with nothing "
+    "run in between. Rewriting it again is guessing. Run it -- compile it, "
+    "execute it, test it -- and use what that actually reports."
+)
+
+#: How many calls in a row against the same target before the note appears.
+#: 3, not 2: a second attempt straight after the first is ordinary (a typo
+#: spotted on re-reading), while a third with still nothing run against it is
+#: the pattern this exists to break.
+REPEATS_BEFORE_NOTE = 3
+
+
+def _action_target(tool_name: str, body: str) -> str:
+    """What a tool call is acting ON -- the file path for the file tools, the
+    command itself for the shell ones.
+
+    The target rather than the whole body, because the loop worth catching
+    does not repeat verbatim: rewriting the same file with a slightly
+    different draft every time looks different byte for byte and is the same
+    non-progress. Measured on a hard task: 166 writes to one path, of 8, 721,
+    36, 37 and 35 lines, without the compiler ever being run once.
+    """
+    first_line = next((line for line in body.splitlines() if line.strip()), "")
+    if tool_name in {"write_file", "edit_file", "read_file", "list_files"}:
+        return first_line.strip()[:120]
+    return f"{tool_name}:{first_line.strip()[:120]}"
+
+#: How many of the run's most recent recorded actions get shown (state.py's
+#: `actions`). Bounded because this goes into every role and overseer prompt
+#: and a long run accumulates hundreds; the most recent describe the world as
+#: it is now, and an older attempt since superseded is the one worth
+#: forgetting.
+_ACTIONS_SHOWN = 40
+
 #: How many unparseable replies IN A ROW end a node's tool loop early.
 #:
 #: The corrective retry (UNPARSEABLE_FEEDBACK) is worth having: a model that
@@ -825,7 +874,26 @@ def _parse_worker_reply(text: str) -> tuple[Literal["action", "final", "unparsea
     return "unparseable", "", text.strip()
 
 
-def _tool_loop(llm, messages: list) -> str:
+def _summarise_action(tool_name: str, body: str, result) -> str:
+    """One line describing a tool call and how it went, for the record the
+    overseer and a re-invoked role read (agent/pipeline/state.py's `actions`).
+
+    Deliberately lossy: the point is "you already tried this, here is what came
+    back", not a replayable transcript. The first line of the body identifies
+    the call (a path, a command), and only a FAILING result's text is carried
+    forward -- a compiler error is exactly what the next attempt needs, the
+    full stdout of a successful build is noise.
+    """
+    first_line = next((line for line in body.splitlines() if line.strip()), "")
+    call = f"{tool_name} {first_line.strip()[:90]}"
+    if result.returncode == 0:
+        detail = (result.stdout or "").strip().splitlines()
+        return f"{call} -> ok{': ' + detail[0][:120] if detail else ''}"
+    problem = (result.stderr or result.stdout or "").strip().replace("\n", " ")
+    return f"{call} -> FAILED (exit {result.returncode}): {problem[:200]}"
+
+
+def _tool_loop(llm, messages: list, actions: list[str] | None = None) -> str:
     """Run the shared ACTION/FINAL tool-calling loop -- every role node AND
     the evaluator drive their conversation through this one function. A
     role node's FINAL body IS its candidate answer; the evaluator's FINAL
@@ -840,6 +908,8 @@ def _tool_loop(llm, messages: list) -> str:
     """
     output = ""
     dead_replies = 0
+    last_target: str | None = None
+    repeats = 0
     for _ in range(MAX_TOOL_ITERATIONS):
         text = _call(llm, messages)
         kind_of_reply, tool_name, body = _parse_worker_reply(text)
@@ -877,10 +947,19 @@ def _tool_loop(llm, messages: list) -> str:
             )
         else:
             result = TOOL_DISPATCH[tool_name](body)
+            if actions is not None:
+                actions.append(_summarise_action(tool_name, body, result))
             evidence = (
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
                 f"returncode: {result.returncode}"
             )
+            target = _action_target(tool_name, body)
+            repeats = repeats + 1 if target == last_target else 1
+            last_target = target
+            if repeats >= REPEATS_BEFORE_NOTE:
+                evidence += "\n\n" + REPEATED_CALL_NOTE.format(
+                    n=repeats, tool=tool_name, target=target,
+                )
         messages.append(AIMessage(text))
         messages.append(HumanMessage(f"TOOL RESULT:\n{evidence}"))
     return output
@@ -1090,6 +1169,31 @@ def _conversation_so_far(state: AgentState) -> str:
     return "\n".join(lines)
 
 
+def _actions_block(state: AgentState) -> str:
+    """What has already been done in this run, as prompt text -- or "" if
+    nothing has.
+
+    Shown to BOTH the overseer and the role it dispatches, because the loop
+    this fixes needed both to see it. A role's tool conversation lives in a
+    local list inside _tool_loop and dies when that node returns, so a
+    re-invoked role started blind; and the overseer, deciding what to do next,
+    could see only that "solver produced an output", never what solver had
+    tried. Measured on a hard task: the solver wrote the same file 166 times
+    across five rounds, a different draft each time, never compiling any of
+    them. Neither half of the loop knew the work had already been done.
+    """
+    already = state.get("actions") or []
+    if not already:
+        return ""
+    return (
+        "WHAT HAS ALREADY BEEN DONE (tool calls from earlier attempts in this "
+        "run, oldest first). These already happened and their effects are "
+        "real. Do not repeat one expecting a different result -- build on it, "
+        "or find out why it did not work:\n"
+        + "\n".join(f"- {line}" for line in already[-_ACTIONS_SHOWN:])
+    )
+
+
 def _router_body(state: AgentState, task_text: str) -> str:
     parts = []
     history = _conversation_so_far(state)
@@ -1099,6 +1203,8 @@ def _router_body(state: AgentState, task_text: str) -> str:
     context = state.get("context") or ""
     if context:
         parts.append(f"CONTEXT GATHERED SO FAR:\n{context}")
+    if (done := _actions_block(state)):
+        parts.append(done)
     plan = state.get("plan")
     if plan:
         parts.append(f"PLAN:\n{_format_plan(plan)}")
@@ -1145,6 +1251,8 @@ def _role_body(state: AgentState, task_text: str, *, role: str, revising: bool, 
     context = state.get("context") or ""
     if context:
         parts.append(f"CONTEXT GATHERED SO FAR:\n{context}")
+    if (done := _actions_block(state)):
+        parts.append(done)
     feedback = state.get("feedback") or ""
     if feedback:
         previous_node = state.get("node") or "a specialist"
@@ -1307,8 +1415,9 @@ def _run_role(
     )
     human_body = _role_body(state, task_text, role=role, revising=revising, executing_step=executing_step, active_step=active_step)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
+    taken: list[str] = []
     try:
-        output = _tool_loop(llm, messages)
+        output = _tool_loop(llm, messages, taken)
     except NeedsUserInput as exc:
         # Seventh refinement (module docstring): this role got stuck on
         # something only the person can supply. Hand off to the dedicated
@@ -1348,6 +1457,9 @@ def _run_role(
     update: dict = {
         "output": output,
         "node": role,
+        # What this attempt actually DID, carried into state so the NEXT
+        # invocation -- of this role or of the overseer -- can see it.
+        "actions": [f"{role}: {line}" for line in taken],
         # This attempt hasn't been judged yet -- any feedback it was shown
         # has now been consumed (either fixed, or noted as background).
         "feedback": "",
