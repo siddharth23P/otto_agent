@@ -64,6 +64,15 @@ Two tiers, then permanent storage:
                have multiple hash associated with it") -- it accumulates
                everything transitively cited into it, generation over
                generation.
+            3b. every item the reply did NOT cite gets its own extra
+               bullet anyway (_uncited_bullets, below), so the new
+               generation's hash_refs collectively cover everything this
+               compaction flushed. The prompt asks for full coverage; this
+               is what makes it true. Without it an omitted item stays in
+               the chunk store but nothing live points at it, and recall()
+               searches only the live generation -- and because a prior
+               bullet is itself a numbered item carrying every hash behind
+               it, one uncited bullet used to sever a whole chain at once.
             4. Y is replaced by just that new bullet list -- a handful of
                short, cited lines instead of everything they summarize --
                freeing almost all of Y's budget again. The store's OLDER
@@ -159,6 +168,62 @@ def _parse_bullets(text: str, item_count: int) -> list[tuple[str, list[int]]]:
     return parsed
 
 
+#: Longest single-item excerpt kept as a carry-forward bullet's own text
+#: (_uncited_bullets, below). Long enough that recall()'s embedding search
+#: has real, distinguishing words to rank on -- a carried-forward turn about
+#: someone's dog has to stay findable by the word "dog" -- but short enough
+#: that a compaction whose summarizer cited almost nothing still frees most
+#: of Y rather than re-filling it with what it just tried to compact.
+CARRY_FORWARD_EXCERPT_CHARS = 160
+
+
+def _excerpt(text: str) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= CARRY_FORWARD_EXCERPT_CHARS:
+        return collapsed
+    return collapsed[:CARRY_FORWARD_EXCERPT_CHARS].rstrip() + "..."
+
+
+def _uncited_bullets(
+    items: list[str], item_hashes: list[list[str]], covered: set[int], prior_bullet_count: int,
+) -> list["NewBullet"]:
+    """One extra bullet for every item the summarizer's reply never cited,
+    so the new generation's `hash_refs` collectively cover EVERYTHING this
+    compaction flushed.
+
+    The prompt (_build_summarize_prompt) asks for full coverage, but nothing
+    made the model deliver it, and an omission here is not proportional
+    damage -- it is a cliff. Measured on LoCoMo at a stress budget (250
+    turns, x=200/y=400, 19 generations): a summarizer citing ~70% of its
+    items left only 3-4% of the 249 stored chunks reachable from the live
+    bullet generation, and recall() found the right turn for 2-3% of
+    questions instead of ~100%. The reason it is a cliff rather than a
+    ~30% loss is that a PRIOR BULLET is itself one of the numbered items,
+    carrying every hash it has accumulated over every generation before it;
+    one compaction that summarizes it into prose without citing its number
+    severs the whole accumulated chain at once. The raw text is still in the
+    permanent chunk store either way (store_coverage stays 100%), but
+    nothing in the live generation points at it any more, and recall()
+    only ever searches the live generation (agent/memory/retrieval.py,
+    agent/memory/store.py's `superseded`) -- so it becomes unreachable in
+    practice by any path short of a direct hash lookup nothing performs.
+
+    An uncited PRIOR BULLET is carried forward exactly as it was: its text
+    is already a summary and its hash_refs already resolve, so re-deriving
+    either would only lose fidelity. An uncited RAW item becomes a bullet
+    holding its own (truncated) text, which keeps the distinguishing words
+    recall() ranks on instead of hiding it inside a contentless catch-all.
+    """
+    carried = []
+    for index in range(1, len(items) + 1):
+        if index in covered:
+            continue
+        is_prior_bullet = index <= prior_bullet_count
+        text = items[index - 1] if is_prior_bullet else _excerpt(items[index - 1])
+        carried.append(NewBullet(text=text, hash_refs=list(item_hashes[index - 1])))
+    return carried
+
+
 class TieredQueue:
     """One X/Y buffer, for one `kind` ("history" or "context") of one
     session's MemoryStore. `summarize` is the only injected dependency --
@@ -239,6 +304,14 @@ class TieredQueue:
             NewBullet(text=bullet_text, hash_refs=sorted({h for i in indices for h in item_hashes[i - 1]}))
             for bullet_text, indices in parsed
         ]
+        # Nothing above guarantees the summarizer cited every item, and an
+        # item no surviving bullet points at is one recall() can never find
+        # again -- see _uncited_bullets for what that costs, measured.
+        new_bullets += _uncited_bullets(
+            items, item_hashes,
+            covered={i for _, indices in parsed for i in indices},
+            prior_bullet_count=len(self._y_bullets),
+        )
 
         for bullet in new_bullets:
             embedding = None
