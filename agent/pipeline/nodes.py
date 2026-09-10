@@ -169,7 +169,9 @@ ROUTER_PROMPT = (
     "and which one didn't, and route similar tasks later in this same run "
     "accordingly.\n"
     "\n"
-    "Reply with exactly two lines:\nNODE: one of planner, solver, "
+    "Reply with exactly two lines, and always start the first one with the "
+    "literal word \"NODE:\" -- yes, even when your answer is evaluator, "
+    "don't just write the bare word:\nNODE: one of planner, solver, "
     "summarizer, finder, evaluator\nWHY: one sentence"
 )
 
@@ -431,10 +433,23 @@ def _parse_router(text: str) -> tuple[str, str]:
     specialist -- rather than crashing or leaving `node` unset; the WHY
     string says so explicitly when that happens, visible on the board and
     to the dispatched node's own prompt.
+
+    Tolerates one specific malformed shape, observed live (2026-09-10): the
+    model sometimes drops the literal "NODE:" label and replies with just
+    the bare target name on its own line (most often when the answer is
+    "evaluator", as if it read past its own format instruction) --
+    "evaluator\\nWHY: ..." instead of "NODE: evaluator\\nWHY: ...". Without
+    this, that reply fell through to the generic "could not parse" fallback
+    and silently defaulted to solver even when the model's actual intent
+    was clear and recoverable. Only a line that is EXACTLY one of
+    DISPATCH_TARGETS (whole line, stripped) counts -- never a substring
+    match, so a WHY sentence that happens to mention "solver" is never
+    mistaken for a NODE: line.
     """
     node = None
     why = ""
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for line in lines:
         upper = line.upper()
         if upper.startswith("NODE:"):
             candidate = line.split(":", 1)[1].strip().lower()
@@ -442,6 +457,12 @@ def _parse_router(text: str) -> tuple[str, str]:
                 node = candidate
         elif upper.startswith("WHY:"):
             why = line.split(":", 1)[1].strip()
+    if node is None:
+        for line in lines:
+            candidate = line.strip().lower()
+            if candidate in DISPATCH_TARGETS:
+                node = candidate
+                break
     if node is None:
         return "solver", f"could not parse a NODE: line from {text.strip()[:200]!r}, defaulting to solver"
     return node, why

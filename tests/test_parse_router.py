@@ -35,6 +35,27 @@ def test_evaluator_is_also_a_valid_dispatch_target():
     assert why == "ready to judge"
 
 
+def test_a_bare_target_name_with_no_node_label_is_still_recognized():
+    # Observed live (2026-09-10): the model sometimes drops the literal
+    # "NODE:" label and replies with just the bare word, most often when
+    # the answer is "evaluator" -- this must not silently default to
+    # solver when the intent is actually recoverable.
+    node, why = pn._parse_router(
+        "evaluator\nWHY: the implementation is ready to be judged for correctness"
+    )
+    assert node == "evaluator"
+    assert why == "the implementation is ready to be judged for correctness"
+
+
+def test_a_why_sentence_merely_mentioning_a_target_name_is_not_mistaken_for_one():
+    # The bare-line fallback only matches a line that is EXACTLY one of
+    # DISPATCH_TARGETS -- a WHY sentence that happens to use the word
+    # "solver" is not on its own line, so it must not be picked up.
+    node, why = pn._parse_router("NODE: planner\nWHY: solver alone can't do this multi-step task")
+    assert node == "planner"
+    assert why == "solver alone can't do this multi-step task"
+
+
 def test_an_unrecognised_node_name_falls_back_to_solver_with_an_explanatory_why():
     node, why = pn._parse_router("NODE: astrologer\nWHY: x")
     assert node == "solver"
