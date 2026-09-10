@@ -161,7 +161,7 @@ def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
             f"echo {_b64(code)} | base64 -d | python3 -", timeout,
         )
         return ToolResult(
-            stdout=stdout[-_TAIL:], stderr=stderr[-_TAIL:],
+            stdout=_clip(stdout), stderr=_clip(stderr),
             returncode=code, timed_out=(code == -1),
         )
 
@@ -183,14 +183,14 @@ def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
                 timeout=timeout,
             )
             return ToolResult(
-                stdout=proc.stdout[-_TAIL:],
-                stderr=proc.stderr[-_TAIL:],
+                stdout=_clip(proc.stdout),
+                stderr=_clip(proc.stderr),
                 returncode=proc.returncode,
             )
         except subprocess.TimeoutExpired as exc:
             return ToolResult(
-                stdout=_as_text(exc.stdout)[-_TAIL:],
-                stderr=(_as_text(exc.stderr) + "\n[timed out]")[-_TAIL:],
+                stdout=_clip(_as_text(exc.stdout)),
+                stderr=_clip(_as_text(exc.stderr) + "\n[timed out]"),
                 returncode=-1,
                 timed_out=True,
             )
@@ -244,6 +244,45 @@ def _run_dir() -> Iterator[str]:
         yield tmp
 
 
+#: Shell constructs that detach a command from the call that started it.
+#: `&` at the end of a line backgrounds it; nohup/setsid/disown outlive the
+#: shell entirely.
+_DETACHING = re.compile(
+    r"(?:^|\s)(?:nohup|setsid|disown)(?:\s|$)"      # explicitly detaching
+    r"|(?<!&)&\s*$"                                  # trailing & on the command
+    r"|(?<!&)&\s*\n",                                # trailing & on any line
+    re.MULTILINE,
+)
+
+BACKGROUNDING_REFUSED = (
+    "execute_bash: this command backgrounds or detaches part of its work "
+    "({why}), so it would return before that work has done anything and you "
+    "would be told it succeeded without ever seeing what happened. Run it in "
+    "the foreground instead, so its real output comes back to you. If it is "
+    "something long-running that never exits on its own, run it with a "
+    "timeout or a bounded amount of work (for example `timeout 10 ...`) so it "
+    "still returns something you can read."
+)
+
+
+def _detaching_reason(command: str) -> str | None:
+    """Why `command` would run detached, or None if it runs to completion.
+
+    Every tool call in this graph is synchronous by design (agent/pipeline/
+    nodes.py's _tool_loop runs exactly one, waits for it, and feeds the result
+    back), and that is the property the whole loop depends on: the model
+    decides what to do next from what the last thing actually printed. A
+    backgrounded command breaks it silently -- the call returns instantly with
+    an empty stdout and exit 0, which reads as "it worked" for work that has
+    not started. So this is refused rather than quietly allowed.
+    """
+    match = _DETACHING.search(command)
+    if not match:
+        return None
+    token = match.group(0).strip()
+    return "nohup/setsid/disown" if token.isalpha() else "a trailing &"
+
+
 def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
     """Run `command` as a shell command, in the bound workspace if there is
     one and otherwise in a fresh throwaway temp dir.
@@ -255,11 +294,16 @@ def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
     docstring for why a shell in a workspace is a blast-radius argument
     rather than a sandbox.
     """
+    if (why := _detaching_reason(command)) is not None:
+        return ToolResult(
+            stdout="", stderr=BACKGROUNDING_REFUSED.format(why=why), returncode=1,
+        )
+
     remote = current_command_runner()
     if remote is not None:
         stdout, stderr, code = remote(command, timeout)
         return ToolResult(
-            stdout=stdout[-_TAIL:], stderr=stderr[-_TAIL:],
+            stdout=_clip(stdout), stderr=_clip(stderr),
             returncode=code, timed_out=(code == -1),
         )
 
@@ -274,17 +318,34 @@ def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
                 timeout=timeout,
             )
             return ToolResult(
-                stdout=proc.stdout[-_TAIL:],
-                stderr=proc.stderr[-_TAIL:],
+                stdout=_clip(proc.stdout),
+                stderr=_clip(proc.stderr),
                 returncode=proc.returncode,
             )
         except subprocess.TimeoutExpired as exc:
             return ToolResult(
-                stdout=_as_text(exc.stdout)[-_TAIL:],
-                stderr=(_as_text(exc.stderr) + "\n[timed out]")[-_TAIL:],
+                stdout=_clip(_as_text(exc.stdout)),
+                stderr=_clip(_as_text(exc.stderr) + "\n[timed out]"),
                 returncode=-1,
                 timed_out=True,
             )
+
+
+def _clip(text: str) -> str:
+    """`text` bounded to _TAIL, keeping BOTH ends when it has to cut.
+
+    It used to keep only the tail, which throws away the most useful part of
+    exactly the outputs that overflow: a compiler prints its first and most
+    informative error at the top and then cascades, a test run names the
+    failure before the summary, and a long `find` says what it is doing before
+    it says how it ended. Losing the head means the model is told what
+    happened last instead of what went wrong first.
+    """
+    if len(text) <= _TAIL:
+        return text
+    head, tail = _TAIL // 2, _TAIL - _TAIL // 2
+    cut = len(text) - head - tail
+    return f"{text[:head]}\n\n[... {cut} characters omitted ...]\n\n{text[-tail:]}"
 
 
 #: Longest file listing / read this returns before truncating -- the same
@@ -350,7 +411,7 @@ def read_file(body: str) -> ToolResult:
         )
         if code != 0:
             return _workspace_failure("read_file", stderr.strip() or f"could not read {spec!r}")
-        return ToolResult(stdout=stdout[-_TAIL:], stderr="", returncode=0)
+        return ToolResult(stdout=_clip(stdout), stderr="", returncode=0)
 
     try:
         path = resolve_in_workspace(spec)
@@ -366,7 +427,7 @@ def read_file(body: str) -> ToolResult:
     start, end = (1, len(lines)) if line_range is None else line_range
     start, end = max(1, start), min(len(lines), end)
     numbered = "\n".join(f"{i:>6}\t{lines[i - 1]}" for i in range(start, end + 1))
-    return ToolResult(stdout=numbered[-_TAIL:], stderr="", returncode=0)
+    return ToolResult(stdout=_clip(numbered), stderr="", returncode=0)
 
 
 def _split_write_body(body: str) -> tuple[str, str]:
@@ -560,7 +621,7 @@ def list_files(body: str) -> ToolResult:
         )
         if code != 0:
             return _workspace_failure("list_files", stderr.strip() or f"could not list {spec!r}")
-        return ToolResult(stdout=stdout[-_TAIL:] or "(empty)", stderr="", returncode=0)
+        return ToolResult(stdout=_clip(stdout) or "(empty)", stderr="", returncode=0)
 
     try:
         root = resolve_in_workspace(spec)
@@ -578,7 +639,7 @@ def list_files(body: str) -> ToolResult:
         if len(entries) > _MAX_LIST_ENTRIES:
             entries.append(f"... (truncated at {_MAX_LIST_ENTRIES} entries)")
             break
-    return ToolResult(stdout="\n".join(entries) or "(empty)", stderr="", returncode=0)
+    return ToolResult(stdout=_clip("\n".join(entries)) or "(empty)", stderr="", returncode=0)
 
 
 #: Directories a listing never descends into -- version-control internals,
