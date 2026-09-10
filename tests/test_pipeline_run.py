@@ -20,11 +20,28 @@ scratch) prepends the conversation so far onto `messages`, ahead of the
 current turn's own text. Defaults to `()` so every existing single-turn
 caller (agent/eval/'s golden runner, debug_pipeline.py) is unaffected --
 covered here by the pre-existing no-history test still passing unchanged.
+
+_as_ask_event() (2026-09-10, same day, seventh refinement -- module
+docstring, "Pausing for a person mid-run") is the one other piece of this
+file that's a pure function, safe to test the same "no live LLM/graph"
+way: turning LangGraph's own `{"__interrupt__": (Interrupt(...),)}`
+update shape (yielded by app.stream() the moment nodes.py's ask_user node
+calls interrupt()) into the `{"__ask__": {"question", "choices",
+"thread_id"}}` event run_pipeline_stream()/resume_pipeline_stream()
+actually yield to callers. The full pause-and-resume MECHANISM (a real
+interrupt(), a real Command(resume=...), the checkpointer) needs an
+actual LangGraph run to exercise -- that's tests/test_ask_user_node.py's
+job, against the real compiled graph (pn.app) directly, sidestepping this
+file's Langfuse wrapping entirely; genuinely new territory for this
+offline suite (nothing before it drove the graph at all), justified by
+how much of that mechanism nothing else here would ever catch a
+regression in.
 """
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.types import Interrupt
 
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET
-from agent.pipeline.run import _config, _graph_thread_id, _initial
+from agent.pipeline.run import _as_ask_event, _config, _graph_thread_id, _initial
 
 
 def test_initial_state_matches_the_agentstate_shape_with_empty_start_values():
@@ -40,6 +57,9 @@ def test_initial_state_matches_the_agentstate_shape_with_empty_start_values():
     assert state["plan"] is None
     assert state["active_step"] is None
     assert state["node_error"] is None
+    assert state["pending_question"] is None
+    assert state["pending_choices"] is None
+    assert state["asking_role"] is None
     assert state["final_output"] is None
 
 
@@ -81,3 +101,25 @@ def test_graph_thread_id_is_unique_per_call_and_keeps_the_session_id_prefix():
     assert a != b
     assert a.startswith("session-abc:")
     assert b.startswith("session-abc:")
+
+
+def test_as_ask_event_returns_none_for_an_ordinary_update():
+    assert _as_ask_event({"router": {"board": ["round 1: ..."]}}, "thread-1") is None
+
+
+def test_as_ask_event_extracts_question_choices_and_thread_id():
+    update = {"__interrupt__": (Interrupt(value={"question": "which N?", "choices": ["4", "8"]}, id="abc"),)}
+
+    ask = _as_ask_event(update, "session-1:deadbeef")
+
+    assert ask == {
+        "__ask__": {"question": "which N?", "choices": ["4", "8"], "thread_id": "session-1:deadbeef"}
+    }
+
+
+def test_as_ask_event_defaults_choices_to_empty_list_when_absent():
+    update = {"__interrupt__": (Interrupt(value={"question": "which N?"}, id="abc"),)}
+
+    ask = _as_ask_event(update, "thread-1")
+
+    assert ask["__ask__"]["choices"] == []

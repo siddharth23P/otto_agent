@@ -36,6 +36,30 @@ purpose (learning across runs, not remembering within one) against the
 now-replaced code hive -- worth revisiting there, not smuggled into this
 fix, which only closes the "does the graph even see what I said two turns
 ago" gap.
+
+Pausing for a person mid-run (2026-09-10, same day, agent/pipeline/
+nodes.py's seventh refinement -- has its own module docstring section
+with the full design discussion): app.compile() already carries a
+checkpointer (InMemorySaver, nodes.py) from before this, for an unrelated
+reason (giving every turn its own disposable thread id -- _graph_thread_id
+below). That's also exactly what LangGraph's own interrupt()/
+Command(resume=...) mechanism needs, so nodes.py's new `ask_user` node
+reuses it rather than inventing a second one. When a run hits that node,
+`app.stream()` yields LangGraph's own `{"__interrupt__": (Interrupt(...),)
+}` update instead of continuing -- run_pipeline_stream() (below) turns
+that into a `{"__ask__": {"question", "choices", "thread_id"}}` event for
+callers and then RETURNS (the generator just ends there, mid-turn; there
+is no `__final__` yet). `resume_pipeline_stream()` (below, new) is how a
+caller with an answer continues that SAME checkpoint thread -- not a new
+turn, `Command(resume=answer)` picks the graph up exactly where ask_user()
+paused it, plan/context/active_step/everything intact. It can itself hit
+another `__ask__` (a chained question) or finish with `__final__`, same as
+run_pipeline_stream() -- agent/cli/chat.py's and agent/cli/tui.py's own
+run-turn loops handle both the same way, looping until `__final__` shows
+up. Each half gets its own Langfuse observation rather than one span held
+open across however long a person takes to answer -- tagged the same way
+(session_id, "pipeline" in the tags) so both halves of one externally
+visible turn are still easy to find together.
 """
 import logging
 import uuid
@@ -45,6 +69,8 @@ from langchain_core.messages import BaseMessage, HumanMessage
 
 from langfuse import get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler
+
+from langgraph.types import Command
 
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
 from agent.pipeline.state import AgentState
@@ -64,6 +90,9 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = ()) -> dict:
         "plan": None,
         "active_step": None,
         "node_error": None,
+        "pending_question": None,
+        "pending_choices": None,
+        "asking_role": None,
         "final_output": None,
     }
 
@@ -86,6 +115,27 @@ def _score(run_span, final: AgentState) -> None:
     run_span.score_trace(name="dispatch_rounds", value=final["round"], data_type="NUMERIC")
     if final.get("node"):
         run_span.score_trace(name="last_node", value=final["node"], data_type="CATEGORICAL")
+
+
+def _as_ask_event(update: dict, graph_thread_id: str) -> dict | None:
+    """If `update` is LangGraph's own interrupt shape (`{"__interrupt__":
+    (Interrupt(value=..., id=...),)}`, yielded by app.stream() the moment
+    a node calls interrupt() -- nodes.py's ask_user, seventh refinement),
+    return the `{"__ask__": ...}` event run_pipeline_stream()/
+    resume_pipeline_stream() actually yield to callers. None otherwise --
+    every other update passes through unchanged.
+    """
+    payload = update.get("__interrupt__")
+    if not payload:
+        return None
+    value = payload[0].value or {}
+    return {
+        "__ask__": {
+            "question": value.get("question", ""),
+            "choices": value.get("choices") or [],
+            "thread_id": graph_thread_id,
+        }
+    }
 
 
 def _graph_thread_id(session_id: str) -> str:
@@ -143,10 +193,14 @@ def run_pipeline_stream(text: str, *, session_id: str, history: Sequence[BaseMes
     `history` is the conversation BEFORE `text` -- module docstring. Empty
     by default, so every existing single-turn caller is unaffected.
 
-    The last item yielded is always `{"__final__": AgentState,
+    The last item yielded is usually `{"__final__": AgentState,
     "__trace_id__": str | None}` -- a plain dict, not a Command/node delta,
     matching the retired run_pipeline_stream()'s/run_code_stream()'s exact
-    shape.
+    shape. The one exception (module docstring, "Pausing for a person
+    mid-run"): a run that hits nodes.py's ask_user node instead yields
+    `{"__ask__": {"question", "choices", "thread_id"}}` and ENDS there,
+    mid-turn -- no `__final__` this call. `resume_pipeline_stream()`,
+    below, is how a caller with an answer continues that same run.
     """
     failures = ROUTER.prewarm()
     if failures:
@@ -155,7 +209,8 @@ def run_pipeline_stream(text: str, *, session_id: str, history: Sequence[BaseMes
     initial = _initial(text, history=history)
     client = get_client()
     handler = CallbackHandler()
-    config = _config(_graph_thread_id(session_id), handler)
+    graph_thread_id = _graph_thread_id(session_id)
+    config = _config(graph_thread_id, handler)
 
     with propagate_attributes(
         trace_name="otto:pipeline",
@@ -166,6 +221,53 @@ def run_pipeline_stream(text: str, *, session_id: str, history: Sequence[BaseMes
             name="otto:pipeline", as_type="agent", input=text
         ) as run_span:
             for update in app.stream(initial, config, stream_mode="updates"):
+                ask = _as_ask_event(update, graph_thread_id)
+                if ask is not None:
+                    run_span.update(output="(paused -- awaiting your answer)")
+                    yield ask
+                    return
+                yield update
+            final = app.get_state(config).values
+            _score(run_span, final)
+            trace_id = run_span.trace_id
+
+    yield {"__final__": final, "__trace_id__": trace_id}
+
+
+def resume_pipeline_stream(answer, *, thread_id: str, session_id: str):
+    """Continue a run that paused on an `{"__ask__": ...}` event (either
+    run_pipeline_stream()'s or a previous resume_pipeline_stream()'s) --
+    module docstring, "Pausing for a person mid-run". `thread_id` is that
+    event's own `"thread_id"` -- the SAME LangGraph checkpoint thread the
+    original run_pipeline_stream() call used, resumed via
+    `Command(resume=answer)` exactly where nodes.py's ask_user node
+    paused it (plan/context/active_step/everything else untouched), not
+    restarted as a fresh turn.
+
+    Same yield shape as run_pipeline_stream(): usually ends in
+    `{"__final__": ...}`, but can itself end in another `{"__ask__": ...}`
+    if the re-invoked specialist gets stuck again -- callers loop on this
+    the same way they loop on run_pipeline_stream() (agent/cli/chat.py,
+    agent/cli/tui.py).
+    """
+    client = get_client()
+    handler = CallbackHandler()
+    config = _config(thread_id, handler)
+
+    with propagate_attributes(
+        trace_name="otto:pipeline",
+        session_id=session_id,
+        tags=["pipeline", "resumed"],
+    ):
+        with client.start_as_current_observation(
+            name="otto:pipeline:resume", as_type="agent", input=str(answer)
+        ) as run_span:
+            for update in app.stream(Command(resume=answer), config, stream_mode="updates"):
+                ask = _as_ask_event(update, thread_id)
+                if ask is not None:
+                    run_span.update(output="(paused -- awaiting your answer)")
+                    yield ask
+                    return
                 yield update
             final = app.get_state(config).values
             _score(run_span, final)

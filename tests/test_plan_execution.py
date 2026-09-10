@@ -51,6 +51,9 @@ def _state(**overrides) -> dict:
         "plan": None,
         "active_step": None,
         "node_error": None,
+        "pending_question": None,
+        "pending_choices": None,
+        "asking_role": None,
         "final_output": None,
     }
     base.update(overrides)

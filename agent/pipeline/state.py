@@ -48,6 +48,12 @@ it via the existing "PREVIOUS ATTEMPT BY <role>" background display
 (_role_body) alongside whatever `output` already existed -- the "based on
 current output" part of the request -- without needing a second display
 mechanism. See nodes.py's module docstring for the full reasoning.
+
+Seventh refinement, same day (nodes.py's module docstring has the full
+design discussion): `pending_question`/`pending_choices`/`asking_role`
+exist so a role node or the evaluator can pause the whole run -- via
+LangGraph's own interrupt()/Command(resume=...) -- and ask the person
+something it's genuinely stuck without, instead of guessing or looping.
 """
 import operator
 from typing import Annotated
@@ -137,4 +143,18 @@ class AgentState(TypedDict):
     #: nodes.py's module docstring, fifth refinement). Cleared back to None
     #: by router() once it has escalated.
     node_error: str | None
+    #: Set together, by whichever of planner/solver/summarizer/finder/
+    #: evaluator's own _tool_loop call raised NeedsUserInput (nodes.py) --
+    #: it got stuck on something only the person can supply. `asking_role`
+    #: is who to hand back to (ask_user() has no other way to know, since
+    #: it's a dedicated node, not part of that role's own function).
+    #: `pending_choices` is the "multi choice" half of the "multi choice +
+    #: text bar" UI (agent/cli/chat.py, agent/cli/tui.py) -- an empty list
+    #: means an open-ended, free-text-only question, not "no question."
+    #: All three are cleared back to None the moment ask_user() resumes
+    #: (nodes.py, seventh refinement) -- nothing about this is meant to
+    #: outlive that one pause.
+    pending_question: str | None
+    pending_choices: list[str] | None
+    asking_role: str | None
     final_output: str | None

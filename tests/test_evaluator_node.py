@@ -70,6 +70,9 @@ def _state(**overrides) -> dict:
         "plan": None,
         "active_step": None,
         "node_error": None,
+        "pending_question": None,
+        "pending_choices": None,
+        "asking_role": None,
         "final_output": None,
     }
     base.update(overrides)
@@ -239,6 +242,37 @@ def test_evaluator_can_self_check_via_a_tool_before_rendering_its_verdict(monkey
     assert result.goto == END
     tool_result = multi.calls[1][-1]
     assert "TOOL RESULT" in tool_result
+
+
+# --------------------------------------------------------------------------
+# Getting stuck and asking the user (2026-09-10, seventh refinement) --
+# _tool_loop raises NeedsUserInput when a reply's ACTION: is ask_user.
+# evaluator() hands off to the dedicated ask_user node -- a THIRD outcome
+# again, distinct from approve/reject/node_error, and `output` (still
+# pending judgment) is left untouched.
+# --------------------------------------------------------------------------
+
+def test_evaluator_asks_the_user_and_pauses_instead_of_guessing_a_verdict(monkeypatch):
+    fake = _FakeModel("ACTION: ask_user\nCODE:\ndid you want it recursive or iterative?")
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="solver", output="def f(): return 1"))
+
+    assert result.goto == "ask_user"
+    assert result.update["pending_question"] == "did you want it recursive or iterative?"
+    assert result.update["pending_choices"] == []
+    assert result.update["asking_role"] == "evaluator"
+    assert "final_output" not in result.update
+    assert "feedback" not in result.update
+
+
+def test_evaluator_asking_with_choices_parses_them_out(monkeypatch):
+    fake = _FakeModel("ACTION: ask_user\nCODE:\nwhich one is right?\nCHOICES: option a | option b")
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state())
+
+    assert result.update["pending_choices"] == ["option a", "option b"]
 
 
 # --------------------------------------------------------------------------
