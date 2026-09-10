@@ -87,8 +87,10 @@ nothing in a role/evaluator node's reach may call it.
 """
 from __future__ import annotations
 
+import base64
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -99,6 +101,7 @@ from typing import Callable, Iterator
 
 from agent.memory.retrieval import recall
 from agent.memory.session import current_store
+from agent.pipeline.execution import current_command_runner
 from agent.pipeline.workspace import (
     OutsideWorkspace,
     current_workspace,
@@ -148,6 +151,19 @@ def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
     (that domain-specific branch is gone; the evaluator now checks things
     for real via this same tool instead of a bespoke code path).
     """
+    remote = current_command_runner()
+    if remote is not None:
+        # base64 rather than a heredoc: a heredoc is only safe until the
+        # snippet contains a line equal to the delimiter, and the snippet is
+        # model-written text that nothing constrains.
+        stdout, stderr, code = remote(
+            f"echo {_b64(code)} | base64 -d | python3 -", timeout,
+        )
+        return ToolResult(
+            stdout=stdout[-_TAIL:], stderr=stderr[-_TAIL:],
+            returncode=code, timed_out=(code == -1),
+        )
+
     with _run_dir() as tmp, tempfile.TemporaryDirectory() as holder:
         # The script itself lives OUTSIDE the run dir, always. When the run dir
         # is a throwaway temp dir it makes no difference, but when it is a real
@@ -224,6 +240,14 @@ def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
     docstring for why a shell in a workspace is a blast-radius argument
     rather than a sandbox.
     """
+    remote = current_command_runner()
+    if remote is not None:
+        stdout, stderr, code = remote(command, timeout)
+        return ToolResult(
+            stdout=stdout[-_TAIL:], stderr=stderr[-_TAIL:],
+            returncode=code, timed_out=(code == -1),
+        )
+
     with _run_dir() as tmp:
         try:
             proc = subprocess.run(
@@ -262,6 +286,28 @@ def _workspace_failure(tool: str, detail: str) -> ToolResult:
     return ToolResult(stdout="", stderr=f"{tool}: {detail}", returncode=1)
 
 
+def _remote_paths_are_the_containers_own(tool: str, path: str) -> ToolResult | None:
+    """Reject an empty path for a remote (container) file operation.
+
+    Deliberately the ONLY check in remote mode, where the local
+    resolve_in_workspace() confinement does not apply and should not be
+    imitated: the container IS the sandbox, its whole filesystem is the task's
+    subject, and a task that says "fix /etc/nginx/nginx.conf" means exactly
+    that. Confining to a subdirectory there would break real tasks while
+    protecting nothing the container boundary does not already protect.
+    """
+    if not path.strip():
+        return _workspace_failure(tool, "the path must not be empty")
+    return None
+
+
+def _b64(text: str) -> str:
+    """Text as base64, for shipping into a container through a shell command
+    without a quoting story -- content with quotes, backslashes, newlines or a
+    line that happens to read `OTTO_EOF` all survive unchanged."""
+    return base64.b64encode(text.encode()).decode()
+
+
 def read_file(body: str) -> ToolResult:
     """Read a file from the bound workspace. CODE: body is the path, alone,
     optionally suffixed `:START-END` for a 1-based inclusive line range
@@ -278,6 +324,19 @@ def read_file(body: str) -> ToolResult:
         head, _, tail = spec.rpartition(":")
         if head and re.fullmatch(r"\d+-\d+", tail):
             spec, line_range = head, tuple(int(n) for n in tail.split("-"))
+    remote = current_command_runner()
+    if remote is not None:
+        if (bad := _remote_paths_are_the_containers_own("read_file", spec)) is not None:
+            return bad
+        sed = f"sed -n '{line_range[0]},{line_range[1]}p'" if line_range else "cat"
+        start = line_range[0] if line_range else 1
+        stdout, stderr, code = remote(
+            f"{sed} {shlex.quote(spec)} | nl -ba -v {start} -w6 -s'\t'", 20.0,
+        )
+        if code != 0:
+            return _workspace_failure("read_file", stderr.strip() or f"could not read {spec!r}")
+        return ToolResult(stdout=stdout[-_TAIL:], stderr="", returncode=0)
+
     try:
         path = resolve_in_workspace(spec)
     except OutsideWorkspace as exc:
@@ -308,6 +367,22 @@ def write_file(body: str) -> ToolResult:
     "pkg/mod/x.py" means for it to exist.
     """
     head, _, content = body.partition("\n")
+    remote = current_command_runner()
+    if remote is not None:
+        if (bad := _remote_paths_are_the_containers_own("write_file", head)) is not None:
+            return bad
+        target = shlex.quote(head.strip())
+        stdout, stderr, code = remote(
+            f"mkdir -p \"$(dirname {target})\" && "
+            f"echo {_b64(content)} | base64 -d > {target}", 30.0,
+        )
+        if code != 0:
+            return _workspace_failure("write_file", stderr.strip() or f"could not write {head.strip()!r}")
+        return ToolResult(
+            stdout=f"wrote {head.strip()} ({len(content.splitlines())} lines)",
+            stderr="", returncode=0,
+        )
+
     try:
         path = resolve_in_workspace(head)
     except OutsideWorkspace as exc:
@@ -346,6 +421,10 @@ def edit_file(body: str) -> ToolResult:
     three lines is how an agent destroys the parts of it nobody asked about.
     """
     head, _, rest = body.partition("\n")
+    remote = current_command_runner()
+    if remote is not None:
+        return _remote_edit(remote, head, rest)
+
     # Workspace first, body format second: "there is nowhere to write" is the
     # more fundamental refusal, and reporting a format complaint to a caller
     # that could never have written anything anyway just misdirects it.
@@ -376,6 +455,53 @@ def edit_file(body: str) -> ToolResult:
     return ToolResult(stdout=f"edited {head.strip()}", stderr="", returncode=0)
 
 
+#: The exact-once replacement edit_file performs, as a script to run inside a
+#: container. Same contract as the local branch -- refuse at zero matches and
+#: refuse at several, rather than guessing -- expressed once here so the two
+#: modes can't drift into disagreeing about what an edit means. Both texts
+#: arrive base64-encoded, so no quoting of the model's content is involved.
+_REMOTE_EDIT_SCRIPT = """
+import base64, sys
+path, old_b64, new_b64 = sys.argv[1], sys.argv[2], sys.argv[3]
+old = base64.b64decode(old_b64).decode()
+new = base64.b64decode(new_b64).decode()
+try:
+    original = open(path, errors="replace").read()
+except OSError as exc:
+    print(f"cannot read {path}: {exc}", file=sys.stderr); sys.exit(2)
+count = original.count(old)
+if count != 1:
+    found = "never appears" if count == 0 else f"appears {count} times"
+    print(f"the ---OLD--- text {found} in {path} -- it must appear exactly once; "
+          "read the file and quote more surrounding lines to make it unique",
+          file=sys.stderr)
+    sys.exit(3)
+open(path, "w").write(original.replace(old, new, 1))
+print(f"edited {path}")
+"""
+
+
+def _remote_edit(remote, head: str, rest: str) -> ToolResult:
+    """edit_file against a container, via the bound command runner."""
+    if (bad := _remote_paths_are_the_containers_own("edit_file", head)) is not None:
+        return bad
+    if "---OLD---" not in rest or "---NEW---" not in rest:
+        return _workspace_failure(
+            "edit_file", "body must be: path, then ---OLD---, then ---NEW---",
+        )
+    old_part, _, new_part = rest.partition("---NEW---")
+    old_text = old_part.split("---OLD---", 1)[1].strip("\n")
+    new_text = new_part.strip("\n")
+    stdout, stderr, code = remote(
+        f"python3 -c {shlex.quote(_REMOTE_EDIT_SCRIPT)} "
+        f"{shlex.quote(head.strip())} {_b64(old_text)} {_b64(new_text)}",
+        30.0,
+    )
+    if code != 0:
+        return _workspace_failure("edit_file", stderr.strip() or "edit failed")
+    return ToolResult(stdout=stdout.strip(), stderr="", returncode=0)
+
+
 def list_files(body: str) -> ToolResult:
     """List files under a workspace directory, recursively. CODE: body is the
     directory (empty means the workspace root).
@@ -386,6 +512,17 @@ def list_files(body: str) -> ToolResult:
     thousands of object files teaches it nothing while costing everything.
     """
     spec = body.strip() or "."
+    remote = current_command_runner()
+    if remote is not None:
+        pruned = " ".join(f"-name {shlex.quote(d)} -o" for d in sorted(_LISTING_SKIP))
+        stdout, stderr, code = remote(
+            f"find {shlex.quote(spec)} \\( {pruned} -false \\) -prune -o -print "
+            f"| head -n {_MAX_LIST_ENTRIES}", 30.0,
+        )
+        if code != 0:
+            return _workspace_failure("list_files", stderr.strip() or f"could not list {spec!r}")
+        return ToolResult(stdout=stdout[-_TAIL:] or "(empty)", stderr="", returncode=0)
+
     try:
         root = resolve_in_workspace(spec)
     except OutsideWorkspace as exc:

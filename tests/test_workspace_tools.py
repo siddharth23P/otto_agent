@@ -180,3 +180,97 @@ def test_with_no_workspace_bound_execution_stays_throwaway():
     second = pt.execute_bash("ls -1")
 
     assert "should_not_persist.txt" not in second.stdout
+
+
+# ---- remote mode: the same tools, acting inside a container ---------------
+
+
+@pytest.fixture
+def container(tmp_path):
+    """A stand-in for a Docker container: a real shell, run in tmp_path, bound
+    as the command runner. Exercises the remote branch of every tool -- the
+    base64 shipping, the find pruning, the exact-once edit script -- without
+    needing Docker in the test suite.
+    """
+    import subprocess
+
+    def runner(command, timeout):
+        proc = subprocess.run(
+            command, shell=True, cwd=tmp_path, capture_output=True,
+            text=True, timeout=timeout,
+        )
+        return proc.stdout, proc.stderr, proc.returncode
+
+    from agent.pipeline.execution import bind_command_runner
+
+    with bind_command_runner(runner):
+        yield tmp_path
+
+
+def test_remote_write_and_read_round_trip(container):
+    pt.write_file("pkg/mod.py\ndef f():\n    return 1\n")
+
+    assert (container / "pkg/mod.py").read_text() == "def f():\n    return 1\n"
+    assert "def f():" in pt.read_file("pkg/mod.py").stdout
+
+
+def test_remote_write_survives_content_that_would_break_quoting(container):
+    """Why content is shipped base64-encoded rather than in a heredoc: a file
+    can contain quotes, backslashes, dollar signs, or the delimiter itself."""
+    nasty = "s.py\nprint('$HOME `whoami` \\\\n \"quoted\"')\nOTTO_EOF\n"
+
+    pt.write_file(nasty)
+
+    assert (container / "s.py").read_text() == nasty.partition("\n")[2]
+
+
+def test_remote_read_honours_a_line_range(container):
+    pt.write_file("f.txt\n" + "\n".join(f"line {i}" for i in range(1, 21)))
+
+    result = pt.read_file("f.txt:5-7")
+
+    assert "line 5" in result.stdout and "line 7" in result.stdout
+    assert "line 4" not in result.stdout and "line 8" not in result.stdout
+
+
+def test_remote_edit_replaces_exactly_once(container):
+    pt.write_file("m.py\ndef f():\n    return 1\n")
+
+    result = pt.edit_file("m.py\n---OLD---\n    return 1\n---NEW---\n    return 2")
+
+    assert result.ok
+    assert (container / "m.py").read_text() == "def f():\n    return 2\n"
+
+
+def test_remote_edit_refuses_an_ambiguous_match_like_the_local_one(container):
+    pt.write_file("m.py\nx = 1\ny = 1\n")
+
+    result = pt.edit_file("m.py\n---OLD---\n= 1\n---NEW---\n= 2")
+
+    assert not result.ok
+    assert "appears 2 times" in result.stderr
+    assert (container / "m.py").read_text() == "x = 1\ny = 1\n"
+
+
+def test_remote_bash_and_python_run_where_the_runner_says(container):
+    pt.write_file("m.py\ndef f():\n    return 41 + 1\n")
+
+    assert pt.execute_bash("cat m.py").stdout.strip().endswith("return 41 + 1")
+    assert pt.execute_python("import m; print(m.f())").stdout.strip() == "42"
+
+
+def test_remote_list_files_prunes_the_same_noise(container):
+    pt.write_file("src/app.py\n#")
+    pt.write_file(".git/objects/abcdef\nbinary")
+
+    listing = pt.list_files(".").stdout
+
+    assert "src/app.py" in listing
+    assert "objects" not in listing
+
+
+def test_remote_python_survives_a_snippet_containing_the_heredoc_delimiter(container):
+    result = pt.execute_python("print('OTTO_EOF')\nprint('still running')")
+
+    assert result.ok
+    assert "still running" in result.stdout
