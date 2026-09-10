@@ -16,6 +16,12 @@ never contained an "APPROVE:" line at all (e.g. it exhausted on
 unparseable replies) -- fails CLOSED by construction. That default is
 exercised here too: an evaluator that never rendered a real verdict must
 not be mistaken for one that approved.
+
+2026-09-10, fifth refinement: a provider/network failure (_tool_loop
+raising ProviderError instead of returning) is a THIRD outcome, distinct
+from approve/reject -- evaluator() returns to router() with
+state["node_error"] set rather than crashing or being mistaken for either
+verdict.
 """
 from langgraph.graph import END
 from langchain_core.messages import AIMessageChunk, HumanMessage
@@ -33,6 +39,21 @@ class _FakeModel:
         yield AIMessageChunk(content=self._reply)
 
 
+class _FailingModel:
+    """Raises instead of ever producing a reply -- models a provider/
+    network failure already normalised to ProviderError by the provider
+    layer (agent/router/llm_provider/inception_provider.py).
+    """
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+        self.calls = 0
+
+    def stream(self, messages):
+        self.calls += 1
+        raise self._exc
+
+
 def _install(monkeypatch, fake):
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
 
@@ -48,6 +69,7 @@ def _state(**overrides) -> dict:
         "context": "",
         "plan": None,
         "active_step": None,
+        "node_error": None,
         "final_output": None,
     }
     base.update(overrides)
@@ -194,3 +216,44 @@ def test_evaluator_can_self_check_via_a_tool_before_rendering_its_verdict(monkey
     assert result.goto == END
     tool_result = multi.calls[1][-1]
     assert "TOOL RESULT" in tool_result
+
+
+# --------------------------------------------------------------------------
+# A provider/network failure mid-judgment (2026-09-10, fifth refinement) --
+# _tool_loop raises ProviderError instead of returning. evaluator() returns
+# to router() with node_error set rather than crashing, or being mistaken
+# for either an approval or a rejection.
+# --------------------------------------------------------------------------
+
+def test_a_provider_failure_returns_to_router_with_node_error_set_instead_of_crashing(monkeypatch):
+    fake = _FailingModel(pn.ProviderError("inception: The read operation timed out"))
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="solver", output="def f(): return 1"))
+
+    assert result.goto == "router"
+    assert "evaluator" in result.update["node_error"]
+    assert "timed out" in result.update["node_error"]
+    assert result.goto != END
+    assert "final_output" not in result.update
+
+
+def test_a_provider_failure_writes_feedback_naming_whose_output_it_was_judging(monkeypatch):
+    fake = _FailingModel(pn.ProviderError("inception: The read operation timed out"))
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="solver", output="def f(): return 1"))
+
+    assert "solver" in result.update["feedback"]
+    assert "not a real rejection" in result.update["feedback"]
+
+
+def test_a_provider_failure_judging_a_plan_says_plan_not_output_in_the_feedback(monkeypatch):
+    fake = _FailingModel(pn.ProviderError("boom"))
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="planner", output='[{"task": "step one"}]'))
+
+    assert "planner" in result.update["feedback"]
+    assert "plan" in result.update["feedback"]
+    assert "output" not in result.update  # untouched, still pending judgment

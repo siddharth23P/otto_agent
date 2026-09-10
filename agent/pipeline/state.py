@@ -29,6 +29,25 @@ revising a rejected final-answer judgment (which, once a plan is active, is
 really just the LAST step's output) knows which step's `output` to
 overwrite rather than only ever appending a fresh, disconnected context
 entry alongside a now-stale one.
+
+Fifth refinement, same day (2026-09-10 design call: "if evaluator fails
+router should again go to planner for planning next steps based on
+current output"): a live run crashed the whole graph on an
+httpx.ReadTimeout raised mid-stream by the Inception provider, uncaught,
+all the way up through nodes.py's `_call`. `node_error` exists to turn
+that from a crash into a normal graph edge -- ANY node's own LLM call
+(a role node's, or the evaluator's) can raise a ProviderError (nodes.py's
+`_run_role`/`evaluator` now catch it instead of letting it propagate),
+and when that happens the node returns to router() with `node_error` set
+instead of a real `output`/verdict. router() checks `node_error` FIRST,
+ahead of everything else, and deterministically (no LLM call -- the LLM
+call is exactly what just failed) escalates to planner, discarding any
+active plan the same way an ordinary rejection-driven escalation already
+does. The failure text also gets written into `feedback` so planner sees
+it via the existing "PREVIOUS ATTEMPT BY <role>" background display
+(_role_body) alongside whatever `output` already existed -- the "based on
+current output" part of the request -- without needing a second display
+mechanism. See nodes.py's module docstring for the full reasoning.
 """
 import operator
 from typing import Annotated
@@ -106,4 +125,16 @@ class AgentState(TypedDict):
     #: _run_role to know which PlanStep's `output` to fill in (and, on a
     #: revise, which one to overwrite rather than append a new one).
     active_step: int | None
+    #: Set (to a short description of what failed and where) when a node's
+    #: own LLM call raised a ProviderError instead of producing a real
+    #: output/verdict -- a provider/network failure (a timeout, an outage),
+    #: NOT an evaluator rejection. router() checks this first, ahead of
+    #: everything else, and deterministically escalates to planner; the
+    #: node that sets it also clears back to "" whatever it would normally
+    #: have overwritten (`output` stays whatever it already was), and
+    #: writes a human-readable version into `feedback` so planner sees the
+    #: failure the same way it would see any other rejected attempt (see
+    #: nodes.py's module docstring, fifth refinement). Cleared back to None
+    #: by router() once it has escalated.
+    node_error: str | None
     final_output: str | None

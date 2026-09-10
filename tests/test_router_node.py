@@ -17,6 +17,13 @@ parses cleanly, so only one call happens.
 
 router() never predicts `state["node"]` ahead of time; whichever node runs
 next self-reports its own identity (see test_role_nodes.py).
+
+2026-09-10, fifth refinement: `state["node_error"]` is checked FIRST, ahead
+of both the plan-execution shortcut and the general 5-way decision --
+a provider/network failure means an LLM call just failed, so router()
+does not make another one to decide what to do about it. It escalates to
+planner deterministically instead, the same way the general prompt's own
+"needed a plan after all" branch resets a stale plan.
 """
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
@@ -63,10 +70,65 @@ def _state(**overrides) -> dict:
         "context": "",
         "plan": None,
         "active_step": None,
+        "node_error": None,
         "final_output": None,
     }
     base.update(overrides)
     return base
+
+
+# --------------------------------------------------------------------------
+# A provider/network failure -- checked before anything else, no LLM call.
+# --------------------------------------------------------------------------
+
+def test_a_node_error_escalates_straight_to_planner_with_no_llm_call(monkeypatch):
+    fake = _FakeModel("this should never be read")
+    _install(monkeypatch, fake)
+
+    result = pn.router(_state(node_error="solver: inception: The read operation timed out"))
+
+    assert result.goto == "planner"
+    assert fake.calls == []
+    assert result.update["node_error"] == ""
+    assert "provider failure" in result.update["board"][0]
+    assert "timed out" in result.update["board"][0]
+
+
+def test_a_node_error_discards_an_active_plan(monkeypatch):
+    fake = _FakeModel("this should never be read")
+    _install(monkeypatch, fake)
+
+    plan = [{"task": "step one", "route_to": "solver", "output": None}]
+    result = pn.router(_state(node_error="evaluator: boom", plan=plan, active_step=0))
+
+    assert result.goto == "planner"
+    assert result.update["plan"] is None
+    assert result.update["active_step"] is None
+
+
+def test_a_node_error_with_no_plan_does_not_touch_plan_fields(monkeypatch):
+    fake = _FakeModel("this should never be read")
+    _install(monkeypatch, fake)
+
+    result = pn.router(_state(node_error="solver: boom", plan=None))
+
+    assert result.goto == "planner"
+    assert "plan" not in result.update
+    assert "active_step" not in result.update
+
+
+def test_a_node_error_takes_priority_over_an_active_plans_step_assignment(monkeypatch):
+    # Without the node_error check, this state (an active, feedback-free
+    # plan with a pending step) would hit the plan-execution branch instead
+    # -- node_error must win regardless of what else is going on.
+    fake = _FakeModel("this should never be read")
+    _install(monkeypatch, fake)
+
+    plan = [{"task": "some step", "route_to": None, "output": None}]
+    result = pn.router(_state(node_error="finder: boom", plan=plan, feedback=""))
+
+    assert result.goto == "planner"
+    assert fake.calls == []
 
 
 # --------------------------------------------------------------------------
@@ -287,3 +349,71 @@ def test_context_gathered_so_far_is_shown_during_step_assignment(monkeypatch):
 
     _, human = fake.calls[0]
     assert "earlier finding: uses pytest" in human
+
+
+# --------------------------------------------------------------------------
+# _decide()'s in-place retry -- observed live (2026-09-10): the model
+# occasionally rambles instead of the required NODE:/WHY: format, most
+# often right when it should say "evaluator" for the first time. Retrying
+# the SAME small call recovers this far more cheaply than silently
+# defaulting to solver and burning a whole extra specialist round would.
+# --------------------------------------------------------------------------
+
+def test_an_unparseable_reply_is_retried_in_place_and_can_recover(monkeypatch):
+    fake = _MultiFakeModel([
+        "The candidate output looks complete and I'm now deciding if the task is finished.",
+        "NODE: evaluator\nWHY: ready to judge",
+    ])
+    _install(monkeypatch, fake)
+
+    result = pn.router(_state(node="solver", output="def f(): return 1", feedback=""))
+
+    assert len(fake.calls) == 2
+    assert result.goto == "evaluator"
+    assert "evaluator" in result.update["board"][0]
+    assert "could not parse" not in result.update["board"][0]
+
+
+def test_the_retry_feedback_asks_for_exactly_two_lines_and_lists_valid_targets(monkeypatch):
+    fake = _MultiFakeModel([
+        "hmm, let me think about this for a moment",
+        "NODE: solver\nWHY: retry succeeded",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.router(_state())
+
+    retry_human = fake.calls[1][-1]  # the corrective HumanMessage appended before the 2nd call
+    assert "EXACTLY two lines" in retry_human
+    assert "planner" in retry_human and "evaluator" in retry_human
+
+
+def test_exhausting_all_retries_falls_back_to_solver_with_an_explanatory_why(monkeypatch):
+    fake = _MultiFakeModel([
+        "rambling attempt one",
+        "rambling attempt two",
+        "rambling attempt three",
+    ])
+    _install(monkeypatch, fake)
+
+    result = pn.router(_state())
+
+    assert len(fake.calls) == pn._MAX_ROUTER_PARSE_RETRIES + 1
+    assert result.goto == "solver"
+    assert "3 attempt" in result.update["board"][0]
+
+
+def test_step_assignment_retries_are_restricted_to_step_targets_in_the_feedback(monkeypatch):
+    fake = _MultiFakeModel([
+        "not sure who should do this",
+        "NODE: finder\nWHY: needs a lookup",
+    ])
+    _install(monkeypatch, fake)
+
+    plan = [{"task": "some step", "route_to": None, "output": None}]
+    pn.router(_state(plan=plan, feedback=""))
+
+    retry_human = fake.calls[1][-1]
+    assert "solver, summarizer, finder" in retry_human
+    assert "planner" not in retry_human
+    assert "evaluator" not in retry_human

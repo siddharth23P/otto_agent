@@ -50,6 +50,7 @@ def _state(**overrides) -> dict:
         "context": "",
         "plan": None,
         "active_step": None,
+        "node_error": None,
         "final_output": None,
     }
     base.update(overrides)

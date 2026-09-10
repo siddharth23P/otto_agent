@@ -34,6 +34,7 @@ def _initial(text: str) -> dict:
         "context": "",
         "plan": None,
         "active_step": None,
+        "node_error": None,
         "final_output": None,
     }
 
