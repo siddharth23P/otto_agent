@@ -386,3 +386,15 @@ def test_a_different_target_resets_the_run(monkeypatch):
 def test_action_target_is_the_path_for_file_tools_and_the_command_otherwise():
     assert pn._action_target("write_file", "src/m.rs\nbody here") == "src/m.rs"
     assert pn._action_target("execute_bash", "rustc m.rs").startswith("execute_bash:rustc")
+
+
+def test_chat_template_tokens_are_stripped_from_a_command():
+    """Observed in a Terminal-Bench run: the model emitted <|tool_call_start|>
+    mid-body, and bash answered "syntax error near unexpected token `|'".
+    They are markup for the serialiser, never content."""
+    reply = "ACTION: execute_bash\nCODE:\ncurl -v example.com\n\n<|tool_call_start|> 2>&1 | head -50"
+
+    _, _, body = pn._parse_worker_reply(reply)
+
+    assert "<|" not in body
+    assert body.startswith("curl -v example.com")
