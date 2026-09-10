@@ -464,6 +464,15 @@ MAX_TOOL_ITERATIONS = int(os.environ.get("OTTO_MAX_TOOL_ITERATIONS", "5"))
 #: by raising (see NeedsUserInput below) instead of returning a ToolResult.
 _TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user"))
 
+#: KEEP THIS SHORT. A fifth habit was added and measured -- "search for the
+#: exact text of an error rather than reasoning about it", which for the task
+#: in question was one command that would have named the culprit outright. It
+#: did not merely fail to take (zero such searches); it wiped out the
+#: behaviour the first four had produced, taking system-inspection commands
+#: from 17 to 0 and total commands from 80 to 53 on the same task. One run
+#: each, so treat the size of that with suspicion but not the sign: past some
+#: length the model acts on none of this rather than more of it. Adding a
+#: habit here means measuring that the others survive it.
 #: General debugging habits, shared by the prompts of the roles that actually
 #: change things. Not advice about any particular kind of task -- these are the
 #: two things a competent engineer does that a model, left alone, reliably
