@@ -101,6 +101,19 @@ overseer prompt on every round:
     point of sequencing). This is the concrete mechanism behind point 4's
     "big task -> plan -> later steps build on earlier ones' results."
 
+Fourth refinement, same day: both of the overseer's LLM calls (the general
+5-way decision and the narrower per-step assignment) now retry IN PLACE
+(_decide, _MAX_ROUTER_PARSE_RETRIES) if the reply doesn't parse at all,
+before falling back to _parse_router's "default to solver" safety net.
+Observed live: the model occasionally rambles instead of the required
+two-line NODE:/WHY: format -- most often the very first time a PENDING
+OUTPUT shows up in its prompt (i.e. right when it should say "evaluator"
+for the first time) -- rather than genuinely being unsure. Silently
+defaulting to solver in that case doesn't just misroute once: it burns an
+entire extra specialist round (a full ACTION/FINAL tool loop) to recover,
+every time it happens. A retry of just the one small router call is far
+cheaper and, empirically, usually succeeds on the first retry.
+
 Deliberately out of scope for this revision, same as the first:
   - web_search and rag are still STUBBED (tools.py).
   - No domain-specific verification beyond the evaluator's own tool access.
@@ -519,26 +532,22 @@ def _tool_loop(llm, messages: list) -> str:
     return output
 
 
-def _parse_router(text: str, targets: tuple[str, ...] = DISPATCH_TARGETS) -> tuple[str, str]:
-    """Parse a NODE:/WHY: reply against `targets` (DISPATCH_TARGETS by
-    default; router()'s step-assignment call passes STEP_TARGETS instead).
-    An unparseable or unrecognised NODE: value fails toward "solver" (or
-    `targets[0]` if "solver" isn't even in this call's target set) rather
-    than crashing or leaving `node` unset; the WHY string says so
-    explicitly when that happens, visible on the board and to the
-    dispatched node's own prompt.
+def _extract_node(text: str, targets: tuple[str, ...]) -> tuple[str | None, str]:
+    """Try to find a NODE:/WHY: pair in `text`, restricted to `targets`.
+    Returns `(None, "")` if nothing in `targets` was found at all -- this
+    function bakes in no fallback, so a caller can decide for itself what
+    "nothing found" means: _parse_router defaults to "solver"; _decide
+    (below) retries the LLM call first and only falls back once retries
+    are exhausted.
 
     Tolerates one specific malformed shape, observed live (2026-09-10): the
     model sometimes drops the literal "NODE:" label and replies with just
     the bare target name on its own line (most often when the answer is
     "evaluator", as if it read past its own format instruction) --
-    "evaluator\\nWHY: ..." instead of "NODE: evaluator\\nWHY: ...". Without
-    this, that reply fell through to the generic "could not parse" fallback
-    and silently defaulted to solver even when the model's actual intent
-    was clear and recoverable. Only a line that is EXACTLY one of `targets`
-    (whole line, stripped) counts -- never a substring match, so a WHY
-    sentence that happens to mention "solver" is never mistaken for a
-    NODE: line.
+    "evaluator\\nWHY: ..." instead of "NODE: evaluator\\nWHY: ...". Only a
+    line that is EXACTLY one of `targets` (whole line, stripped) counts --
+    never a substring match, so a WHY sentence that happens to mention
+    "solver" is never mistaken for a NODE: line.
     """
     node = None
     why = ""
@@ -557,9 +566,74 @@ def _parse_router(text: str, targets: tuple[str, ...] = DISPATCH_TARGETS) -> tup
             if candidate in targets:
                 node = candidate
                 break
+    return node, why
+
+
+def _parse_router(text: str, targets: tuple[str, ...] = DISPATCH_TARGETS) -> tuple[str, str]:
+    """Parse a NODE:/WHY: reply against `targets` (DISPATCH_TARGETS by
+    default; router()'s step-assignment call passes STEP_TARGETS instead) --
+    a thin wrapper over _extract_node that supplies the ONE-SHOT fallback:
+    an unparseable or unrecognised NODE: value fails toward "solver" (or
+    `targets[0]` if "solver" isn't even in this call's target set) rather
+    than crashing or leaving `node` unset; the WHY string says so
+    explicitly when that happens, visible on the board and to the
+    dispatched node's own prompt. router() itself doesn't call this
+    directly anymore -- it calls _decide(), which retries before ever
+    reaching this fallback -- but it's kept as the single-shot primitive
+    other callers and tests reason about.
+    """
+    node, why = _extract_node(text, targets)
     if node is None:
         fallback = "solver" if "solver" in targets else targets[0]
         return fallback, f"could not parse a NODE: line from {text.strip()[:200]!r}, defaulting to {fallback}"
+    return node, why
+
+
+#: How many times _decide() retries the SAME small router call in place
+#: before giving up and falling back to _parse_router's "defaulting to
+#: solver" safety net. Observed live (2026-09-10): the model occasionally
+#: rambles instead of the required two-line format -- most often the
+#: first time a PENDING OUTPUT shows up in its prompt (i.e. right when it
+#: should say "evaluator" for the first time) -- rather than genuinely
+#: being unsure. A cheap retry of just this one call recovers that far
+#: more often than silently burning an entire extra specialist round on
+#: the fallback would.
+_MAX_ROUTER_PARSE_RETRIES = 2
+
+
+def _router_retry_feedback(targets: tuple[str, ...]) -> str:
+    return (
+        "Reply again using EXACTLY two lines and nothing else -- no "
+        "preamble, no explanation outside WHY:. Start the first line with "
+        f"the literal word \"NODE:\", followed by one of: {', '.join(targets)}."
+    )
+
+
+def _decide(system_prompt: str, human_body: str, *, targets: tuple[str, ...]) -> tuple[str, str]:
+    """Make one router-model call and extract (node, why) from it,
+    retrying the SAME call in place (see _MAX_ROUTER_PARSE_RETRIES) if the
+    reply doesn't parse at all, before falling back to _parse_router's
+    fallback. Shared by both of router()'s LLM calls (the general 5-way
+    decision and the narrower per-step assignment) -- identical retry
+    logic either way, just different prompts/targets.
+    """
+    llm = ROUTER.chat_model(Task.CHAT_FAST, temperature=0.2)
+    messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
+    text = _call(llm, messages)
+    node, why = _extract_node(text, targets)
+    attempts = 0
+    while node is None and attempts < _MAX_ROUTER_PARSE_RETRIES:
+        attempts += 1
+        messages.append(AIMessage(text))
+        messages.append(HumanMessage(_router_retry_feedback(targets)))
+        text = _call(llm, messages)
+        node, why = _extract_node(text, targets)
+    if node is None:
+        fallback = "solver" if "solver" in targets else targets[0]
+        return fallback, (
+            f"could not parse a NODE: line after {attempts + 1} attempt(s), "
+            f"last reply {text.strip()[:200]!r}, defaulting to {fallback}"
+        )
     return node, why
 
 
@@ -742,10 +816,7 @@ def router(state: AgentState) -> Command[Literal["planner", "solver", "summarize
                 },
                 goto=step["route_to"],
             )
-        llm = ROUTER.chat_model(Task.CHAT_FAST, temperature=0.2)
-        messages = [SystemMessage(STEP_ROUTE_PROMPT), HumanMessage(_step_route_body(state, task_text, plan, idx))]
-        text = _call(llm, messages)
-        route_to, why = _parse_router(text, targets=STEP_TARGETS)
+        route_to, why = _decide(STEP_ROUTE_PROMPT, _step_route_body(state, task_text, plan, idx), targets=STEP_TARGETS)
 
         new_plan = [dict(s) for s in plan]
         new_plan[idx] = {**new_plan[idx], "route_to": route_to}
@@ -763,10 +834,7 @@ def router(state: AgentState) -> Command[Literal["planner", "solver", "summarize
     # rejection just happened and needs real judgment (retry the same
     # specialist by default, or escalate to planner). The original 5-way
     # overseer decision.
-    llm = ROUTER.chat_model(Task.CHAT_FAST, temperature=0.2)
-    messages = [SystemMessage(ROUTER_PROMPT), HumanMessage(_router_body(state, task_text))]
-    text = _call(llm, messages)
-    node, why = _parse_router(text)
+    node, why = _decide(ROUTER_PROMPT, _router_body(state, task_text), targets=DISPATCH_TARGETS)
 
     if node == "evaluator" and not (state.get("output") or "").strip():
         # Defensive net, same "fail toward the safe default" spirit as

@@ -1,6 +1,10 @@
 """Coverage for router() itself (agent/pipeline/nodes.py) -- the overseer.
-Re-invoked after every node, but it makes at most one LLM call per
-invocation, from one of two prompts:
+Re-invoked after every node, and makes its decision via _decide() (shared
+by both of the prompts below), which retries its OWN call in place --
+_MAX_ROUTER_PARSE_RETRIES times -- if a reply doesn't parse at all, before
+falling back to "solver". See test_the_router_retries_an_unparseable_reply_*
+below for that specifically; most tests here use a single-shot fake that
+parses cleanly, so only one call happens.
 
   * ROUTER_PROMPT (the general, 5-way decision) -- used before any plan
     exists, or after a rejection (retry judgment). _router_body shows
@@ -27,6 +31,21 @@ class _FakeModel:
     def stream(self, messages):
         self.calls.append([m.content for m in messages])
         yield AIMessageChunk(content=self._reply)
+
+
+class _MultiFakeModel:
+    """Returns each reply in `replies` in turn, one per .stream() call --
+    for exercising _decide()'s in-place retry loop, where the model's
+    reply changes across attempts (unlike _FakeModel's fixed single reply).
+    """
+
+    def __init__(self, replies: list[str]):
+        self._replies = list(replies)
+        self.calls: list[list[str]] = []
+
+    def stream(self, messages):
+        self.calls.append([m.content for m in messages])
+        yield AIMessageChunk(content=self._replies.pop(0))
 
 
 def _install(monkeypatch, fake):
