@@ -8,14 +8,24 @@ still iterating, and an irreversible action taken before judgment can't be
 undone if the evaluator later rejects that attempt. Same reasoning the
 retired swarm pipeline's identical module docstring gave for its workers.
 
-Seven tools exist (2026-09-10, replacing the swarm pipeline's execute_python
+Eleven tools exist (2026-09-10, replacing the swarm pipeline's execute_python
 tool as this graph's whole tool box, per the router/planner/solver/
 summarizer/finder/evaluator design):
 
-  execute_python -- real, unchanged from before.
-  execute_bash    -- real, new: a generic shell command, same sandboxing
-                     bar as execute_python (see its own docstring for the
-                     honest limits of that bar).
+  execute_python -- real. Runs in the bound workspace if there is one,
+                     otherwise in a throwaway temp dir as it always did.
+  execute_bash    -- real: a generic shell command, same sandboxing bar as
+                     execute_python (see its own docstring for the honest
+                     limits of that bar), and the same workspace behaviour.
+  read_file       -- real, WORKSPACE tier. Reads a file from the bound
+  list_files         workspace; lists what is in it. Both READ_ONLY.
+  write_file      -- real, WORKSPACE tier. Creates/overwrites a file, and
+  edit_file          replaces an exact unique snippet in one. These are the
+                     first tools in this repo that change anything on disk
+                     the caller didn't hand them, which is why the tier
+                     exists -- see WORKSPACE's own note below, and
+                     agent/pipeline/workspace.py's module docstring for what
+                     the confinement is and is not worth.
   web_search      -- STUBBED. No real search integration yet -- deliberate
                      scope cut (2026-09-10 design call: prove the graph
                      skeleton with Mercury-only routing and stub tools
@@ -77,20 +87,38 @@ nothing in a role/evaluator node's reach may call it.
 """
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 from agent.memory.retrieval import recall
 from agent.memory.session import current_store
+from agent.pipeline.workspace import (
+    OutsideWorkspace,
+    current_workspace,
+    resolve_in_workspace,
+)
 from agent.router.llm_provider.base import ProviderError
 from agent.router.router import Router
 
 READ_ONLY = "read_only"
 MUTATING = "mutating"
+#: Writes, but only ever inside the directory a caller deliberately bound as
+#: this run's workspace (agent/pipeline/workspace.py), and never anywhere
+#: else. Not READ_ONLY -- it changes real files, and pretending otherwise
+#: would make the tier meaningless. Not MUTATING either, in the sense that
+#: tier was defined for: what makes an irreversible action unsafe before the
+#: evaluator has judged an attempt is that it cannot be taken back, and a
+#: write into a workspace the caller created and will delete can be. A run
+#: that binds no workspace -- every ordinary chat turn -- cannot reach these
+#: at all, so this widens nothing for the case the tier system was protecting.
+WORKSPACE = "workspace"
 
 #: Tail length kept from stdout/stderr -- long enough to carry a real
 #: traceback, short enough not to blow out a prompt on a runaway print loop.
@@ -110,7 +138,8 @@ class ToolResult:
 
 
 def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
-    """Run `code` as a standalone script in a fresh temp dir, fresh process.
+    """Run `code` as a standalone script in a fresh process, in the bound
+    workspace if there is one and otherwise in a fresh throwaway temp dir.
 
     Used by every role node/the evaluator as their ACTION/execute_python
     self-check before committing to a FINAL answer or a verdict (nodes.py's
@@ -119,13 +148,19 @@ def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
     (that domain-specific branch is gone; the evaluator now checks things
     for real via this same tool instead of a bespoke code path).
     """
-    with tempfile.TemporaryDirectory() as tmp:
-        script = Path(tmp) / "snippet.py"
+    with _run_dir() as tmp, tempfile.TemporaryDirectory() as holder:
+        # The script itself lives OUTSIDE the run dir, always. When the run dir
+        # is a throwaway temp dir it makes no difference, but when it is a real
+        # workspace, dropping a snippet.py into the repo the agent is editing
+        # would show up in `git status` and in its own next listing -- a file
+        # nobody wrote, indistinguishable from one the task asked for.
+        script = Path(holder) / "snippet.py"
         script.write_text(code)
         try:
             proc = subprocess.run(
                 [sys.executable, str(script)],
                 cwd=tmp,
+                env=_env_with_pythonpath(tmp),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -144,15 +179,52 @@ def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
             )
 
 
-def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
-    """Run `command` as a shell command in a fresh temp dir, fresh process.
+def _env_with_pythonpath(run_dir: str) -> dict[str, str]:
+    """The child's environment with `run_dir` prepended to PYTHONPATH.
 
-    Same fresh-tmp-dir/timeout/capture-output shape as execute_python, but
-    `shell=True` over the raw command text rather than a Python script --
-    see the module docstring's note on the wider threat-model surface this
-    implies (any binary on PATH, not just the Python interpreter).
+    Needed because the script itself lives outside the run dir (see
+    execute_python), and Python seeds sys.path from the SCRIPT's directory,
+    not from cwd -- so without this a snippet could no longer `import` a
+    module sitting in the workspace next to it, which is most of the reason
+    to run Python in a workspace at all.
     """
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = f"{run_dir}{os.pathsep}{existing}" if existing else run_dir
+    return env
+
+
+@contextmanager
+def _run_dir() -> Iterator[str]:
+    """Where execute_bash/execute_python actually run: the bound workspace if
+    there is one, otherwise a fresh temp dir deleted on the way out.
+
+    The temp dir is the old behaviour and stays the default, because it is the
+    right one for what these two were built for -- a node checking its own
+    snippet, leaving nothing behind. A workspace is the opposite case on
+    purpose: a task that edits files needs the NEXT command to see what the
+    last one did, which a per-call temp dir can never provide.
+    """
+    workspace = current_workspace()
+    if workspace is not None:
+        yield str(workspace)
+        return
     with tempfile.TemporaryDirectory() as tmp:
+        yield tmp
+
+
+def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
+    """Run `command` as a shell command, in the bound workspace if there is
+    one and otherwise in a fresh throwaway temp dir.
+
+    Same timeout/capture-output shape as execute_python, but `shell=True` over
+    the raw command text rather than a Python script -- see the module
+    docstring's note on the wider threat-model surface this implies (any
+    binary on PATH, not just the Python interpreter), and workspace.py's own
+    docstring for why a shell in a workspace is a blast-radius argument
+    rather than a sandbox.
+    """
+    with _run_dir() as tmp:
         try:
             proc = subprocess.run(
                 command,
@@ -174,6 +246,173 @@ def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
                 returncode=-1,
                 timed_out=True,
             )
+
+
+#: Longest file listing / read this returns before truncating -- the same
+#: "don't blow the caller's context" bar _TAIL sets for command output.
+_MAX_LIST_ENTRIES = 400
+
+
+def _workspace_failure(tool: str, detail: str) -> ToolResult:
+    """The refusal every workspace tool gives when there is no workspace to
+    act in -- an ordinary `otto chat` turn, or any caller that never opened
+    one. A failed ToolResult, never a raise: same "fail clean" shape as
+    web_search/rag/recall_memory, so a tool loop reads it as a normal
+    unsuccessful call and can say so instead of crashing."""
+    return ToolResult(stdout="", stderr=f"{tool}: {detail}", returncode=1)
+
+
+def read_file(body: str) -> ToolResult:
+    """Read a file from the bound workspace. CODE: body is the path, alone,
+    optionally suffixed `:START-END` for a 1-based inclusive line range
+    ("src/app.py:40-80") -- worth having because the whole point of reading
+    is to spend context on the part that matters.
+
+    Output is line-numbered, which costs a few characters and buys the two
+    things that follow a read: quoting a location back, and knowing which
+    lines an edit is actually replacing.
+    """
+    spec = body.strip()
+    line_range = None
+    if ":" in spec:
+        head, _, tail = spec.rpartition(":")
+        if head and re.fullmatch(r"\d+-\d+", tail):
+            spec, line_range = head, tuple(int(n) for n in tail.split("-"))
+    try:
+        path = resolve_in_workspace(spec)
+    except OutsideWorkspace as exc:
+        return _workspace_failure("read_file", str(exc))
+    if not path.is_file():
+        return _workspace_failure("read_file", f"{spec!r} is not a file in the workspace")
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError as exc:
+        return _workspace_failure("read_file", f"could not read {spec!r}: {exc}")
+
+    start, end = (1, len(lines)) if line_range is None else line_range
+    start, end = max(1, start), min(len(lines), end)
+    numbered = "\n".join(f"{i:>6}\t{lines[i - 1]}" for i in range(start, end + 1))
+    return ToolResult(stdout=numbered[-_TAIL:], stderr="", returncode=0)
+
+
+def write_file(body: str) -> ToolResult:
+    """Create or overwrite a file in the bound workspace. CODE: body is the
+    path on its OWN FIRST LINE, and everything after that first newline is
+    the file's content, verbatim.
+
+    No separator line between the two, deliberately: any delimiter that could
+    be typed is a delimiter that can appear in real file content, and a
+    write that silently truncates at a `---` inside a Markdown document or a
+    Python docstring is a far worse failure than a slightly plainer format.
+    Missing parent directories are created -- a model that writes
+    "pkg/mod/x.py" means for it to exist.
+    """
+    head, _, content = body.partition("\n")
+    try:
+        path = resolve_in_workspace(head)
+    except OutsideWorkspace as exc:
+        return _workspace_failure("write_file", str(exc))
+    if not head.strip():
+        return _workspace_failure("write_file", "first line must be the file path")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    except OSError as exc:
+        return _workspace_failure("write_file", f"could not write {head.strip()!r}: {exc}")
+    return ToolResult(
+        stdout=f"wrote {head.strip()} ({len(content.splitlines())} lines)",
+        stderr="", returncode=0,
+    )
+
+
+def edit_file(body: str) -> ToolResult:
+    """Replace an exact snippet in a workspace file. CODE: body is
+
+        path/to/file.py
+        ---OLD---
+        the exact text to replace
+        ---NEW---
+        what to replace it with
+
+    The old text must appear EXACTLY ONCE. Not zero times (the model is
+    editing something it misremembers, and a silently-skipped edit is the
+    kind of failure that surfaces later as an inexplicable test result), and
+    not several times (which of them was meant is genuinely unknown, and
+    guessing is worse than saying so). Both cases come back as a failed
+    ToolResult naming the count, which is a thing a tool loop can act on --
+    read the file again, quote more surrounding context, retry.
+
+    This exists alongside write_file because rewriting a whole file to change
+    three lines is how an agent destroys the parts of it nobody asked about.
+    """
+    head, _, rest = body.partition("\n")
+    # Workspace first, body format second: "there is nowhere to write" is the
+    # more fundamental refusal, and reporting a format complaint to a caller
+    # that could never have written anything anyway just misdirects it.
+    try:
+        path = resolve_in_workspace(head)
+    except OutsideWorkspace as exc:
+        return _workspace_failure("edit_file", str(exc))
+    if "---OLD---" not in rest or "---NEW---" not in rest:
+        return _workspace_failure(
+            "edit_file", "body must be: path, then ---OLD---, then ---NEW---",
+        )
+    old_part, _, new_part = rest.partition("---NEW---")
+    old_text = old_part.split("---OLD---", 1)[1].strip("\n")
+    new_text = new_part.strip("\n")
+    if not path.is_file():
+        return _workspace_failure("edit_file", f"{head.strip()!r} is not a file in the workspace")
+
+    original = path.read_text(errors="replace")
+    occurrences = original.count(old_text)
+    if occurrences != 1:
+        found = "never appears" if occurrences == 0 else f"appears {occurrences} times"
+        return _workspace_failure(
+            "edit_file",
+            f"the ---OLD--- text {found} in {head.strip()} -- it must appear exactly once; "
+            "read the file and quote more surrounding lines to make it unique",
+        )
+    path.write_text(original.replace(old_text, new_text, 1))
+    return ToolResult(stdout=f"edited {head.strip()}", stderr="", returncode=0)
+
+
+def list_files(body: str) -> ToolResult:
+    """List files under a workspace directory, recursively. CODE: body is the
+    directory (empty means the workspace root).
+
+    Skips the directories that are always noise and sometimes enormous --
+    .git, __pycache__, .venv and friends -- because the first thing an agent
+    does in an unfamiliar repo is list it, and a listing dominated by
+    thousands of object files teaches it nothing while costing everything.
+    """
+    spec = body.strip() or "."
+    try:
+        root = resolve_in_workspace(spec)
+    except OutsideWorkspace as exc:
+        return _workspace_failure("list_files", str(exc))
+    if not root.is_dir():
+        return _workspace_failure("list_files", f"{spec!r} is not a directory in the workspace")
+
+    base = current_workspace()
+    entries = []
+    for path in sorted(root.rglob("*")):
+        if any(part in _LISTING_SKIP for part in path.relative_to(root).parts):
+            continue
+        entries.append(str(path.relative_to(base)) + ("/" if path.is_dir() else ""))
+        if len(entries) > _MAX_LIST_ENTRIES:
+            entries.append(f"... (truncated at {_MAX_LIST_ENTRIES} entries)")
+            break
+    return ToolResult(stdout="\n".join(entries) or "(empty)", stderr="", returncode=0)
+
+
+#: Directories a listing never descends into -- version-control internals,
+#: build/dependency trees, and caches. Never source, so skipping them loses
+#: an agent nothing it would have wanted to read.
+_LISTING_SKIP = frozenset({
+    ".git", ".hg", ".svn", "__pycache__", ".venv", "venv", "node_modules",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", "dist", "build",
+    ".eggs", ".idea", ".vscode", "target",
+})
 
 
 def web_search(query: str) -> ToolResult:
@@ -294,6 +533,10 @@ def predict_edit(body: str) -> ToolResult:
 TOOL_TIERS: dict[str, str] = {
     "execute_python": READ_ONLY,
     "execute_bash": READ_ONLY,
+    "read_file": READ_ONLY,
+    "list_files": READ_ONLY,
+    "write_file": WORKSPACE,
+    "edit_file": WORKSPACE,
     "web_search": READ_ONLY,
     "rag": READ_ONLY,
     "complete_code": READ_ONLY,
@@ -309,6 +552,10 @@ TOOL_TIERS: dict[str, str] = {
 TOOL_DISPATCH: dict[str, Callable[[str], ToolResult]] = {
     "execute_python": execute_python,
     "execute_bash": execute_bash,
+    "read_file": read_file,
+    "list_files": list_files,
+    "write_file": write_file,
+    "edit_file": edit_file,
     "web_search": web_search,
     "rag": rag,
     "complete_code": complete_code,
