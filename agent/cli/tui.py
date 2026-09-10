@@ -17,6 +17,32 @@ planner/solver/summarizer/finder/evaluator graph that replaced the swarm
 pipeline dispatches exactly one specialist per round, so there is nothing
 left to size or animate as a fan-out -- see agent/pipeline/nodes.py's
 module docstring for the design discussion.
+
+Thinking/result split (2026-09-10, design call: "we need to keep thinking
+and result separate in TUI and show user only result with thinking as
+collapsable thing"): `#transcript` stopped being one flat RichLog. Every
+graph update from render_update() (shell.py) -- router's dispatch line,
+each specialist's board line and output preview, evaluator's verdict line
+-- is "thinking": the process, not the answer. That now goes into a fresh
+RichLog created FOR THAT TURN, wrapped in a collapsed-by-default
+`Collapsible`, so it never crowds the screen but is one click away.
+Everything the user should see without expanding anything -- their own
+message, the final answer, where it got saved, an error -- is "result":
+mounted straight into `#transcript` (now a VerticalScroll of stacked
+widgets, not a single log) as its own `Static`, always visible.
+
+Two widget types, on purpose, not one: `RichLog.write()` is what already
+renders agent.cli.ui.THEME's custom style names (muted/spec/chosen/ok/bad/
+warn) correctly -- see `on_mount`'s theme push below, unchanged from
+before this split -- so every render_update() call keeps going through a
+RichLog. `Static`, not RichLog, holds the one-shot result blocks: RichLog
+is a fixed/flexible-height scrolling *viewport* (checked live against this
+Textual version -- it fills available space rather than sizing to its
+content), which looks wrong for a single block stacked among others in a
+VerticalScroll; `Static` sizes to its renderable's actual height. Nothing
+mounted as `Static` here uses a THEME-custom name (only "bold"/"dim"/
+"red"/"green"/"yellow" -- primitive Rich style words, not aliases), so it
+never needs the theme push RichLog does.
 """
 
 from __future__ import annotations
@@ -27,12 +53,14 @@ from typing import Iterable
 
 import typer
 from langchain_core.messages import AIMessage, HumanMessage
+from rich.console import RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
+from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, OptionList, RichLog
+from textual.widgets import Collapsible, Footer, Header, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
 from agent.cli.context import AppContext
@@ -97,6 +125,8 @@ class OttoApp(App):
     BINDINGS = [("ctrl+n", "new_session", "New session")]
     DEFAULT_CSS = """
     #transcript { height: 1fr; }
+    #transcript Collapsible { padding: 0; }
+    .thinking-log { height: 12; }
     """
 
     def __init__(self, ctx: AppContext) -> None:
@@ -106,27 +136,50 @@ class OttoApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield RichLog(id="transcript", wrap=True, markup=True, highlight=False)
+        yield VerticalScroll(id="transcript")
         yield Input(placeholder="type a message… (ctrl+p for commands)", id="message-input")
         yield Footer()
 
     def on_mount(self) -> None:
-        # render_update() (shell.py) and this class's own [dim]/[red]/[green]
-        # lines both write markup keyed to agent.cli.ui.THEME's names (muted,
-        # spec, ok, bad, chosen, warn) -- the REPL's out/err consoles carry
-        # that theme already, but RichLog.write() renders through the App's
-        # own plain Console, which knows nothing about it and raises
+        # render_update() (shell.py) writes markup keyed to agent.cli.ui.
+        # THEME's names (muted, spec, ok, bad, chosen, warn) into whichever
+        # RichLog it's handed (module docstring: the per-turn "thinking"
+        # log) -- RichLog.write() renders through the App's own plain
+        # Console, which knows nothing about those names and raises
         # MissingStyle the first time a board line shows up. Pushing the
         # same theme onto self.console once, here, makes every
         # RichLog.write() for the life of the app resolve identically to
         # the REPL, with zero changes to the shared render_update().
         self.console.push_theme(THEME)
         self.query_one(Input).focus()
-        self.transcript.write("[dim]otto:pipeline[/]")
+        self._post("[dim]otto:pipeline[/]")
 
     @property
-    def transcript(self) -> RichLog:
-        return self.query_one("#transcript", RichLog)
+    def transcript(self) -> VerticalScroll:
+        return self.query_one("#transcript", VerticalScroll)
+
+    def _post(self, renderable: RenderableType) -> None:
+        """Mount one *result*-side block: always visible, never collapsed
+        (module docstring). `renderable` is anything Static accepts -- a
+        markup string using only primitive Rich style words, or a Rich
+        renderable like Panel/Table. Safe to call from the UI thread
+        directly; a worker thread must go through `self.call_from_thread`
+        the same way it already does for everything else that touches the
+        widget tree.
+        """
+        self.transcript.mount(Static(renderable))
+        self.transcript.scroll_end(animate=False)
+
+    def _post_thinking(self, thinking_log: RichLog, title: str) -> None:
+        """Mount one *thinking*-side block: a fresh RichLog, collapsed by
+        default, that render_update() writes this turn's board lines and
+        output previews into (module docstring). Collapsed rather than
+        omitted -- the process is still one click away, just not what the
+        user sees by default.
+        """
+        thinking_log.add_class("thinking-log")
+        self.transcript.mount(Collapsible(thinking_log, title=title, collapsed=True))
+        self.transcript.scroll_end(animate=False)
 
     # ---- the command palette (ctrl+p): the arrow-key menu ------------
 
@@ -153,41 +206,41 @@ class OttoApp(App):
         try:
             d = self.ctx.router.resolve(task)
         except NoViableRoute as exc:
-            self.call_from_thread(self.transcript.write, f"[red]no viable model for {task.value}: {exc}[/]")
+            self.call_from_thread(self._post, f"[red]no viable model for {task.value}: {exc}[/]")
             return
         line = f"{task.value} -> {d.provider}:{d.model.id}" + (" (degraded)" if d.fell_back else "")
-        self.call_from_thread(self.transcript.write, f"[dim]{line}[/]")
+        self.call_from_thread(self._post, f"[dim]{line}[/]")
 
     @work(thread=True)
     def action_models(self) -> None:
         from agent.cli.models import models_table
         from agent.router.llm_provider import all_models
         found = sorted(all_models(None), key=lambda m: (m.provider, m.id))
-        self.call_from_thread(self.transcript.write, models_table(found) if found else "[dim]no models matched[/]")
+        self.call_from_thread(self._post, models_table(found) if found else "[dim]no models matched[/]")
 
     @work(thread=True)
     def action_doctor(self) -> None:
         from agent.cli.doctor import health_table, router_view
         from agent.router.llm_provider import health_report
         reports = health_report()
-        self.call_from_thread(self.transcript.write, health_table(reports))
-        self.call_from_thread(self.transcript.write, router_view(self.ctx.router))
+        self.call_from_thread(self._post, health_table(reports))
+        self.call_from_thread(self._post, router_view(self.ctx.router))
 
     def action_score(self, value: float, comment: str) -> None:
         if self.session.trace_id is None:
-            self.transcript.write("[yellow]nothing to rate yet[/]")
+            self._post("[yellow]nothing to rate yet[/]")
             return
         self.ctx.client.create_score(
             name="user_feedback", value=value, data_type="NUMERIC",
             trace_id=self.session.trace_id, comment=comment or None,
         )
         self.ctx.client.flush()
-        self.transcript.write(f"[dim]scored {value:g}[/]")
+        self._post(f"[dim]scored {value:g}[/]")
 
     def action_score_dialog(self) -> None:
         def done(result: tuple[float, str] | None) -> None:
             if result is None:
-                self.transcript.write(r"[yellow]usage: <0-1> \[comment][/]")
+                self._post(r"[yellow]usage: <0-1> \[comment][/]")
                 return
             self.action_score(*result)
         self.push_screen(ScoreDialog(), done)
@@ -196,7 +249,7 @@ class OttoApp(App):
         self.session.history.clear()
         self.session.session_id = uuid.uuid4().hex
         self.session.trace_id = None
-        self.transcript.write("[dim]new session[/]")
+        self._post("[dim]new session[/]")
 
     # ---- the message box: the one thing that stays typed ---------------
 
@@ -206,12 +259,18 @@ class OttoApp(App):
         if not text:
             return
         self.session.history.append(HumanMessage(text))
-        self.transcript.write(f"[bold]you[/] {text}")
+        self._post(f"[bold]you[/] {text}")
         self.run_turn(text)
 
     @work(thread=True, exclusive=True, group="turn")
     def run_turn(self, text: str) -> None:
         tally: Counter = Counter()
+        # One fresh RichLog per turn, mounted collapsed right away so board
+        # lines have somewhere to land as they stream in -- render_update()
+        # (shell.py) is unchanged, it just writes into this instead of the
+        # old shared transcript RichLog (module docstring).
+        thinking_log = RichLog(wrap=True, markup=True, highlight=False)
+        self.call_from_thread(self._post_thinking, thinking_log, "thinking…")
         try:
             for update in run_pipeline_stream(text, session_id=self.session.session_id):
                 if "__final__" in update:
@@ -220,7 +279,7 @@ class OttoApp(App):
                     raw_output = (final.get("final_output") or "").strip()
                     code = raw_output or "*(no output produced)*"
                     self.call_from_thread(
-                        self.transcript.write,
+                        self._post,
                         Panel(Markdown(code), title="[green]final[/]", border_style="green"),
                     )
                     self.session.history.append(AIMessage(code))
@@ -229,13 +288,13 @@ class OttoApp(App):
                         # a live RichLog selection does not.
                         self.session.turn += 1
                         path = save_final(self.session.session_id, self.session.turn, raw_output, None)
-                        self.call_from_thread(self.transcript.write, f"[dim]saved to {path}[/]")
+                        self.call_from_thread(self._post, f"[dim]saved to {path}[/]")
                     continue
 
                 node, delta = next(iter(update.items()))
-                self.call_from_thread(render_update, node, delta, tally, self.transcript.write)
+                self.call_from_thread(render_update, node, delta, tally, thinking_log.write)
         except Exception as exc:  # a provider error mid-turn must not crash the app
-            self.call_from_thread(self.transcript.write, f"[red]{type(exc).__name__}: {exc}[/]")
+            self.call_from_thread(self._post, f"[red]{type(exc).__name__}: {exc}[/]")
 
 
 def tui(ctx: typer.Context) -> None:
