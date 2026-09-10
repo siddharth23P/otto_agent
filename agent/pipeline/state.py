@@ -1,21 +1,23 @@
-"""State schema for the router/planner/solver/summarizer/finder/evaluator
-graph that replaced the orchestrator/worker/evaluate/subtask_consensus/
-synthesize swarm pipeline (nodes.py, retired 2026-09-10).
+"""State schema for the overseer/planner/solver/summarizer/finder/evaluator
+graph (agent/pipeline/nodes.py).
 
-That swarm was built around parallel independent subtasks (N workers, N
-evaluators, a Judge rule, a synthesizer to reconcile them) -- this graph is
-a single sequential loop instead: one ROUTER decides which ONE specialist
-(planner/solver/summarizer/finder) should attempt the whole request, that
-specialist may use tools before answering, and one EVALUATOR judges the
-result -- approve and stop, or reject and let the router decide who tries
-next (possibly the same specialist with feedback, possibly a different one
-if the feedback suggests this was the wrong kind of task for whoever tried
-it). No fan-out, no consensus vote, no synthesis step: there is only ever
-one candidate answer in flight at a time, so nothing needs reconciling.
+Second revision of this graph (2026-09-10, same day it replaced the
+orchestrator/worker/evaluate/subtask_consensus/synthesize swarm pipeline):
+ROUTER stopped being a one-shot dispatcher and became the overseer -- it is
+re-invoked after EVERY node (not just after an evaluator rejection) and
+decides the single next action from everything accumulated so far. Two
+fields exist because of that shift that didn't before: `context` (material
+finder/summarizer hand forward) and `plan` (a plan once the evaluator has
+actually approved it, as distinct from a plan still pending judgment,
+which lives in `output` like any other unjudged specialist attempt).
 
-This is a deliberate architecture swap, not a tune -- see nodes.py's module
-docstring for the design discussion. `agents` (a swarm size) has no
-equivalent here: there is nothing to size.
+`round` is telemetry only now, not a budget -- there is deliberately no
+constant anywhere in this graph that caps how many times the overseer may
+retry a task (2026-09-10 design call: "we dont need any variable to limit
+number of rounds"). The only thing that can still end a run early is
+LangGraph's own recursion_limit (nodes.py's `_RECURSION_SAFETY_NET`), and
+that exists to catch a genuinely runaway loop (a bug), never to be the
+reason a real, converging request stops.
 """
 import operator
 from typing import Annotated
@@ -27,21 +29,39 @@ from langgraph.graph import add_messages
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     board: Annotated[list[str], operator.add]
-    #: How many router-dispatch rounds have happened so far (starts at 0,
-    #: incremented by router() before each dispatch). Bounds retries via
-    #: MAX_DISPATCH_ROUNDS (nodes.py) the same way the swarm's per-subtask
-    #: round counter did.
+    #: How many times the overseer has been invoked so far (starts at 0,
+    #: incremented by router() on every call). Telemetry/tracing only --
+    #: nothing in this graph reads it to force a stop; see the module
+    #: docstring.
     round: int
-    #: Which specialist the router most recently dispatched to -- one of
-    #: ROLE_NODES (nodes.py), or None before the first dispatch. This is
-    #: also, once a role node has run, "who produced the pending `output`".
+    #: Whichever node MOST RECENTLY produced `output` -- one of ROLE_NODES
+    #: (nodes.py), or None before anything has run. Set by that node itself
+    #: (self-reported), not predicted by router() ahead of time. `_run_role`
+    #: uses `node == <this role>` to tell "I am being re-dispatched, and
+    #: whatever's in `output` is MY previous attempt" apart from "a
+    #: different specialist ran last, unrelated to what I'm about to do."
     node: str | None
-    #: The evaluator's rejection reason for the most recent attempt, fed to
-    #: the next round (router's re-decision AND whichever role node is
-    #: dispatched next). Empty string on round 1 -- nothing to revise yet.
+    #: The evaluator's most recent rejection reason -- cleared back to ""
+    #: on approval, overwritten on the next rejection. Read by both router()
+    #: (deciding what to do about it) and whichever role node runs next
+    #: (revising, or just noting it as background if it was about a
+    #: DIFFERENT specialist's attempt -- see _run_role).
     feedback: str
-    #: The most recently dispatched role node's candidate answer, pending
-    #: evaluation. Not yet trusted -- final_output is the only field a
-    #: caller should treat as the finished result.
+    #: The most recently produced specialist output, pending judgment --
+    #: a plan (from planner) or a candidate final answer (from solver,
+    #: or occasionally summarizer/finder if their own output already
+    #: answers the request). Not yet trusted either way; `final_output`
+    #: is the only field a caller should treat as the finished result.
     output: str | None
+    #: Material finder/summarizer hand forward for planner/solver to use --
+    #: finder APPENDS what it gathered, summarizer REPLACES it with a
+    #: condensed version (agent/pipeline/nodes.py's `_run_role`,
+    #: `context_op`). Empty string until either has run.
+    context: str
+    #: The current plan, once the evaluator has actually approved one --
+    #: distinct from a plan still pending judgment (which lives in
+    #: `output` like anything else awaiting evaluation). None until a plan
+    #: is approved; a task the overseer judges as not needing one just
+    #: never sets this and goes straight to solver.
+    plan: str | None
     final_output: str | None

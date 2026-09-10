@@ -7,8 +7,13 @@ vs-live test split).
 No `agents` parameter anywhere here (2026-09-10): the router/planner/
 solver/summarizer/finder/evaluator graph that replaced the swarm pipeline
 has nothing to size -- see run.py's own module docstring.
+
+_config()'s recursion_limit is sized off nodes.py's _RECURSION_SAFETY_NET
+(2026-09-10, second revision), not a multiple of a round cap -- there is no
+round cap anymore (nodes.py's own module docstring), just a generous, pure
+infra backstop against a genuinely runaway loop.
 """
-from agent.pipeline.nodes import MAX_DISPATCH_ROUNDS
+from agent.pipeline.nodes import _RECURSION_SAFETY_NET
 from agent.pipeline.run import _config, _graph_thread_id, _initial
 
 
@@ -21,13 +26,15 @@ def test_initial_state_matches_the_agentstate_shape_with_empty_start_values():
     assert state["node"] is None
     assert state["feedback"] == ""
     assert state["output"] is None
+    assert state["context"] == ""
+    assert state["plan"] is None
     assert state["final_output"] is None
 
 
-def test_config_sizes_recursion_limit_off_max_dispatch_rounds():
+def test_config_sizes_recursion_limit_off_the_recursion_safety_net(monkeypatch):
     config = _config("thread-1", handler=object())
 
-    assert config["recursion_limit"] == MAX_DISPATCH_ROUNDS * 4
+    assert config["recursion_limit"] == _RECURSION_SAFETY_NET
     assert config["configurable"] == {"thread_id": "thread-1"}
 
 

@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage
 from langfuse import get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler
 
-from agent.pipeline.nodes import MAX_DISPATCH_ROUNDS, ROUTER, app
+from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
 from agent.pipeline.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -31,18 +31,20 @@ def _initial(text: str) -> dict:
         "node": None,
         "feedback": "",
         "output": None,
+        "context": "",
+        "plan": None,
         "final_output": None,
     }
 
 
 def _config(graph_thread_id: str, handler) -> dict:
-    # Each round is router -> one specialist -> evaluator, i.e. up to 3
-    # graph-node visits; MAX_DISPATCH_ROUNDS bounds the router-mediated
-    # retry loop (nodes.py). Same "safe, non-tighter superset" sizing
-    # philosophy as the retired pipeline's identical helper -- pad rather
-    # than cut it close.
+    # The overseer (router) is re-invoked after every node with no cap on
+    # how many times it may retry (nodes.py, 2026-09-10 design call) -- the
+    # only backstop left is LangGraph's own recursion_limit, sized by
+    # nodes.py's _RECURSION_SAFETY_NET as pure infra insurance against a
+    # genuinely runaway loop, not a business rule a real request should hit.
     return {
-        "recursion_limit": MAX_DISPATCH_ROUNDS * 4,
+        "recursion_limit": _RECURSION_SAFETY_NET,
         "configurable": {"thread_id": graph_thread_id},
         "callbacks": [handler],
     }
