@@ -14,6 +14,18 @@ spec is gone with it -- there is no longer a single task route for a turn
 to switch, since each node already routes its own calls (router on
 Task.CHAT_FAST, planner on Task.PLAN, solver on Task.REASON, ...)
 independently of anything a REPL command could select.
+
+Conversation memory (2026-09-10, same day, Phase 2 of claude/otto-tiered-
+memory-design.md): `Session` used to carry conversation history as a plain
+`list[BaseMessage]`, growing every turn with nothing capping it -- that gap
+was flagged, not fixed, when agent/pipeline/run.py's `history` parameter
+was first added. It now keeps a `history_queue` (an `agent.memory.queue.
+TieredQueue`, "history" kind) instead: `history_for_graph()` is what a
+caller hands to `run_pipeline_stream()`/`run_pipeline()`, `record_turn()`
+is what a caller writes a finished turn back with -- see agent/memory/
+wiring.py for the actual reconstruction/formatting logic, kept out of this
+file on purpose (this file's own job stays "session state, slash commands,
+completion, the per-turn renderer", not memory-engine internals).
 """
 
 from __future__ import annotations
@@ -37,6 +49,8 @@ from agent.cli.doctor import health_table, router_view
 from agent.cli.models import models_table
 from agent.cli.route import _chain, _summary
 from agent.cli.ui import err, out
+from agent.memory import wiring as memory_wiring
+from agent.memory.queue import TieredQueue
 from agent.router.llm_provider import all_models
 from agent.router.mapping import Task
 from agent.router.router import NoViableRoute
@@ -45,12 +59,49 @@ from agent.router.router import NoViableRoute
 @dataclass
 class Session:
     ctx: AppContext
-    history: list[BaseMessage] = field(default_factory=list)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     trace_id: str | None = None
     #: Counts turns that actually produced output, for output.py's filenames
     #: -- not every dispatched line (slash commands don't count).
     turn: int = 0
+    #: This session's own bounded conversation memory (module docstring) --
+    #: `init=False`/set in __post_init__ rather than a `field(default_factory=...)`
+    #: because building one needs `session_id`, which isn't available yet
+    #: when dataclass field defaults are evaluated (session_id is itself
+    #: just becoming set at that point, by ITS OWN default_factory, with no
+    #: guaranteed ordering against a sibling field's factory).
+    history_queue: TieredQueue = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.history_queue = memory_wiring.new_history_queue(self.session_id)
+
+    def history_for_graph(self) -> tuple[list[BaseMessage], str]:
+        """(bounded prior messages, compacted-memory context) for this
+        session's NEXT turn -- agent/pipeline/run.py's `history`/
+        `memory_context` parameters. See agent/memory/wiring.py's
+        history_for_graph() for what each half actually contains."""
+        return memory_wiring.history_for_graph(self.history_queue)
+
+    def record_turn(self, human: BaseMessage, ai: BaseMessage | None) -> None:
+        """Write one finished turn into this session's memory -- `ai` is
+        None for a turn that produced no final output (nothing worth
+        remembering as "otto said"), same as chat.py/tui.py already treat
+        an empty `raw_output` as nothing to save to disk."""
+        memory_wiring.record_turn(self.history_queue, human, ai)
+
+    def reset(self) -> None:
+        """New session, new memory -- `/new` (chat.py)/"new session"
+        (tui.py)'s existing "clear history, start fresh" contract, now
+        covering `history_queue` too (a fresh TieredQueue backed by a
+        fresh SQLite file under this new session_id, not the old queue
+        cleared in place -- the old session's compacted history stays on
+        disk, keyed by its own now-abandoned session_id, exactly as
+        harmless and exactly as inaccessible as it always was once a
+        session ended)."""
+        self.session_id = uuid.uuid4().hex
+        self.trace_id = None
+        self.turn = 0
+        self.history_queue = memory_wiring.new_history_queue(self.session_id)
 
 
 # --------------------------------------------------------------------------
@@ -134,10 +185,7 @@ def _score_cmd(session: Session, arg: str) -> None:
 
 
 def _new_cmd(session: Session, arg: str) -> None:
-    session.history.clear()
-    session.session_id = uuid.uuid4().hex
-    session.trace_id = None
-    session.turn = 0
+    session.reset()
     err.print("[muted]new session[/]")
 
 

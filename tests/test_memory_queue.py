@@ -181,6 +181,34 @@ def test_current_view_shows_only_recent_when_nothing_has_overflowed(store):
     assert tq.current_view() == "RECENT:\nhello"
 
 
+def test_recent_items_returns_x_as_a_plain_list(store):
+    tq = q.TieredQueue("history", store, summarize=lambda p: "", x_budget=1000, y_budget=1000)
+    tq.append("first")
+    tq.append("second")
+
+    assert tq.recent_items == ["first", "second"]
+    # a plain, independent copy -- mutating it must not touch the queue
+    tq.recent_items.append("third")
+    assert tq.recent_items == ["first", "second"]
+
+
+def test_earlier_view_is_empty_when_only_x_has_content(store):
+    tq = q.TieredQueue("history", store, summarize=lambda p: "", x_budget=1000, y_budget=1000)
+    tq.append("recent stuff")
+
+    assert tq.earlier_view() == ""
+
+
+def test_earlier_view_matches_current_view_minus_recent(store):
+    tq = q.TieredQueue("history", store, summarize=lambda p: "", x_budget=1000, y_budget=1000)
+    tq._y_bullets = [q.NewBullet(text="a summary", hash_refs=["h1"])]
+    tq._y_raw = ["not yet summarized text"]
+    tq._x = ["newest text"]
+
+    assert tq.earlier_view() == "EARLIER (summarized):\n- a summary\n\nEARLIER (not yet summarized):\nnot yet summarized text"
+    assert tq.current_view() == tq.earlier_view() + "\n\nRECENT:\nnewest text"
+
+
 def test_current_view_includes_y_raw_not_yet_summarized(store):
     tq = q.TieredQueue("history", store, summarize=lambda p: "", x_budget=1000, y_budget=1000)
     tq._y_raw = ["earlier stuff"]

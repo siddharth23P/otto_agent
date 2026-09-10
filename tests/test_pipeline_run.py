@@ -87,6 +87,23 @@ def test_initial_with_empty_history_list_behaves_like_no_history():
     assert [m.content for m in state["messages"]] == ["do the thing"]
 
 
+def test_initial_seeds_context_from_memory_context(monkeypatch):
+    # Phase 2 of claude/otto-tiered-memory-design.md: whatever a session's
+    # TieredQueue has compacted away (agent/memory/wiring.py's
+    # history_for_graph()) lands in state["context"] -- the SAME field
+    # every prompt-builder in nodes.py already shows via "CONTEXT GATHERED
+    # SO FAR:", not a new prompt section.
+    state = _initial("do the thing", memory_context="EARLIER CONVERSATION (compacted):\n- talked about X")
+
+    assert state["context"] == "EARLIER CONVERSATION (compacted):\n- talked about X"
+
+
+def test_initial_with_no_memory_context_argument_is_unchanged_from_before():
+    # No `memory_context` kwarg at all -- every pre-existing caller.
+    state = _initial("do the thing")
+    assert state["context"] == ""
+
+
 def test_config_sizes_recursion_limit_off_the_recursion_safety_net(monkeypatch):
     config = _config("thread-1", handler=object())
 
