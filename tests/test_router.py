@@ -1,13 +1,14 @@
-"""Tests for resolution — Phase 2.
+"""Tests for resolution — Phase 2, trimmed for Inception-only routing (2026-09-09).
 
 Nothing here needs an API key, a network connection, or a vendor SDK. That is
 the point of the `Catalogue` protocol: `FakeCatalogue` is a dict, and "provider
 is configured" means "provider is a key in that dict".
 
-Fixtures use the real `TASK_ROUTES`. Routing behaviour is only interesting
-against the table you actually ship, and the table already contains both
-single-candidate chains (CHAT_FAST, CODE_COMPLETE) and three- and
-four-candidate ones (REASON, PLAN, SUMMARIZE).
+Fixtures use the real `TASK_ROUTES`. Every chain in the shipped table is now a
+single pinned Inception candidate, so the interesting coverage moved: less
+about which of several vendors wins, more about a pin resolving to the EXACT
+model it names once more than one same-vendor model can satisfy it -- the gap
+that mattered the day mercury-2 and mercury-2.5 were both live at once.
 """
 
 from __future__ import annotations
@@ -38,9 +39,7 @@ from agent.router.router import (
     render,
 )
 
-CHAT, TOOLS = Capability.CHAT, Capability.TOOLS
-THINKS = Capability.REASONING   # every gemini-* is tagged REASONING by the
-                                # provider heuristic; fixtures must match
+CHAT = Capability.CHAT
 
 
 def model(id: str, provider: str, caps, ctx: int) -> ModelInfo:
@@ -55,25 +54,21 @@ def model(id: str, provider: str, caps, ctx: int) -> ModelInfo:
     )
 
 
-MERCURY = model("mercury-2", "inception", {CHAT}, 128_000)
+MERCURY_25 = model("mercury-2.5", "inception", {CHAT}, 260_000)
+MERCURY_2 = model("mercury-2", "inception", {CHAT}, 128_000)
 EDIT2 = model("mercury-edit-2", "inception", {Capability.FIM, Capability.EDIT}, 128_000)
-FLASH = model("gemini-2.5-flash", "gemini", {CHAT, TOOLS, THINKS}, 1_048_576)
-PRO = model("gemini-2.5-pro", "gemini", {CHAT, TOOLS, THINKS}, 1_048_576)
-SMALL = model("gemini-1.0-flash", "gemini", {CHAT, TOOLS, THINKS}, 32_000)
-OPUS = model("claude-opus-4-6", "anthropic", {CHAT, TOOLS, Capability.REASONING}, 200_000)
-HAIKU = model("claude-haiku-4-5", "anthropic", {CHAT, TOOLS, Capability.REASONING}, 200_000)
 
-INCEPTION_ONLY = {"inception": [MERCURY, EDIT2]}
+DEFAULT_CATALOGUE = {"inception": [MERCURY_25, EDIT2]}
 
 
 def catalogue(**providers) -> FakeCatalogue:
     """A fake catalogue. Absent vendor == unconfigured.
 
     Inception is always present because `__init__` refuses to construct
-    without it (3.2). Pass `inception=[]` for "configured but offering
-    nothing" -- that is how you reach NoViableRoute now.
+    without it. Pass `inception=[]` for "configured but offering nothing" --
+    that is how you reach NoViableRoute now.
     """
-    providers.setdefault("inception", [MERCURY, EDIT2])
+    providers.setdefault("inception", [MERCURY_25, EDIT2])
     return FakeCatalogue(providers)
 
 
@@ -87,51 +82,76 @@ def router(**providers) -> Router:
 
 
 def test_first_candidate_wins_with_no_skips():
-    d = router(**INCEPTION_ONLY).resolve(Task.CHAT_FAST)
-    assert d.model.id == "mercury-2"
+    d = router().resolve(Task.CHAT_FAST)
+    assert d.model.id == "mercury-2.5"
     assert d.index == 0
     assert d.fell_back is False
     assert d.skipped == ()
 
 
-def test_falls_through_to_the_next_candidate():
-    """PLAN leads with a Gemini query; with no Gemini key it must fall back."""
-    d = router(**INCEPTION_ONLY).resolve(Task.PLAN)
-    assert d.model.id == "mercury-2"
-    assert d.fell_back is True
-    assert len(d.skipped) == 1
-    assert "GEMINI_API_KEY" in d.skipped[0].reason
-
-
-def test_a_configured_secondary_wins_when_it_leads_the_chain():
-    d = router(inception=[MERCURY], gemini=[FLASH]).resolve(Task.PLAN)
-    assert d.provider == "gemini"
-    assert d.model.id == "gemini-2.5-flash"
-    assert d.fell_back is False
-
-
-def test_mercury_leads_the_chat_chains_even_when_others_are_available():
-    """The cost policy, asserted. Secondaries are failover, not preference."""
-    d = router(inception=[MERCURY], anthropic=[OPUS, HAIKU]).resolve(Task.REASON)
-    assert d.provider == "inception"
-    assert d.skipped == ()
-
-
-def test_no_viable_route_names_every_skip():
-    """Inception configured but offering nothing, no secondary at all."""
+def test_no_viable_route_names_the_skip():
+    """Inception configured but offering nothing -- no secondary left to
+    fall back to, so this is the only way to reach NoViableRoute now."""
     with pytest.raises(NoViableRoute) as exc:
         router(inception=[]).resolve(Task.CHAT_FAST)
     message = str(exc.value)
-    for env in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
-        assert env in message, message
-    assert "no model matched" in message          # the Inception candidate
-    assert len(exc.value.skipped) == len(TASK_ROUTES[Task.CHAT_FAST])
+    assert "no model matched" in message
+    assert len(exc.value.skipped) == len(TASK_ROUTES[Task.CHAT_FAST]) == 1
 
 
 def test_skips_are_ordered_and_indexed():
     with pytest.raises(NoViableRoute) as exc:
         router(inception=[]).resolve(Task.CHAT_FAST)
-    assert [s.index for s in exc.value.skipped] == [0, 1, 2, 3]
+    assert [s.index for s in exc.value.skipped] == [0]
+
+
+# ---------------------------------------------------------------------------
+# Pinning: a pin names one exact model, never a tier to search within
+# ---------------------------------------------------------------------------
+#
+# This is the gap that mattered in practice: mercury-2 and mercury-2.5 are
+# both CHAT-capable Inception models, both live in the catalogue at once once
+# 2.5 ships. A pinned Candidate must resolve to the id it names, not to
+# "whichever Inception model matches CHAT", or updating a route's spec string
+# would not reliably change what actually gets called.
+
+
+def test_pin_resolves_to_its_exact_id_not_whichever_matches():
+    """Two CHAT-capable inception models in the pool; the pin must not pick
+    the other one even though it also satisfies `requires`."""
+    d = router(inception=[MERCURY_2, MERCURY_25, EDIT2]).resolve(Task.CHAT_FAST)
+    assert d.model.id == "mercury-2.5"
+
+
+def test_pin_ignores_context_window_ordering():
+    """Before the fix, `_select` sorted matches by context window under
+    `Preference.SMALLEST_CONTEXT` (the default) -- with mercury-2 (128k)
+    smaller than mercury-2.5 (260k), that sort would have silently preferred
+    the OLDER model. A pin must not be swayed by window size at all."""
+    d = router(inception=[MERCURY_25, MERCURY_2]).resolve(Task.CHAT_FAST)
+    assert d.model.id == "mercury-2.5"
+
+    d2 = router(inception=[MERCURY_2, MERCURY_25]).resolve(Task.CHAT_FAST)
+    assert d2.model.id == "mercury-2.5", "pool order must not decide either"
+
+
+def test_pin_to_a_missing_id_is_a_clean_skip_not_a_wrong_match():
+    """mercury-2.5 pinned, but the pool only has mercury-2 (e.g. an account
+    not yet upgraded) -- must skip, never silently substitute."""
+    d = router(inception=[MERCURY_2, EDIT2])
+    with pytest.raises(NoViableRoute) as exc:
+        d.resolve(Task.CHAT_FAST)
+    assert "no model matched" in str(exc.value)
+
+
+def test_pin_still_checks_requires():
+    """A pinned id present in the pool but missing the required capability
+    (e.g. a provider bug, or a model whose metadata is wrong) must still be
+    treated as no match -- a pin does not bypass capability gating."""
+    broken = model("mercury-2.5", "inception", set(), 260_000)  # no CHAT
+    d = router(inception=[broken])
+    with pytest.raises(NoViableRoute):
+        d.resolve(Task.CHAT_FAST)
 
 
 # ---------------------------------------------------------------------------
@@ -139,26 +159,15 @@ def test_skips_are_ordered_and_indexed():
 # ---------------------------------------------------------------------------
 
 
-def test_name_contains_picks_the_tier_not_the_flagship():
-    """The whole reason name_contains exists: both models share a window,
-    so no context rule could tell them apart."""
-    assert OPUS.context_window == HAIKU.context_window
-    d = router(inception=[], anthropic=[OPUS, HAIKU]).resolve(Task.REASON)
-    assert d.model.id == "claude-haiku-4-5"
-
-
 def test_min_context_excludes_a_model_that_otherwise_qualifies():
-    """SMALL has the right capabilities and the right name, but a 32k window,
-    and PLAN demands 900k."""
-    d = router(inception=[MERCURY], gemini=[SMALL]).resolve(Task.PLAN)
-    assert d.provider == "inception"
-    assert "gemini" in d.skipped[0].target
+    c = Candidate(provider="inception", requires=frozenset({CHAT}), min_context=900_000)
+    assert router()._select([MERCURY_25], c) is None       # 260k < 900k
 
 
 def test_missing_capability_is_skipped():
-    no_tools = model("gemini-2.5-flash", "gemini", {CHAT}, 1_048_576)
-    d = router(inception=[MERCURY], gemini=[no_tools]).resolve(Task.PLAN)
-    assert d.provider == "inception"          # PLAN's gemini candidate needs TOOLS
+    no_chat = model("mercury-2.5", "inception", set(), 260_000)
+    c = Candidate(provider="inception", requires=frozenset({CHAT}))
+    assert router()._select([no_chat], c) is None
 
 
 def test_open_query_is_refused_rather_than_silently_wrong():
@@ -169,34 +178,38 @@ def test_open_query_is_refused_rather_than_silently_wrong():
 
 
 # ---------------------------------------------------------------------------
-# _select: the tiebreak
+# _select: the tiebreak for QUERY candidates
 # ---------------------------------------------------------------------------
 #
-# Exercised directly because no shipped route uses LARGEST_CONTEXT -- the cost
-# policy makes SMALLEST the default everywhere.
+# No shipped route is a query anymore -- every candidate in TASK_ROUTES is a
+# pin -- but the mechanism is still real code, reachable the day a route goes
+# back to "whichever Mercury variant fits" instead of naming one. Exercised
+# directly rather than through a route.
 
 
 @pytest.mark.parametrize("prefer, expected", [
-    (Preference.SMALLEST_CONTEXT, "gemini-1.0-flash"),
-    (Preference.LARGEST_CONTEXT, "gemini-2.5-flash"),
+    (Preference.SMALLEST_CONTEXT, "mercury-2"),
+    (Preference.LARGEST_CONTEXT, "mercury-2.5"),
 ])
 def test_prefer_chooses_the_end_of_the_range(prefer, expected):
-    c = Candidate(provider="gemini", requires=frozenset({CHAT}), prefer=prefer)
-    chosen = router(inception=[])._select([FLASH, SMALL], c)
+    c = Candidate(provider="inception", requires=frozenset({CHAT}), prefer=prefer)
+    chosen = router()._select([MERCURY_2, MERCURY_25], c)
     assert chosen.id == expected
 
 
 def test_equal_context_windows_break_on_id_deterministically():
-    c = Candidate(provider="gemini", requires=frozenset({CHAT}))
-    r = router(inception=[])
-    first = r._select([PRO, FLASH], c)
-    second = r._select([FLASH, PRO], c)          # pool order reversed
+    tied_a = model("mercury-2.5", "inception", {CHAT}, 260_000)
+    tied_b = model("mercury-2.5-preview", "inception", {CHAT}, 260_000)
+    c = Candidate(provider="inception", requires=frozenset({CHAT}))
+    r = router()
+    first = r._select([tied_a, tied_b], c)
+    second = r._select([tied_b, tied_a], c)          # pool order reversed
     assert first.id == second.id, "catalogue order must not decide"
 
 
 def test_no_match_returns_none():
-    c = Candidate(provider="gemini", requires=frozenset({Capability.EMBEDDINGS}))
-    assert router(inception=[])._select([FLASH, PRO], c) is None
+    c = Candidate(provider="inception", requires=frozenset({Capability.EMBEDDINGS}))
+    assert router()._select([MERCURY_25, MERCURY_2], c) is None
 
 
 # ---------------------------------------------------------------------------
@@ -206,21 +219,21 @@ def test_no_match_returns_none():
 
 def test_params_are_copied_not_shared():
     """A caller mutating decision.params must not rewrite the routing table."""
-    d = router(**INCEPTION_ONLY).resolve(Task.CHAT_FAST)
+    d = router().resolve(Task.CHAT_FAST)
     original = dict(TASK_ROUTES[Task.CHAT_FAST][0].params)
     d.params["temperature"] = 99
     assert dict(TASK_ROUTES[Task.CHAT_FAST][0].params) == original
 
 
 def test_endpoint_is_carried_through():
-    d = router(**INCEPTION_ONLY).resolve(Task.CODE_COMPLETE)
+    d = router().resolve(Task.CODE_COMPLETE)
     assert d.endpoint is Endpoint.FIM
     assert d.model.id == "mercury-edit-2"
 
 
 def test_decision_carries_the_whole_model_not_just_an_id():
-    d = router(**INCEPTION_ONLY).resolve(Task.CHAT_FAST)
-    assert d.model.context_window == 128_000      # Phase 6 wants this in the trace
+    d = router().resolve(Task.CHAT_FAST)
+    assert d.model.context_window == 260_000      # Phase 6 wants this in the trace
 
 
 # ---------------------------------------------------------------------------
@@ -229,12 +242,12 @@ def test_decision_carries_the_whole_model_not_just_an_id():
 
 
 @pytest.mark.parametrize("candidate, expected", [
-    (Candidate(spec="inception:mercury-2", requires=frozenset({CHAT})),
-     "inception:mercury-2"),
-    (Candidate(provider="anthropic", name_contains="haiku", requires=frozenset({CHAT})),
-     "anthropic:*haiku*"),
-    (Candidate(provider="openai", requires=frozenset({CHAT})),
-     "openai:*"),
+    (Candidate(spec="inception:mercury-2.5", requires=frozenset({CHAT})),
+     "inception:mercury-2.5"),
+    (Candidate(provider="inception", name_contains="edit", requires=frozenset({CHAT})),
+     "inception:*edit*"),
+    (Candidate(provider="inception", requires=frozenset({CHAT})),
+     "inception:*"),
     (Candidate(requires=frozenset({CHAT})),
      "any:*"),
 ])
@@ -243,7 +256,7 @@ def test_render(candidate, expected):
 
 
 def test_skip_renders_on_one_line():
-    assert str(Skip(2, "openai:*mini*", "no key")) == "[2] openai:*mini*: no key"
+    assert str(Skip(0, "inception:mercury-2.5", "no key")) == "[0] inception:mercury-2.5: no key"
 
 
 # ---------------------------------------------------------------------------
@@ -294,97 +307,44 @@ def test_base_is_configured_reads_the_env_without_constructing(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Construction and policy (Phase 3)
+# Construction and policy
 # ---------------------------------------------------------------------------
 
 
 def test_requires_inception():
     with pytest.raises(AuthError) as exc:
-        Router(catalogue=FakeCatalogue({"gemini": [FLASH]}))
+        Router(catalogue=FakeCatalogue({}))
     assert "INCEPTION_API_KEY" in str(exc.value)
-
-
-def test_no_secondary_when_only_inception_is_configured():
-    r = router()
-    assert r.secondary is None
-    assert r.ignored == ()
-
-
-def test_secondary_follows_precedence_not_configuration_order():
-    """OPTIONAL declares the order; which keys happen to be set does not."""
-    r = router(anthropic=[HAIKU], openai=[], gemini=[FLASH])
-    assert r.secondary == Router.OPTIONAL[0]
-    assert set(r.ignored) == set(Router.OPTIONAL[1:])
-
-
-def test_a_single_optional_provider_is_the_secondary():
-    r = router(openai=[])
-    assert r.secondary == "openai"
-    assert r.ignored == ()
-
-
-def test_non_selected_secondary_is_skipped_with_a_policy_reason():
-    """The binding half of the cost policy: a chain reaches at most two vendors."""
-    r = router(gemini=[FLASH], anthropic=[HAIKU])
-    assert r.secondary == "gemini"
-    with pytest.raises(NoViableRoute) as exc:
-        Router(catalogue=FakeCatalogue({"inception": [], "gemini": [],
-                                        "anthropic": [HAIKU]})).resolve(Task.REASON)
-    reasons = [s.reason for s in exc.value.skipped]
-    assert any("not the selected secondary" in r for r in reasons), reasons
 
 
 def test_strict_is_keyword_only():
     with pytest.raises(TypeError):
-        Router(FakeCatalogue({"inception": [MERCURY]}), True)   # type: ignore[misc]
+        Router(FakeCatalogue({"inception": [MERCURY_25]}), True)   # type: ignore[misc]
 
 
-def test_optional_precedence_is_the_declared_policy():
-    """The order is a deliberate cost decision, not an implementation detail.
-
-    Gemini leads because Flash is the cheapest tier with the widest window.
-    Changing this line changes which vendor a swarm reaches for, so changing it
-    should require changing this test too.
-    """
-    assert Router.REQUIRED == "inception"
-    assert Router.OPTIONAL == ("gemini", "openai", "anthropic")
+def test_usable_with_inception_only():
+    assert router().usable() == ("inception",)
 
 
-def test_configured_is_a_snapshot_not_a_live_lookup():
-    """`_configured` is read once, and `_match` must consult it.
+def test_optional_is_permanently_empty():
+    """The policy this change actually encodes: there is no longer a second
+    vendor for `secondary`/`ignored` to ever resolve to. Phase 8's plain hive
+    (agent/graph/nodes.py, agent/graph/run.py -- untouched here) still reads
+    `ROUTER.secondary`/`ROUTER.REQUIRED` for its `secondary_seats` diversity
+    feature; this is what makes that read always come back `None` instead of
+    raising `AttributeError`."""
+    assert Router.OPTIONAL == ()
 
-    Two sources of truth for "is this vendor configured" is one too many: with
-    a live lookup in `_match`, a key appearing mid-run makes the secondary
-    selection and the skip reasons disagree about the same vendor, inside a
-    single resolve.
-    """
 
-    class Flipping:
-        """A catalogue where Gemini shows up after construction."""
-
-        def __init__(self) -> None:
-            self.gemini_visible = False
-
-        def is_configured(self, provider: str) -> bool:
-            if provider == "gemini":
-                return self.gemini_visible
-            return provider == "inception"
-
-        def models(self, provider: str) -> list[ModelInfo]:
-            return {"inception": [], "gemini": [FLASH]}.get(provider, [])
-
-    catalogue = Flipping()
-    r = Router(catalogue=catalogue)
+def test_secondary_and_ignored_stay_empty_even_if_a_stray_key_is_set(monkeypatch):
+    """`_snapshot` walks `provider_names()` (the real registry), not whatever
+    a catalogue happens to claim -- so even a catalogue that reports some
+    other vendor as configured cannot promote it, because that vendor was
+    never registered to begin with."""
+    monkeypatch.setattr(router_mod, "provider_names", lambda: ("inception", "not-really-registered"))
+    r = Router(catalogue=FakeCatalogue({"inception": [MERCURY_25], "not-really-registered": [MERCURY_25]}))
     assert r.secondary is None
-    assert "gemini" not in r._configured
-
-    catalogue.gemini_visible = True          # a key appears mid-run
-
-    assert r.secondary is None               # the snapshot does not move
-    with pytest.raises(NoViableRoute) as exc:
-        r.resolve(Task.PLAN)                 # PLAN leads with a Gemini query
-    reasons = [s.reason for s in exc.value.skipped]
-    assert any("GEMINI_API_KEY not set" in reason for reason in reasons), reasons
+    assert r.ignored == ()
 
 
 # ---------------------------------------------------------------------------
@@ -393,8 +353,7 @@ def test_configured_is_a_snapshot_not_a_live_lookup():
 #
 # `Catalogue` covers reading the catalogue, but these methods call
 # get_provider() to *construct* a provider, which needs a real key. So the
-# seam here is a monkeypatched get_provider. Four call sites is fine; if this
-# spreads to a dozen tests, promote it to an injected provider_factory.
+# seam here is a monkeypatched get_provider.
 
 
 class FakeProvider:
@@ -434,7 +393,7 @@ def provider(monkeypatch) -> FakeProvider:
 
 def test_chat_model_passes_the_resolved_id_and_route_params(provider):
     assert router().chat_model(Task.CHAT_FAST) == "a-chat-model"
-    assert provider.chat["model"] == "mercury-2"
+    assert provider.chat["model"] == "mercury-2.5"
     assert provider.chat["temperature"] == 0.2
     assert provider.chat["diffusing"] is True
 
@@ -503,31 +462,49 @@ def test_code_edit_has_no_instruction_parameter():
 
 
 # --- strict -----------------------------------------------------------------
+#
+# No shipped chain has a second candidate anymore, so `strict` can no longer
+# be demonstrated against a real route falling back -- it is exercised
+# directly against a hand-built two-candidate chain instead.
 
 
-def test_strict_raises_when_the_chain_falls_back():
-    r = Router(catalogue=catalogue(), strict=True)       # no gemini
+def test_strict_raises_when_the_chain_falls_back(monkeypatch):
+    chain = (
+        Candidate(spec="inception:mercury-2", requires=frozenset({CHAT})),
+        Candidate(spec="inception:mercury-2.5", requires=frozenset({CHAT})),
+    )
+    monkeypatch.setitem(TASK_ROUTES, Task.CHAT_FAST, chain)
+    r = Router(catalogue=catalogue(inception=[MERCURY_25]), strict=True)  # mercury-2 absent
     with pytest.raises(RoutingDegraded) as exc:
-        r.resolve(Task.PLAN)
-    assert "GEMINI_API_KEY" in str(exc.value)
-    assert exc.value.task is Task.PLAN
+        r.resolve(Task.CHAT_FAST)
+    assert exc.value.task is Task.CHAT_FAST
 
 
 def test_strict_is_quiet_when_the_first_candidate_wins():
     Router(catalogue=catalogue(), strict=True).resolve(Task.CHAT_FAST)
 
 
-def test_strict_reaches_every_entry_point(provider):
+def test_strict_reaches_every_entry_point(provider, monkeypatch):
     """The flag lives in resolve(), so chat_model inherits it rather than
     needing its own check."""
-    r = Router(catalogue=catalogue(), strict=True)
+    chain = (
+        Candidate(spec="inception:mercury-2", requires=frozenset({CHAT})),
+        Candidate(spec="inception:mercury-2.5", requires=frozenset({CHAT})),
+    )
+    monkeypatch.setitem(TASK_ROUTES, Task.CHAT_FAST, chain)
+    r = Router(catalogue=catalogue(inception=[MERCURY_25]), strict=True)
     with pytest.raises(RoutingDegraded):
-        r.chat_model(Task.PLAN)
+        r.chat_model(Task.CHAT_FAST)
     assert provider.chat == {}, "must fail before constructing anything"
 
 
-def test_non_strict_falls_back_silently_but_records_it():
-    d = router().resolve(Task.PLAN)
+def test_non_strict_falls_back_silently_but_records_it(monkeypatch):
+    chain = (
+        Candidate(spec="inception:mercury-2", requires=frozenset({CHAT})),
+        Candidate(spec="inception:mercury-2.5", requires=frozenset({CHAT})),
+    )
+    monkeypatch.setitem(TASK_ROUTES, Task.CHAT_FAST, chain)
+    d = Router(catalogue=catalogue(inception=[MERCURY_25])).resolve(Task.CHAT_FAST)
     assert d.fell_back is True
     assert d.skipped
 
@@ -550,20 +527,13 @@ def test_code_edit_returns_text_not_a_completion(provider):
 #
 # `prewarm()` and `reset()` both walk the catalogue rather than the routing
 # table, so the fakes here are catalogues with extra behaviour bolted on --
-# a call counter, an exception, or a `reset()` that actually mutates state --
-# rather than new `Candidate`/`Task` fixtures.
+# a call counter, an exception, or a `reset()` that actually mutates state.
 
 
 @dataclass
 class CountingCatalogue(FakeCatalogue):
-    """Records every provider `models()` was actually called for.
+    """Records every provider `models()` was actually called for."""
 
-    `prewarm()`'s whole job is walking `usable()` instead of `_configured` --
-    a provider that is configured but not the selected secondary must never
-    reach the network. A counter catches that more precisely than "no
-    exception was raised": it proves the call was skipped, not just that it
-    happened to succeed.
-    """
     calls: Counter = field(default_factory=Counter)
 
     def models(self, provider):
@@ -573,7 +543,7 @@ class CountingCatalogue(FakeCatalogue):
 
 @dataclass
 class ExplodingCatalogue(FakeCatalogue):
-    """A catalogue whose Gemini entry is configured but unreachable.
+    """A catalogue whose Inception entry is configured but unreachable.
 
     Distinct from "not configured": `is_configured` says yes, but the network
     call behind `models()` fails, the way an expired key or a vendor outage
@@ -582,67 +552,32 @@ class ExplodingCatalogue(FakeCatalogue):
     """
 
     def models(self, provider):
-        if provider == "gemini":
-            raise ProviderError("gemini is down")
-        return super().models(provider)
+        raise ProviderError("inception is down")
 
 
-def test_prewarm_touches_only_reachable_providers():
-    """Configured-but-ignored (anthropic here) must never be called.
-
-    Gemini leads OPTIONAL, so with inception + anthropic + gemini all
-    configured, anthropic is `ignored`, not `secondary` -- prewarm must walk
-    `usable()`, not every configured provider.
-    """
-    cat = CountingCatalogue({"inception": [MERCURY], "anthropic": [HAIKU], "gemini": [FLASH]})
+def test_prewarm_touches_the_only_provider():
+    cat = CountingCatalogue({"inception": [MERCURY_25]})
     r = Router(catalogue=cat)
 
     failures = r.prewarm()
 
     assert failures == {}
-    assert cat.calls == Counter({"inception": 1, "gemini": 1})
-    assert "anthropic" not in cat.calls
+    assert cat.calls == Counter({"inception": 1})
 
 
 def test_prewarm_reports_a_dead_provider_instead_of_raising():
-    """A ProviderError from one provider must not stop the others or the caller."""
-    cat = ExplodingCatalogue({"inception": [MERCURY], "gemini": [FLASH]})
+    """A ProviderError must not stop the caller."""
+    cat = ExplodingCatalogue({"inception": [MERCURY_25]})
     r = Router(catalogue=cat)
 
     failures = r.prewarm()
 
-    assert failures == {"gemini": "gemini is down"}
+    assert failures == {"inception": "inception is down"}
 
 
-def test_usable_with_inception_only():
-    """No secondary configured: usable() is Inception alone, not every vendor."""
+def test_usable_is_the_configured_snapshot():
     r = router()
     assert r.usable() == ("inception",)
-
-
-@dataclass
-class PromotableCatalogue(FakeCatalogue):
-    """A catalogue whose `reset()` picks up a key that appeared after `__init__`.
-
-    `FakeCatalogue.reset()` is a no-op, which is right for tests that never
-    touch reset -- but `Router.reset()` itself needs a catalogue where
-    resetting actually changes what `is_configured` reports, the way
-    `RegistryCatalogue.reset()` clearing the provider cache lets a newly-set
-    env var be picked up.
-    """
-
-    def reset(self) -> None:
-        self.data = {**self.data, "gemini": [FLASH]}
-
-
-def test_reset_promotes_a_new_secondary():
-    cat = PromotableCatalogue({"inception": [MERCURY]})
-    r = Router(catalogue=cat)
-    assert r.secondary is None                # gemini not configured yet
-
-    r.reset()
-
-    assert r.secondary == "gemini"
 
 
 @dataclass
@@ -660,7 +595,7 @@ class VanishingCatalogue(FakeCatalogue):
 
 
 def test_reset_raises_when_inception_disappears():
-    cat = VanishingCatalogue({"inception": [MERCURY]})
+    cat = VanishingCatalogue({"inception": [MERCURY_25]})
     r = Router(catalogue=cat)
 
     with pytest.raises(AuthError):

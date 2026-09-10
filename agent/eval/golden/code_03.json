@@ -1,0 +1,6 @@
+{
+  "id": "code_03",
+  "domain": "code",
+  "prompt": "Write a Python function `reverse_words(s: str) -> str` that reverses the order of the words in a sentence, keeping each word itself unchanged. Words are separated by single spaces, and the input has no leading or trailing whitespace.",
+  "checker": "assert reverse_words('hello world') == 'world hello'\nassert reverse_words('the quick brown fox') == 'fox brown quick the'\nassert reverse_words('single') == 'single'\nprint('OK')\n"
+}

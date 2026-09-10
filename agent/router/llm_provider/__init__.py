@@ -1,8 +1,10 @@
-"""Provider registry -- the one place that knows all four vendors.
+"""Provider registry -- Inception is the only vendor Otto knows.
 
-Providers are imported lazily. Importing this package must stay cheap: a CLI
-that pulls in four vendor SDKs before printing `--help` feels broken, and a
-missing optional dependency should break one provider, not the whole app.
+Still a registry, not a hardcoded import: a second vendor showing up later is
+a dict entry here, not a rewrite of every call site that reaches through
+get_provider()/provider_names(). Importing this package stays cheap for the
+same reason it always did -- lazy import, so a missing optional dependency
+breaks one provider, not the whole app.
 """
 
 from __future__ import annotations
@@ -56,14 +58,13 @@ __all__ = [
     "reset",
 ]
 
-#: Used when OTTO_DEFAULT_MODEL is unset. Mercury 2 is Inception's chat model.
-FALLBACK_MODEL_SPEC = "inception:mercury-2"
+#: Used when OTTO_DEFAULT_MODEL is unset. Mercury 2.5 is Inception's current
+#: chat model (2026-09-09; mercury-2 is still documented but no longer what
+#: a fresh install should reach for).
+FALLBACK_MODEL_SPEC = "inception:mercury-2.5"
 
 _PROVIDER_MODULES: dict[str, tuple[str, str]] = {
     "inception": (".inception_provider", "InceptionProvider"),
-    "openai": (".openai_provider", "OpenAIProvider"),
-    "anthropic": (".anthropic_provider", "AnthropicProvider"),
-    "gemini": (".gemini_provider", "GeminiProvider"),
 }
 
 
@@ -151,7 +152,7 @@ def all_models(capability: Capability | None = None) -> list[ModelInfo]:
         try:
             models.extend(get_provider(name).list_models(capability))
         except ProviderError:
-            # One dead key must not blank out the other three.
+            # One dead key must not blank out the rest.
             continue
     return models
 

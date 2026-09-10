@@ -1,0 +1,6 @@
+{
+  "id": "code_01",
+  "domain": "code",
+  "prompt": "Write a Python function `is_prime(n: int) -> bool` that returns True if n is a prime number and False otherwise. 1 and numbers less than 1 are not prime.",
+  "checker": "assert is_prime(2) == True\nassert is_prime(1) == False\nassert is_prime(0) == False\nassert is_prime(-5) == False\nassert is_prime(17) == True\nassert is_prime(18) == False\nassert is_prime(97) == True\nprint('OK')\n"
+}

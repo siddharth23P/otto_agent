@@ -80,8 +80,32 @@ def test_inception_is_the_floor_of_every_chat_chain():
         specs = [c.spec for c in TASK_ROUTES[task] if c.spec]
         assert any(s.startswith("inception:") for s in specs), (
             f"{task} has no pinned Inception candidate, so it can raise "
-            f"NoViableRoute when no optional provider is configured"
+            f"NoViableRoute when Inception itself is unreachable"
         )
+
+
+def test_every_route_is_inception_only():
+    """Otto is Inception-only (2026-09-09) -- every candidate in every chain
+    is now a pinned Inception spec. This is the property that made the
+    anthropic/openai/gemini provider modules and their TASK_ROUTES entries
+    deletable rather than just unused: nothing left in the table can resolve
+    against them."""
+    for task, chain in TASK_ROUTES.items():
+        for i, c in enumerate(chain):
+            assert c.provider_name == "inception", f"{task.name}[{i}]: {c.provider_name!r}"
+
+
+def test_chat_chains_are_pinned_to_mercury_2_5():
+    """The point of today's change: not just "Inception", the CURRENT
+    generation. A route still pinned to mercury-2 would keep working (both
+    ids are live), but silently miss the quality Mercury 2.5 exists for."""
+    chat_tasks = [
+        t for t, chain in TASK_ROUTES.items()
+        if all(c.endpoint is Endpoint.CHAT for c in chain)
+    ]
+    for task in chat_tasks:
+        specs = [c.spec for c in TASK_ROUTES[task]]
+        assert specs == ["inception:mercury-2.5"], f"{task}: {specs}"
 
 
 # ---------------------------------------------------------------------------
@@ -127,14 +151,20 @@ REJECTED = [
                  "needs", id="endpoint-capability-not-required"),
 
     # --- endpoints only Inception implements ---
+    # openai/anthropic no longer being KNOWN_PROVIDERS members at all means
+    # these two now fail one check earlier than they used to ("unknown
+    # provider" instead of "inception-only") -- there is no longer a
+    # *registered* non-Inception vendor left to exercise the inception-only
+    # branch specifically against. Either way the table is correctly
+    # rejected, which is the property these cases actually guard.
     pytest.param({Task.CODE_COMPLETE: (Candidate(spec="openai:gpt-4o",
                                                  requires=frozenset({Capability.FIM}),
                                                  endpoint=Endpoint.FIM),)},
-                 "inception-only", id="fim-pinned-to-another-vendor"),
+                 "unknown provider", id="fim-pinned-to-an-unregistered-vendor"),
     pytest.param({Task.CODE_EDIT: (Candidate(provider="anthropic",
                                              requires=frozenset({Capability.EDIT}),
                                              endpoint=Endpoint.EDIT),)},
-                 "inception-only", id="edit-scoped-to-another-vendor"),
+                 "unknown provider", id="edit-scoped-to-an-unregistered-vendor"),
     pytest.param({Task.CODE_COMPLETE: (Candidate(requires=frozenset({Capability.FIM}),
                                                  endpoint=Endpoint.FIM),)},
                  "open query", id="fim-as-an-open-query"),
@@ -149,10 +179,10 @@ REJECTED = [
     pytest.param({Task.CHAT_FAST: (Candidate(spec="inception:mercury-2", requires=CHAT,
                                              min_context=-5),)},
                  "must be positive", id="min-context-is-negative"),
-    pytest.param({Task.CHAT_FAST: (Candidate(provider="gemini", requires=CHAT,
+    pytest.param({Task.CHAT_FAST: (Candidate(provider="inception", requires=CHAT,
                                              name_contains="   "),)},
                  "non-empty string", id="name-contains-is-blank"),
-    pytest.param({Task.CHAT_FAST: (Candidate(provider="gemini", requires=CHAT,
+    pytest.param({Task.CHAT_FAST: (Candidate(provider="inception", requires=CHAT,
                                              prefer="cheap"),)},
                  "not a Preference", id="prefer-is-a-raw-string"),
 
@@ -229,23 +259,26 @@ def test_reports_every_problem_at_once():
 # one, and only these catch it.
 
 ACCEPTED = [
-    pytest.param({Task.REASON: (Candidate(provider="anthropic", name_contains="haiku",
+    # Several provider-scoped queries in one chain is fine even with a single
+    # known vendor -- nothing in the validator requires them to be distinct
+    # vendors, only that at most one is an *open* (vendor-less) query.
+    pytest.param({Task.REASON: (Candidate(provider="inception", name_contains="mercury-2.5",
                                           requires=CHAT),
-                                Candidate(provider="openai", name_contains="mini",
+                                Candidate(provider="inception", name_contains="mercury-2",
                                           requires=CHAT),
-                                Candidate(provider="gemini", name_contains="flash",
+                                Candidate(provider="inception", name_contains="edit",
                                           requires=CHAT))},
                  id="several-scoped-queries-in-one-chain"),
-    pytest.param({Task.REASON: (Candidate(spec="inception:mercury-2", requires=CHAT),
+    pytest.param({Task.REASON: (Candidate(spec="inception:mercury-2.5", requires=CHAT),
                                 Candidate(requires=CHAT))},
                  id="open-query-in-last-position"),
     pytest.param({Task.CODE_COMPLETE: (Candidate(provider="inception",
                                                  requires=frozenset({Capability.FIM}),
                                                  endpoint=Endpoint.FIM),)},
                  id="fim-scoped-to-inception"),
-    pytest.param({Task.CHAT_FAST: (Candidate(spec="inception:mercury-2", requires=CHAT),)},
+    pytest.param({Task.CHAT_FAST: (Candidate(spec="inception:mercury-2.5", requires=CHAT),)},
                  id="pin-with-no-params-or-bounds"),
-    pytest.param({Task.CHAT_FAST: (Candidate(provider="gemini", name_contains="flash",
+    pytest.param({Task.CHAT_FAST: (Candidate(provider="inception", name_contains="mercury",
                                              requires=CHAT, min_context=1,
                                              prefer=Preference.LARGEST_CONTEXT),)},
                  id="every-optional-field-set"),

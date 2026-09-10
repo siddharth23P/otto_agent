@@ -1,0 +1,6 @@
+{
+  "id": "math_03",
+  "domain": "math",
+  "prompt": "What is the greatest common divisor (GCD) of 48 and 180? Give the final numeric answer.",
+  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\nassert any(abs(n - 12.0) < 1e-6 for n in nums), f'12 not found in {nums}'\nprint('OK')\n"
+}

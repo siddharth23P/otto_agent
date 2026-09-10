@@ -1,0 +1,6 @@
+{
+  "id": "code_02",
+  "domain": "code",
+  "prompt": "Write a Python function `fibonacci(n: int) -> int` that returns the nth Fibonacci number, 0-indexed, where fibonacci(0) == 0 and fibonacci(1) == 1.",
+  "checker": "assert fibonacci(0) == 0\nassert fibonacci(1) == 1\nassert fibonacci(2) == 1\nassert fibonacci(6) == 8\nassert fibonacci(10) == 55\nprint('OK')\n"
+}

@@ -1,0 +1,6 @@
+{
+  "id": "code_06",
+  "domain": "code",
+  "prompt": "Write a Python function `merge_intervals(intervals: list[list[int]]) -> list[list[int]]` that merges all overlapping intervals and returns the merged list sorted by start value. An interval is [start, end] with start <= end; two intervals overlap if one's start is <= the other's end.",
+  "checker": "assert merge_intervals([[1,3],[2,6],[8,10],[15,18]]) == [[1,6],[8,10],[15,18]]\nassert merge_intervals([[1,4],[4,5]]) == [[1,5]]\nassert merge_intervals([[1,4]]) == [[1,4]]\nassert merge_intervals([]) == []\nprint('OK')\n"
+}

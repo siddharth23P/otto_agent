@@ -14,6 +14,7 @@ nothing here is guessed from model-name prefixes.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any, Iterator, Literal, Sequence
@@ -52,6 +53,8 @@ from agent.router.llm_provider.base import (
 )
 
 __all__ = ["ChatInception", "InceptionProvider", "build_edit_prompt"]
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -358,6 +361,7 @@ class ChatInception(BaseChatModel):
         # Snapshots therefore go to `frame_sink` for display, and only the last
         # one is ever yielded.
         snapshot = ""
+        finish_reason: str | None = None
         stamped = False
 
         for chunk in stream:
@@ -388,6 +392,15 @@ class ChatInception(BaseChatModel):
                 continue
             choice = chunk.choices[0]
             text = choice.delta.content or ""
+            # getattr, not direct access: real ChatCompletionChunk choices
+            # always declare finish_reason, but the test suite's fakes don't
+            # all bother -- same defensiveness as `_field()` above for usage.
+            reason = getattr(choice, "finish_reason", None)
+            if reason:
+                # Recorded even on a chunk with empty `text`: the terminal
+                # chunk of a diffusion stream can carry the finish reason
+                # with no further content change.
+                finish_reason = reason
             if not text:
                 continue
 
@@ -413,8 +426,27 @@ class ChatInception(BaseChatModel):
 
         if snapshot:
             # The settled answer, emitted once, so the accumulated message is
-            # the final text rather than every draft glued together.
-            generation = ChatGenerationChunk(message=AIMessageChunk(content=snapshot))
+            # the final text rather than every draft glued together. Carrying
+            # `finish_reason` here (absent from every prior diffusion build of
+            # this method) is what lets a caller tell a converged answer from
+            # one Mercury cut off mid-denoise -- unlike autoregressive
+            # truncation, a diffusion stream cut short does NOT leave a clean
+            # prefix: unconverged positions can still hold noise anywhere in
+            # the text, not just at the end. `_call()` in code_nodes.py is the
+            # first caller that checks this.
+            if finish_reason == "length":
+                logger.warning(
+                    "inception: diffusion stream for %s hit finish_reason="
+                    "'length' (max_tokens=%r) -- snapshot may be unconverged, "
+                    "not just short",
+                    self.model, self.max_tokens,
+                )
+            generation = ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content=snapshot,
+                    response_metadata={"finish_reason": finish_reason},
+                )
+            )
             if run_manager:
                 run_manager.on_llm_new_token(snapshot, chunk=generation)
             yield generation

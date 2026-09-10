@@ -13,8 +13,8 @@ from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, T
 @dataclass(frozen=True,slots=True)
 class Skip:
     index: int      # position in the chain — tells you which line of mapping.py
-    target: str     # "anthropic:*haiku*" or "inception:mercury-2"
-    reason: str     # "ANTHROPIC_API_KEY not set"
+    target: str     # "inception:mercury-2.5"
+    reason: str     # "INCEPTION_API_KEY not set"
     
     def __str__(self) -> str:
         return f"[{self.index}] {self.target}: {self.reason}"
@@ -118,20 +118,29 @@ def _observe(name: str, *, model: str, input: Any,
 
 
 class Router:
+    """Otto is Inception-only in `TASK_ROUTES` (2026-09-09) -- every chat/plan/
+    reason/summarize chain now pins Mercury 2.5, and there is no second vendor
+    left to fail over to. `OPTIONAL` stays declared, just empty: Phase 8's
+    plain hive (`agent/graph/nodes.py`, `agent/graph/run.py` -- untouched by
+    this change) reads `ROUTER.secondary`/`ROUTER.REQUIRED` to give a
+    `secondary_seats` worth of clones a different vendor for diversity. With
+    `OPTIONAL` empty, `secondary` is always `None` and `run(..., 
+    secondary_seats=N)` for `N > 0` correctly raises its own clear
+    "No secondary model available" error instead of an AttributeError --
+    exactly the behavior it already had for "key not configured", now
+    permanent rather than incidental.
+    """
+
     REQUIRED = "inception"
-    #: Precedence for choosing the single secondary vendor. Gemini leads
-    #: because Flash is the cheapest tier with the widest window. This order is
-    #: a deliberate cost decision -- changing it changes which vendor a swarm
-    #: reaches for, so a test pins it.
-    OPTIONAL = ("gemini", "openai", "anthropic")
-    
+    OPTIONAL: tuple[str, ...] = ()
+
     def _snapshot(self) -> None:
         self._configured = tuple(p for p in provider_names() if self.catalogue.is_configured(p))
         if self.REQUIRED not in self._configured:
             raise AuthError("Otto requires Inception. Set INCEPTION_API_KEY in .env")
         self.secondary = next((p for p in self.OPTIONAL if p in self._configured), None)
         self.ignored = tuple(p for p in self.OPTIONAL if p in self._configured and p != self.secondary)
-    
+
     def __init__(self, catalogue: Catalogue | None = None, *, strict: bool = False):
         self.catalogue = catalogue or RegistryCatalogue()
         self.strict = strict
@@ -140,10 +149,10 @@ class Router:
     def reset(self):
         self.catalogue.reset()
         self._snapshot()
-    
+
     def _usable(self, provider: str) -> bool:
         return provider == self.REQUIRED or provider == self.secondary
-    
+
     def usable(self) -> tuple[str, ...]:
         return tuple(p for p in self._configured if self._usable(p))
 
@@ -174,6 +183,20 @@ class Router:
         return model
 
     def _select(self, pool, c: Candidate) -> ModelInfo | None:
+        if c.spec is not None:
+            # A pin names one exact model, not a tier to search within -- once
+            # a vendor has two generations live at once (mercury-2 alongside
+            # mercury-2.5, say), matching by capability/name_contains/context
+            # like a query would could silently resolve a "pinned" candidate
+            # to the WRONG generation depending on which one sorts first under
+            # `prefer`. Match the id from the spec directly instead; `requires`
+            # still gates it, so a pin to a model that lost a capability fails
+            # loudly ("no model matched") rather than serving it anyway.
+            _, _, model_id = c.spec.partition(":")
+            return next(
+                (m for m in pool if m.id == model_id and c.requires <= m.capabilities),
+                None,
+            )
         matches = [m for m in pool
                 if c.requires <= m.capabilities
                 and (c.name_contains is None

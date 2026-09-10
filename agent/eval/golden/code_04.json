@@ -1,0 +1,6 @@
+{
+  "id": "code_04",
+  "domain": "code",
+  "prompt": "Write a Python function `binary_search(arr: list[int], target: int) -> int` that returns the index of target in the sorted ascending list arr, or -1 if it is not present. Must run in O(log n) time.",
+  "checker": "assert binary_search([1,3,5,7,9,11], 7) == 3\nassert binary_search([1,3,5,7,9,11], 1) == 0\nassert binary_search([1,3,5,7,9,11], 11) == 5\nassert binary_search([1,3,5,7,9,11], 4) == -1\nassert binary_search([], 5) == -1\nprint('OK')\n"
+}
