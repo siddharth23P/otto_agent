@@ -18,6 +18,7 @@ from agent.cli.context import AppContext
 from agent.cli.errors import friendly
 from agent.cli import doctor as doctor_cmd
 from agent.cli import eval as eval_cmd
+from agent.cli import eval_memory as eval_memory_cmd
 from agent.cli import models as model_cmd
 from agent.cli import route as route_cmd
 from agent.cli import chat as chat_cmd
@@ -39,6 +40,7 @@ for _name, _fn in (
     ("chat", chat_cmd.chat),
     ("tui", tui_cmd.tui),
     ("eval", eval_cmd.eval_cmd),
+    ("eval-memory", eval_memory_cmd.eval_memory_cmd),
 ):
     app.command(_name)(friendly(_fn))
 
