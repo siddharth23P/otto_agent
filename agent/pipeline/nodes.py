@@ -350,6 +350,23 @@ _RECURSION_SAFETY_NET = 150
 #: unconverged snapshot, and must be retried rather than accepted.
 MAX_DIFFUSION_RETRIES = 3
 
+#: How many unparseable replies IN A ROW end a node's tool loop early.
+#:
+#: The corrective retry (UNPARSEABLE_FEEDBACK) is worth having: a model that
+#: forgot the format once usually gets it right when told. What it cannot fix
+#: is a model that is not answering at all. Measured on a hard task: a broken
+#: reasoning_effort setting (agent/router/mapping.py's Task.REASON, now
+#: corrected) made the provider return empty streams, and the solver spent 39
+#: of its 40 turns feeding "you didn't follow the format" to a model that had
+#: sent back nothing, issuing 2 real commands in six minutes. The route is
+#: fixed; nothing about the loop knew to stop, and the next provider hiccup
+#: would spend a whole budget the same way.
+#:
+#: 3 rather than 2 because the retry genuinely does recover a one-off, and
+#: rather than 5 because by the third identical non-answer the budget is
+#: better spent letting the overseer pick a different step.
+MAX_CONSECUTIVE_DEAD_REPLIES = 3
+
 #: Bound on one node's OWN tool-calling loop (ACTION/execute_TOOL
 #: round-trips) before its last reply is used as-is. Unrelated to the
 #: (now-removed) overseer retry cap -- this bounds a single node's single
@@ -822,6 +839,7 @@ def _tool_loop(llm, messages: list) -> str:
     reply never touches it: a tool call is not a candidate answer.
     """
     output = ""
+    dead_replies = 0
     for _ in range(MAX_TOOL_ITERATIONS):
         text = _call(llm, messages)
         kind_of_reply, tool_name, body = _parse_worker_reply(text)
@@ -830,10 +848,20 @@ def _tool_loop(llm, messages: list) -> str:
             return _strip_code_fence(body)
 
         if kind_of_reply == "unparseable":
-            output = text  # fallback if the loop is exhausted here
+            dead_replies += 1
+            output = text  # fallback if the loop ends here, exhausted or not
+            if dead_replies >= MAX_CONSECUTIVE_DEAD_REPLIES:
+                logger.warning(
+                    "tool loop: %d unparseable replies in a row -- giving up "
+                    "on this node rather than spending the rest of its budget",
+                    dead_replies,
+                )
+                return output
             messages.append(AIMessage(text))
             messages.append(HumanMessage(UNPARSEABLE_FEEDBACK))
             continue
+
+        dead_replies = 0
 
         # ACTION -- deliberately does NOT touch `output` (see docstring).
         if tool_name == "ask_user":
