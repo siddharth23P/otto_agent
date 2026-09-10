@@ -102,6 +102,7 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = (), memory_context: 
         "messages": [*history, HumanMessage(text)],
         "board": [],
         "round": 0,
+        "actions": [],
         "node": None,
         "feedback": "",
         "output": None,
