@@ -97,3 +97,59 @@ def test_non_diffusing_truncation_is_accepted_as_is():
 
     assert text == "normal streamed text"
     assert len(client.chat.completions.calls) == 1
+
+
+# ---- an empty stream from the provider ------------------------------------
+
+
+class _EmptyStreamLLM:
+    """Stands in for a provider that yields nothing: langchain_core raises
+    ValueError("No generation chunks were returned") from inside stream()
+    itself, so _call()'s `reply is None` branch never sees it."""
+
+    model = "mercury-2.5"
+    max_tokens = 1024
+    diffusing = True
+
+    def __init__(self, failures: int, then: str = ""):
+        self.remaining = failures
+        self.then = then
+        self.calls = 0
+
+    def stream(self, messages):
+        self.calls += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise ValueError("No generation chunks were returned")
+        yield SimpleNamespace(
+            content=self.then, response_metadata={"finish_reason": "stop"},
+        )
+
+    def model_copy(self, update):
+        return self
+
+
+def test_an_empty_stream_is_retried_and_then_succeeds():
+    llm = _EmptyStreamLLM(failures=1, then="the real answer")
+
+    assert _call(llm, [HumanMessage("hi")]) == "the real answer"
+    assert llm.calls == 2
+
+
+def test_a_persistently_empty_stream_returns_empty_rather_than_raising():
+    """It must not unwind the graph: an empty answer is a case every caller
+    here already handles (the unparseable-reply retry), an exception is not."""
+    llm = _EmptyStreamLLM(failures=MAX_DIFFUSION_RETRIES)
+
+    assert _call(llm, [HumanMessage("hi")]) == ""
+    assert llm.calls == MAX_DIFFUSION_RETRIES
+
+
+def test_an_unrelated_value_error_still_propagates():
+    class _Boom(_EmptyStreamLLM):
+        def stream(self, messages):
+            raise ValueError("something else entirely")
+            yield  # pragma: no cover
+
+    with pytest.raises(ValueError, match="something else entirely"):
+        _call(_Boom(failures=0), [HumanMessage("hi")])
