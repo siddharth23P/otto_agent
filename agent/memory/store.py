@@ -42,7 +42,19 @@ CREATE TABLE IF NOT EXISTS chunks (
     hash TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
     content TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- 0,1,2,... in the order this `kind` first flushed them, so a chunk's
+    -- NEIGHBOURS are recoverable (chunks_near, below). A dialogue turn is a
+    -- poor retrieval unit on its own: the answer to "when did she join the
+    -- group?" is routinely in the turn AFTER the one that names it, so
+    -- retrieval.py returns each hit with the turns either side of it.
+    seq INTEGER,
+    -- The chunk's own embedding, written at flush time (agent/memory/
+    -- queue.py) so retrieval.py can rank the raw text directly instead of
+    -- only ranking the bullets that summarize it. NULL is a valid state,
+    -- exactly as it is for a bullet -- the local model was unavailable
+    -- when this chunk was flushed (agent/memory/embeddings.py).
+    embedding BLOB
 );
 CREATE TABLE IF NOT EXISTS bullets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,11 +67,28 @@ CREATE TABLE IF NOT EXISTS bullets (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bullets_kind_superseded ON bullets(kind, superseded);
+CREATE INDEX IF NOT EXISTS idx_chunks_kind_seq ON chunks(kind, seq);
 """
+
+#: Columns added to `chunks` after the first release of this schema. SQLite's
+#: CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a session DB
+#: written before they existed needs them added explicitly -- one ALTER each,
+#: skipped when already present. Existing rows keep NULL for both, which both
+#: readers already treat as "unknown", so an old DB degrades to the old
+#: behaviour rather than erroring.
+_CHUNK_MIGRATIONS = (("seq", "INTEGER"), ("embedding", "BLOB"))
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _to_blob(embedding: "np.ndarray | None") -> bytes | None:
+    return embedding.astype(np.float32).tobytes() if embedding is not None else None
+
+
+def _from_blob(blob: bytes | None) -> "np.ndarray | None":
+    return np.frombuffer(blob, dtype=np.float32) if blob is not None else None
 
 
 @dataclass(frozen=True)
@@ -79,13 +108,30 @@ class Bullet:
     embedding: np.ndarray | None
 
 
+@dataclass(frozen=True)
+class Chunk:
+    """One permanently-stored raw item, with the position and embedding
+    retrieval.py needs to rank it and to find what sat either side of it."""
+    seq: int | None
+    hash: str
+    content: str
+    embedding: np.ndarray | None
+
+
 class MemoryStore:
     def __init__(self, path: Path | str):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.executescript(_SCHEMA)
+        self._migrate_chunks()
         self._conn.commit()
+
+    def _migrate_chunks(self) -> None:
+        present = {r[1] for r in self._conn.execute("PRAGMA table_info(chunks)")}
+        for column, sql_type in _CHUNK_MIGRATIONS:
+            if column not in present:
+                self._conn.execute(f"ALTER TABLE chunks ADD COLUMN {column} {sql_type}")
 
     @classmethod
     def for_session(cls, session_id: str) -> "MemoryStore":
@@ -96,12 +142,18 @@ class MemoryStore:
 
     # ---- chunks (permanent, content-addressed raw text) ----------------
 
-    def add_chunk(self, kind: str, hash_: str, content: str) -> None:
+    def add_chunk(
+        self, kind: str, hash_: str, content: str, embedding: np.ndarray | None = None,
+    ) -> None:
         """INSERT OR IGNORE -- a hash that's already stored is left exactly
-        as it was (dedup, not overwrite; see hashing.py's own docstring)."""
+        as it was (dedup, not overwrite; see hashing.py's own docstring), which
+        also means it keeps the `seq` it was first given: a turn repeated
+        verbatim much later stays one chunk, sitting where it first appeared.
+        """
         self._conn.execute(
-            "INSERT OR IGNORE INTO chunks (hash, kind, content, created_at) VALUES (?, ?, ?, ?)",
-            (hash_, kind, content, _now()),
+            "INSERT OR IGNORE INTO chunks (hash, kind, content, created_at, seq, embedding) "
+            "VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM chunks WHERE kind = ?), ?)",
+            (hash_, kind, content, _now(), kind, _to_blob(embedding)),
         )
         self._conn.commit()
 
@@ -114,17 +166,49 @@ class MemoryStore:
         ).fetchall()
         return dict(rows)
 
+    def get_chunk_rows(self, kind: str, hashes: list[str]) -> list[Chunk]:
+        """The full `Chunk` records for `hashes`, oldest first -- what
+        retrieval.py ranks over once a bullet match has narrowed the store
+        down to a candidate set ("first pulling all the hash and compiling
+        the list then finding relevant information (not all)" -- the spec).
+        """
+        if not hashes:
+            return []
+        placeholders = ",".join("?" for _ in hashes)
+        rows = self._conn.execute(
+            f"SELECT seq, hash, content, embedding FROM chunks "
+            f"WHERE kind = ? AND hash IN ({placeholders}) ORDER BY seq",
+            [kind, *hashes],
+        ).fetchall()
+        return [Chunk(seq=r[0], hash=r[1], content=r[2], embedding=_from_blob(r[3])) for r in rows]
+
+    def chunks_near(self, kind: str, seqs: list[int], window: int) -> list[Chunk]:
+        """Every chunk of `kind` within `window` positions of any of `seqs`,
+        oldest first, the hits themselves included and deduplicated -- the
+        turns either side of a match, which is where a dialogue's answer
+        very often actually sits (see the `seq` column's own note above).
+        """
+        wanted = {s + d for s in seqs for d in range(-window, window + 1) if s + d >= 0}
+        if not wanted:
+            return []
+        placeholders = ",".join("?" for _ in wanted)
+        rows = self._conn.execute(
+            f"SELECT seq, hash, content, embedding FROM chunks "
+            f"WHERE kind = ? AND seq IN ({placeholders}) ORDER BY seq",
+            [kind, *sorted(wanted)],
+        ).fetchall()
+        return [Chunk(seq=r[0], hash=r[1], content=r[2], embedding=_from_blob(r[3])) for r in rows]
+
     # ---- bullets (the current, compacted-down summary of everything) ---
 
     def add_bullet(
         self, kind: str, generation: int, text: str,
         hash_refs: list[str], embedding: np.ndarray | None,
     ) -> int:
-        blob = embedding.astype(np.float32).tobytes() if embedding is not None else None
         cur = self._conn.execute(
             "INSERT INTO bullets (kind, generation, text, hash_refs, embedding, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (kind, generation, text, json.dumps(hash_refs), blob, _now()),
+            (kind, generation, text, json.dumps(hash_refs), _to_blob(embedding), _now()),
         )
         self._conn.commit()
         return cur.lastrowid
@@ -150,7 +234,7 @@ class MemoryStore:
             Bullet(
                 id=r[0], kind=r[1], generation=r[2], text=r[3],
                 hash_refs=json.loads(r[4]),
-                embedding=(np.frombuffer(r[5], dtype=np.float32) if r[5] is not None else None),
+                embedding=_from_blob(r[5]),
             )
             for r in rows
         ]

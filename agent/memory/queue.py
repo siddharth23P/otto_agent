@@ -92,6 +92,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
+import numpy as np
+
 from agent.memory.embeddings import EmbeddingUnavailable, embed
 from agent.memory.hashing import content_hash
 from agent.memory.store import MemoryStore
@@ -182,6 +184,19 @@ def _excerpt(text: str) -> str:
     if len(collapsed) <= CARRY_FORWARD_EXCERPT_CHARS:
         return collapsed
     return collapsed[:CARRY_FORWARD_EXCERPT_CHARS].rstrip() + "..."
+
+
+def _embed_each(texts: list[str]) -> list["np.ndarray | None"]:
+    """One embedding per text, or a list of Nones if the local model can't be
+    reached -- store.py treats a NULL embedding as "not rankable", not as an
+    error (agent/memory/embeddings.py's EmbeddingUnavailable), so a compaction
+    that happens while the model is unavailable still stores everything."""
+    if not texts:
+        return []
+    try:
+        return list(embed(texts))
+    except EmbeddingUnavailable:
+        return [None] * len(texts)
 
 
 def _uncited_bullets(
@@ -284,9 +299,14 @@ class TieredQueue:
         for bullet in self._y_bullets:
             items.append(bullet.text)
             item_hashes.append(bullet.hash_refs)
-        for text in self._y_raw:
+        # One batched embed() for the whole flush rather than one per item --
+        # each chunk carries its own vector so retrieval.py can rank the RAW
+        # text, not just the bullets summarizing it (agent/memory/store.py's
+        # `chunks.embedding`).
+        chunk_embeddings = _embed_each(self._y_raw)
+        for text, embedding in zip(self._y_raw, chunk_embeddings):
             h = content_hash(text)
-            self.store.add_chunk(self.kind, h, text)
+            self.store.add_chunk(self.kind, h, text, embedding)
             items.append(text)
             item_hashes.append([h])
 
@@ -313,13 +333,7 @@ class TieredQueue:
             prior_bullet_count=len(self._y_bullets),
         )
 
-        for bullet in new_bullets:
-            embedding = None
-            try:
-                [embedding] = embed([bullet.text])
-            except EmbeddingUnavailable:
-                embedding = None  # store.py's Bullet.embedding=None is a
-                                   # valid state -- retrieval.py falls back.
+        for bullet, embedding in zip(new_bullets, _embed_each([b.text for b in new_bullets])):
             self.store.add_bullet(self.kind, self._generation, bullet.text, bullet.hash_refs, embedding)
 
         self.store.supersede_bullets(self.kind, before_generation=self._generation)

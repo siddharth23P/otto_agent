@@ -39,6 +39,11 @@ from rich import box
 from rich.table import Table
 
 from agent.cli.ui import err, out
+from agent.memory.retrieval import (
+    DEFAULT_MAX_CHUNKS,
+    DEFAULT_NEIGHBOUR_WINDOW,
+    DEFAULT_TOKEN_BUDGET,
+)
 from agent.eval.memory_bench import (
     BenchmarkReport,
     DEFAULT_CACHE,
@@ -72,7 +77,19 @@ def eval_memory_cmd(
         Optional[int],
         typer.Option(help="Override TieredQueue's Y budget (tokens) -- smaller forces real compaction."),
     ] = None,
-    top_k: Annotated[int, typer.Option(help="How many bullets recall() considers per question.")] = 5,
+    top_k: Annotated[int, typer.Option(help="How many bullets recall() considers per question (stage 1).")] = 5,
+    max_chunks: Annotated[
+        int,
+        typer.Option(help="How many raw chunks recall() actually returns (stage 2's cap)."),
+    ] = DEFAULT_MAX_CHUNKS,
+    neighbours: Annotated[
+        int,
+        typer.Option(help="How many chunks either side of each returned chunk to include."),
+    ] = DEFAULT_NEIGHBOUR_WINDOW,
+    token_budget: Annotated[
+        int,
+        typer.Option(help="Hard ceiling (tokens) on how much text one recall() returns."),
+    ] = DEFAULT_TOKEN_BUDGET,
     data_path: Annotated[
         Optional[Path], typer.Option(help="Path to a cached locomo10.json (default: agent/eval/data/locomo10.json).")
     ] = None,
@@ -117,7 +134,8 @@ def eval_memory_cmd(
 
     with err.status(f"running {len(all_samples)} conversation(s), live={live}…"):
         report = run_benchmark(
-            all_samples, live=live, top_k=top_k, max_turns=max_turns,
+            all_samples, live=live, top_k=top_k, max_chunks=max_chunks,
+            neighbour_window=neighbours, token_budget=token_budget, max_turns=max_turns,
             x_budget=x_budget, y_budget=y_budget,
         )
 
