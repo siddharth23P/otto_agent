@@ -58,10 +58,25 @@ docstring on it): it does not work on macOS Terminal.app. `action_copy_last`
 says so in its own message rather than leaving a silent no-op, and the
 saved-file path (already printed after every turn) is the fallback either
 way.
+
+Mid-run questions (2026-09-10, same day, nodes.py's seventh refinement,
+design call: "widget with multi choice + text bar" for how the TUI should
+ask a question back): `AskUserModal`, below, is that widget -- an
+`OptionList` for the "multi choice" half (only mounted when the run
+actually offered choices) plus an `Input` for the "text bar" half, always
+present, so a free-text answer is always possible even when choices are
+offered too. `run_turn` runs on a worker THREAD (`@work(thread=True, ...)`
+-- it always has), and a modal can only be pushed/answered from the UI's
+own thread/event loop, so `_ask_user_blocking` bridges the two with a
+plain `threading.Event`: `call_from_thread` schedules the modal on the UI
+thread and the worker thread blocks on the event (NOT the UI thread --
+the app stays fully responsive, redraws and all, while a turn is paused
+waiting on a person) until the modal dismisses it.
 """
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections import Counter
 from typing import Iterable
@@ -73,7 +88,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Collapsible, Footer, Header, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
@@ -82,7 +97,7 @@ from agent.cli.context import AppContext
 from agent.cli.output import save_final
 from agent.cli.shell import Session, render_update
 from agent.cli.ui import THEME
-from agent.pipeline.run import run_pipeline_stream
+from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
 from agent.router.mapping import Task
 from agent.router.router import NoViableRoute
 
@@ -129,6 +144,48 @@ class ScoreDialog(ModalScreen[tuple[float, str] | None]):
 
     def key_escape(self) -> None:
         self.dismiss(None)
+
+
+class AskUserModal(ModalScreen[str]):
+    """"Widget with multi choice + text bar" (module docstring, seventh
+    refinement design call) -- what a paused run's question/choices
+    (agent/pipeline/nodes.py's ask_user node, via `{"__ask__": ...}`) is
+    shown through. The OptionList is only mounted when there ARE choices
+    (an empty list means a genuinely open-ended question); the Input is
+    always there, so free text is always an option even alongside choices.
+    No Esc-to-cancel here, unlike the other two modals -- the graph really
+    is paused waiting on an answer, there's no "nevermind" that doesn't
+    leave the run stuck; an empty Enter is treated as a (weak) "no
+    preference, continue" rather than dismissed.
+    """
+
+    DEFAULT_CSS = """
+    AskUserModal { align: center middle; }
+    AskUserModal > Vertical { width: 70; height: auto; max-height: 80%; border: round $warning; padding: 1 2; }
+    AskUserModal .question { margin-bottom: 1; }
+    AskUserModal OptionList { height: auto; max-height: 10; margin-bottom: 1; }
+    """
+
+    def __init__(self, question: str, choices: list[str]) -> None:
+        super().__init__()
+        self._question = question
+        self._choices = choices
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(Markdown(f"**otto is asking:**\n\n{self._question}"), classes="question")
+            if self._choices:
+                yield OptionList(*[Option(c) for c in self._choices])
+            yield Input(placeholder="type your answer, Enter to submit")
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(str(event.option.prompt))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip())
 
 
 # --------------------------------------------------------------------------
@@ -192,6 +249,26 @@ class OttoApp(App):
         """
         self.transcript.mount(Static(renderable))
         self.transcript.scroll_end(animate=False)
+
+    def _ask_user_blocking(self, question: str, choices: list[str]) -> str:
+        """Called from the run_turn WORKER thread (module docstring). Shows
+        AskUserModal on the UI thread via call_from_thread, then blocks
+        THIS (worker) thread -- not the UI thread, which keeps redrawing
+        normally -- on a threading.Event until the modal dismisses with an
+        answer.
+        """
+        done = threading.Event()
+        answer: list[str] = [""]
+
+        def _show() -> None:
+            def _dismissed(result: str) -> None:
+                answer[0] = result
+                done.set()
+            self.push_screen(AskUserModal(question, choices), _dismissed)
+
+        self.call_from_thread(_show)
+        done.wait()
+        return answer[0]
 
     def _post_thinking(self, thinking_log: RichLog, title: str) -> None:
         """Mount one *thinking*-side block: a fresh RichLog, collapsed by
@@ -324,28 +401,45 @@ class OttoApp(App):
         # nodes.py's module docstring, sixth refinement).
         history = self.session.history[:-1]
         try:
-            for update in run_pipeline_stream(text, session_id=self.session.session_id, history=history):
-                if "__final__" in update:
-                    final = update["__final__"]
-                    self.session.trace_id = update.get("__trace_id__")
-                    raw_output = (final.get("final_output") or "").strip()
-                    code = raw_output or "*(no output produced)*"
-                    self._last_output = raw_output or None
-                    self.call_from_thread(
-                        self._post,
-                        Panel(Markdown(code), title="[green]final[/]", border_style="green"),
-                    )
-                    self.session.history.append(AIMessage(code))
-                    if raw_output:
-                        # Same reasoning as chat.py: a file survives copying,
-                        # a live RichLog selection does not.
-                        self.session.turn += 1
-                        path = save_final(self.session.session_id, self.session.turn, raw_output, None)
-                        self.call_from_thread(self._post, f"[dim]saved to {path}[/]")
-                    continue
+            stream = run_pipeline_stream(text, session_id=self.session.session_id, history=history)
+            while stream is not None:
+                next_stream = None
+                for update in stream:
+                    if "__ask__" in update:
+                        # A specialist or the evaluator got stuck --
+                        # module docstring, seventh refinement. Blocks
+                        # THIS worker thread (not the UI) until answered,
+                        # then resumes the SAME run on the same graph
+                        # thread -- not a fresh turn.
+                        ask = update["__ask__"]
+                        answer = self._ask_user_blocking(ask["question"], ask["choices"])
+                        self.call_from_thread(self._post, f"[bold]you[/] {answer}")
+                        next_stream = resume_pipeline_stream(
+                            answer, thread_id=ask["thread_id"], session_id=self.session.session_id,
+                        )
+                        break
+                    if "__final__" in update:
+                        final = update["__final__"]
+                        self.session.trace_id = update.get("__trace_id__")
+                        raw_output = (final.get("final_output") or "").strip()
+                        code = raw_output or "*(no output produced)*"
+                        self._last_output = raw_output or None
+                        self.call_from_thread(
+                            self._post,
+                            Panel(Markdown(code), title="[green]final[/]", border_style="green"),
+                        )
+                        self.session.history.append(AIMessage(code))
+                        if raw_output:
+                            # Same reasoning as chat.py: a file survives copying,
+                            # a live RichLog selection does not.
+                            self.session.turn += 1
+                            path = save_final(self.session.session_id, self.session.turn, raw_output, None)
+                            self.call_from_thread(self._post, f"[dim]saved to {path}[/]")
+                        continue
 
-                node, delta = next(iter(update.items()))
-                self.call_from_thread(render_update, node, delta, tally, thinking_log.write)
+                    node, delta = next(iter(update.items()))
+                    self.call_from_thread(render_update, node, delta, tally, thinking_log.write)
+                stream = next_stream
         except Exception as exc:  # a provider error mid-turn must not crash the app
             self.call_from_thread(self._post, f"[red]{type(exc).__name__}: {exc}[/]")
 

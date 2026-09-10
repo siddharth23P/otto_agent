@@ -75,6 +75,9 @@ def _state(**overrides) -> dict:
         "plan": None,
         "active_step": None,
         "node_error": None,
+        "pending_question": None,
+        "pending_choices": None,
+        "asking_role": None,
         "final_output": None,
     }
     base.update(overrides)
@@ -336,6 +339,49 @@ def test_active_step_out_of_range_or_without_a_list_plan_is_not_treated_as_execu
 
     assert "plan" not in result.update
     assert result.update["context"] == "a short summary"  # normal "replace" behavior applies
+
+
+# --------------------------------------------------------------------------
+# Getting stuck and asking the user (2026-09-10, seventh refinement) --
+# _tool_loop raises NeedsUserInput when a reply's ACTION: is ask_user.
+# _run_role hands off to the dedicated ask_user node rather than crashing,
+# looping, or guessing -- leaving plan/context/output exactly as they were
+# (this attempt never finished, same spirit as the node_error branch below).
+# --------------------------------------------------------------------------
+
+def test_run_role_asks_the_user_and_pauses_instead_of_guessing(monkeypatch):
+    fake = _FakeModel("ACTION: ask_user\nCODE:\nwhat output format do you want?")
+    _install(monkeypatch, fake)
+
+    result = pn.solver(_state())
+
+    assert result.goto == "ask_user"
+    assert result.update["pending_question"] == "what output format do you want?"
+    assert result.update["pending_choices"] == []
+    assert result.update["asking_role"] == "solver"
+    assert "output" not in result.update
+    assert "plan" not in result.update
+    assert "context" not in result.update
+
+
+def test_run_role_asking_with_choices_parses_them_out(monkeypatch):
+    fake = _FakeModel("ACTION: ask_user\nCODE:\nwhich language?\nCHOICES: python | rust | go")
+    _install(monkeypatch, fake)
+
+    result = pn.finder(_state())
+
+    assert result.update["pending_question"] == "which language?"
+    assert result.update["pending_choices"] == ["python", "rust", "go"]
+    assert result.update["asking_role"] == "finder"
+
+
+def test_run_role_asking_reports_which_role_asked_on_the_board(monkeypatch):
+    fake = _FakeModel("ACTION: ask_user\nCODE:\nwhich one?")
+    _install(monkeypatch, fake)
+
+    result = pn.planner(_state())
+
+    assert "planner" in result.update["board"][0]
 
 
 # --------------------------------------------------------------------------

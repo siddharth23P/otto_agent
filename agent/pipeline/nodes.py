@@ -169,12 +169,83 @@ is what makes every prompt-builder in THIS file (`_router_body`,
 it, as a "CONVERSATION SO FAR:" block ahead of TASK:/ORIGINAL REQUEST:.
 Without both halves this doesn't work -- state carrying the messages but
 no prompt ever displaying them would be just as blind as before.
-Deliberately still NOT a fix for "the model asks the user a clarifying
-question mid-run" (there is no such capability anywhere in this graph
-yet, a separate and larger gap the same live test surfaced) -- this only
-makes sure the model has what it needs to not HAVE to ask in a case like
+Deliberately NOT a fix for "the model asks the user a clarifying question
+mid-run" (there was no such capability anywhere in this graph yet, a
+separate and larger gap the same live test surfaced) -- this only made
+sure the model has what it needs to not HAVE to ask in a case like
 "improve above solution", where the answer was one turn away the whole
-time.
+time. See the seventh refinement, directly below, for that other gap.
+
+Seventh refinement, same day, same live test's other half (verbatim:
+"it got stuck in a loop trying to find what above solution is and was
+thinking to ask user but it didnt have that capability... not able to ask
+something to user mid thinking if it get's confused"): planner / solver /
+summarizer / finder / evaluator can now genuinely pause a run and ask the
+person something, instead of guessing or looping. Scoped with the person
+before building it (three separate calls, all "any node can ask" /
+"widget with multi choice + text bar" / "LangGraph interrupt()/
+Command(resume=...)"):
+
+  * `ask_user` joins the six existing tools (execute_python, execute_bash,
+    web_search, rag, complete_code, predict_edit) as a seventh ACTION any
+    of the five nodes above may reach for, mid-_tool_loop, exactly like
+    any other tool -- see PLANNER_PROMPT/SOLVER_PROMPT/SUMMARIZER_PROMPT/
+    FINDER_PROMPT/EVALUATOR_PROMPT's shared wording on when to use it
+    (sparingly -- it pauses the whole run and costs the person real time).
+
+  * Unlike every other tool, though, `ask_user` cannot just hand a result
+    back into _tool_loop's own local `messages` list and keep going --
+    the answer has to come from an actual human, which means the WHOLE
+    GRAPH has to pause (LangGraph's own checkpointed interrupt()/
+    Command(resume=...) mechanism -- app.compile(checkpointer=
+    InMemorySaver()) already had a checkpointer wired up, from before this
+    refinement, for an unrelated reason: giving every turn its own
+    disposable thread id, agent/pipeline/run.py's `_graph_thread_id`).
+    _tool_loop, on seeing ACTION: ask_user, raises NeedsUserInput (below)
+    instead of dispatching it like a normal tool -- unwinding out of
+    _tool_loop and out of whichever role node (or evaluator()) called it,
+    all the way to a NEW dedicated `ask_user` node (bottom of this file).
+    That node's entire body is "read the question off state, call
+    interrupt(), write the answer down, hand back to whoever asked" --
+    deliberately nothing else, because langgraph.types.interrupt's own
+    docstring is explicit that a node resumes by RE-EXECUTING ITS WHOLE
+    BODY from the top; a node with an LLM call or a tool dispatch BEFORE
+    its interrupt() would redo that work every single time the person
+    answers. Keeping the actual pause point in its own minimal node, with
+    NeedsUserInput as the unwind signal that gets it there, is what avoids
+    that -- the specialist that got stuck is simply re-invoked fresh
+    afterward (ask_user's own Command(goto=<the role that asked>)), not
+    resumed mid-loop.
+
+  * The answer goes into `state["context"]` (a `you asked: "..." / the
+    user answered: "..."` line, appended the same way finder's own
+    gathered material is), NOT into `state["messages"]` -- every node in
+    this graph, router() included, reads `state["messages"][-1]` as THE
+    TASK for the whole turn; appending the Q&A there would silently
+    replace the actual task the next time anything looked. `context`
+    already means "material gathered so far for planner/solver to use"
+    (state.py) and is already shown to every prompt below via "CONTEXT
+    GATHERED SO FAR:" -- reusing it needs no new display mechanism, and
+    the re-invoked specialist sees the answer as ordinary background,
+    the same way it would see anything finder dug up.
+
+  * Two new AgentState fields carry a pending question across the pause:
+    `pending_question`/`pending_choices` (what to show; choices is the
+    "multi choice" half of "multi choice + text bar" -- OPTIONAL, an
+    empty list means open-ended free text only) and `asking_role` (who to
+    hand back to once answered -- ask_user() itself has no other way to
+    know). All three are cleared back to None by ask_user() the moment it
+    resumes; nothing about this is meant to survive past that one pause.
+
+  * The interrupt surfaces to callers of agent/pipeline/run.py's
+    run_pipeline_stream() as a `{"__ask__": {"question", "choices",
+    "thread_id"}}` event (instead of the usual `{"__final__": ...}` at
+    the very end) -- the stream simply ends there, mid-turn, same
+    thread_id and all, and a NEW function, `resume_pipeline_stream()`,
+    continues that exact same LangGraph checkpoint thread once the caller
+    has an answer. agent/cli/chat.py and agent/cli/tui.py both loop on
+    that: render/collect the question, resume, keep going -- possibly
+    more than once, if the re-invoked specialist gets stuck again.
 
 Deliberately out of scope for this revision, same as the first:
   - web_search and rag are still STUBBED (tools.py).
@@ -206,7 +277,7 @@ from typing import Any, Literal
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
 from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.tools import TOOL_DISPATCH
@@ -343,10 +414,16 @@ PLANNER_PROMPT = (
     "each step (the overseer assigns that later, one step at a time, as "
     "each one runs). You may check your reasoning with a tool: reply with "
     "exactly\nACTION: <execute_python|execute_bash|web_search|rag|"
-    "complete_code|predict_edit>\nCODE:\n<input for that tool -- "
+    "complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool -- "
     "complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
     "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit>\nand you "
+    "marker, no instruction -- it only predicts the next edit; ask_user: "
+    "a question for the person, optionally followed by a line \"CHOICES: "
+    "option one | option two | ...\" to also offer pick-able choices "
+    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
+    "genuinely stuck on something nobody but the person can supply, never "
+    "as a shortcut around planning yourself: it pauses the whole run and "
+    "costs them real time>\nand you "
     "will be shown the result, then you can continue. When you are done, "
     "reply with exactly\nFINAL:\n<a JSON array of steps, each an object "
     "with exactly one key \"task\" holding that step's description -- "
@@ -360,10 +437,16 @@ SOLVER_PROMPT = (
     "You are the SOLVER. Work out a concrete answer to the request below, "
     "writing and running code where that helps you check it. Reply with "
     "exactly\nACTION: <execute_python|execute_bash|web_search|rag|"
-    "complete_code|predict_edit>\nCODE:\n<input for that tool -- "
+    "complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool -- "
     "complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
     "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit>\nand you "
+    "marker, no instruction -- it only predicts the next edit; ask_user: "
+    "a question for the person, optionally followed by a line \"CHOICES: "
+    "option one | option two | ...\" to also offer pick-able choices "
+    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
+    "genuinely stuck on something nobody but the person can supply, never "
+    "as a shortcut around solving it yourself: it pauses the whole run "
+    "and costs them real time>\nand you "
     "will be shown the result, then you can continue. When you are done, "
     "reply with exactly\nFINAL:\n<the complete answer, nothing else -- no "
     "markdown code fences, no explanation>\nYou have at most {max_iter} "
@@ -374,10 +457,16 @@ SUMMARIZER_PROMPT = (
     "satisfy the request -- you are not looking anything new up or solving "
     "a new problem. You may still use a tool if it helps verify something: "
     "reply with exactly\nACTION: <execute_python|execute_bash|web_search|"
-    "rag|complete_code|predict_edit>\nCODE:\n<input for that tool -- "
-    "complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
+    "rag|complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool "
+    "-- complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
     "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit>\nand you "
+    "marker, no instruction -- it only predicts the next edit; ask_user: "
+    "a question for the person, optionally followed by a line \"CHOICES: "
+    "option one | option two | ...\" to also offer pick-able choices "
+    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
+    "genuinely stuck on something nobody but the person can supply, never "
+    "as a shortcut around condensing it yourself: it pauses the whole run "
+    "and costs them real time>\nand you "
     "will be shown the result, then you can continue. When you are done, "
     "reply with exactly\nFINAL:\n<the summary, nothing else -- no markdown "
     "code fences, no explanation>\nYou have at most {max_iter} exchanges "
@@ -393,10 +482,16 @@ FINDER_PROMPT = (
     "happens, fall back to your own knowledge and say plainly in your "
     "answer that you could not verify it). Reply with exactly\nACTION: "
     "<execute_python|execute_bash|web_search|rag|complete_code|"
-    "predict_edit>\nCODE:\n<input for that tool -- complete_code: prefix "
-    "code, optionally then a line \"---SUFFIX---\" and trailing code; "
-    "predict_edit: code, optionally with a <|cursor|> marker, no "
-    "instruction -- it only predicts the next edit>\nand you will be shown "
+    "predict_edit|ask_user>\nCODE:\n<input for that tool -- complete_code: "
+    "prefix code, optionally then a line \"---SUFFIX---\" and trailing "
+    "code; predict_edit: code, optionally with a <|cursor|> marker, no "
+    "instruction -- it only predicts the next edit; ask_user: a question "
+    "for the person, optionally followed by a line \"CHOICES: option one "
+    "| option two | ...\" to also offer pick-able choices (omit CHOICES: "
+    "for an open-ended question) -- use this ONLY when genuinely stuck on "
+    "something nobody but the person can supply, never as a shortcut "
+    "around looking it up yourself: it pauses the whole run and costs "
+    "them real time>\nand you will be shown "
     "the result, then you can continue. When you are done, reply with "
     "exactly\nFINAL:\n<what you found, nothing else -- no markdown code "
     "fences, no explanation>\nYou have at most {max_iter} exchanges before "
@@ -424,10 +519,16 @@ EVALUATOR_PROMPT = (
     "Judge whether the {target} below actually satisfies the original "
     "request -- {target_note}. You may check your judgment with a tool: "
     "reply with exactly\nACTION: <execute_python|execute_bash|web_search|"
-    "rag|complete_code|predict_edit>\nCODE:\n<input for that tool -- "
-    "complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
+    "rag|complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool "
+    "-- complete_code: prefix code, optionally then a line \"---SUFFIX---\" "
     "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit>\nand you "
+    "marker, no instruction -- it only predicts the next edit; ask_user: "
+    "a question for the person, optionally followed by a line \"CHOICES: "
+    "option one | option two | ...\" to also offer pick-able choices "
+    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
+    "genuinely stuck on something nobody but the person can supply, never "
+    "as a shortcut around judging it yourself: it pauses the whole run "
+    "and costs them real time>\nand you "
     "will be shown the result, then you can continue. When you are done, "
     "reply with exactly\nFINAL:\nAPPROVE: yes or no\nWHY: one sentence\n"
     "You have at most {max_iter} exchanges before your last reply is used "
@@ -528,6 +629,48 @@ def _strip_code_fence(text: str) -> str:
     return text
 
 
+class NeedsUserInput(Exception):
+    """Raised by _tool_loop (below) when a reply's ACTION: is ask_user --
+    a signal, not a tool result. Every other ACTION gets dispatched via
+    TOOL_DISPATCH and its result fed straight back into this same loop's
+    local `messages`, but an ask_user answer has to come from an actual
+    human, which means the WHOLE GRAPH has to pause -- not just this one
+    node's own tool-calling loop. Raising unwinds out of _tool_loop and out
+    of whichever role node (or evaluator()) called it, all the way to a
+    dedicated `ask_user` graph node built to do nothing else (module
+    docstring, seventh refinement, explains why the interrupt() call
+    itself can't just live here: LangGraph re-executes a node's ENTIRE
+    body from the top on resume, so anything with side effects before it
+    -- including the LLM calls this loop already made -- would replay a
+    second time).
+    """
+
+    def __init__(self, question: str, choices: list[str]):
+        self.question = question
+        self.choices = choices
+        super().__init__(question)
+
+
+def _parse_ask_user_body(body: str) -> tuple[str, list[str]]:
+    """Split an ask_user ACTION's CODE: body into (question, choices).
+
+    A line starting with "CHOICES:" (case-insensitive, anywhere in the
+    body) holds pipe-separated options; everything else is the question.
+    No such line -- the common case, a genuinely open-ended question --
+    means choices=[] and the whole body is the question.
+    """
+    lines = body.splitlines()
+    choices: list[str] = []
+    question_lines = []
+    for line in lines:
+        if line.strip().upper().startswith("CHOICES:"):
+            raw = line.split(":", 1)[1]
+            choices = [c.strip() for c in raw.split("|") if c.strip()]
+        else:
+            question_lines.append(line)
+    return "\n".join(question_lines).strip(), choices
+
+
 def _parse_worker_reply(text: str) -> tuple[Literal["action", "final", "unparseable"], str, str]:
     """Split a reply into (kind, tool_name, body).
 
@@ -578,6 +721,12 @@ def _tool_loop(llm, messages: list) -> str:
             continue
 
         # ACTION -- deliberately does NOT touch `output` (see docstring).
+        if tool_name == "ask_user":
+            # Not a normal tool -- see NeedsUserInput's own docstring for
+            # why this has to unwind all the way out rather than being
+            # just another TOOL_DISPATCH entry.
+            question, choices = _parse_ask_user_body(body)
+            raise NeedsUserInput(question or "(no question given)", choices)
         if tool_name not in TOOL_DISPATCH:
             evidence = (
                 f"tool {tool_name!r} is not available "
@@ -996,7 +1145,7 @@ def _run_role(
     temperature: float,
     prompt: str,
     context_op: Literal["append", "replace"] | None = None,
-) -> Command[Literal["router"]]:
+) -> Command[Literal["router", "ask_user"]]:
     plan = state.get("plan")
     active_step = state.get("active_step")
     executing_step = isinstance(plan, list) and isinstance(active_step, int) and 0 <= active_step < len(plan)
@@ -1017,6 +1166,22 @@ def _run_role(
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     try:
         output = _tool_loop(llm, messages)
+    except NeedsUserInput as exc:
+        # Seventh refinement (module docstring): this role got stuck on
+        # something only the person can supply. Hand off to the dedicated
+        # ask_user node -- see NeedsUserInput's own docstring for why the
+        # actual pause has to happen there, not here. plan/active_step/
+        # context are left exactly as they were: this attempt never
+        # finished, there's nothing of its own to write back yet.
+        return Command(
+            update={
+                "pending_question": exc.question,
+                "pending_choices": exc.choices,
+                "asking_role": role,
+                "board": [f"{role} is asking you a question (round {state['round']})"],
+            },
+            goto="ask_user",
+        )
     except ProviderError as exc:
         # A provider/network failure interrupted this attempt before it
         # produced anything -- fifth refinement (module docstring).
@@ -1070,22 +1235,22 @@ def _run_role(
     return Command(update=update, goto="router")
 
 
-def planner(state: AgentState) -> Command[Literal["router"]]:
+def planner(state: AgentState) -> Command[Literal["router", "ask_user"]]:
     return _run_role(state, role="planner", task=Task.PLAN, temperature=0.4, prompt=PLANNER_PROMPT)
 
 
-def solver(state: AgentState) -> Command[Literal["router"]]:
+def solver(state: AgentState) -> Command[Literal["router", "ask_user"]]:
     return _run_role(state, role="solver", task=Task.REASON, temperature=0.5, prompt=SOLVER_PROMPT)
 
 
-def summarizer(state: AgentState) -> Command[Literal["router"]]:
+def summarizer(state: AgentState) -> Command[Literal["router", "ask_user"]]:
     return _run_role(
         state, role="summarizer", task=Task.SUMMARIZE, temperature=0.2,
         prompt=SUMMARIZER_PROMPT, context_op="replace",
     )
 
 
-def finder(state: AgentState) -> Command[Literal["router"]]:
+def finder(state: AgentState) -> Command[Literal["router", "ask_user"]]:
     # No dedicated Task route for "look something up" exists yet -- CHAT_FAST
     # (fast turnaround, light reasoning) fits a node whose real work is
     # supposed to be the tool call, not deliberation. Revisit if/when
@@ -1106,7 +1271,7 @@ def finder(state: AgentState) -> Command[Literal["router"]]:
 # exhaustion branch (see module docstring).
 # --------------------------------------------------------------------------
 
-def evaluator(state: AgentState) -> Command[Literal["router", "__end__"]]:
+def evaluator(state: AgentState) -> Command[Literal["router", "__end__", "ask_user"]]:
     task_text = state["messages"][-1].content
     node = state.get("node") or "solver"
     output = state.get("output") or ""
@@ -1132,6 +1297,19 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__"]]:
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     try:
         reply = _tool_loop(llm, messages)
+    except NeedsUserInput as exc:
+        # Seventh refinement (module docstring): the evaluator itself got
+        # stuck judging something and needs the person's input to settle
+        # it. `output` (still pending judgment) is left untouched.
+        return Command(
+            update={
+                "pending_question": exc.question,
+                "pending_choices": exc.choices,
+                "asking_role": "evaluator",
+                "board": [f"evaluator is asking you a question (round {state['round']})"],
+            },
+            goto="ask_user",
+        )
     except ProviderError as exc:
         # A provider/network failure interrupted the evaluator itself --
         # fifth refinement (module docstring). `output` (whatever is
@@ -1181,6 +1359,44 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__"]]:
     )
 
 
+# --------------------------------------------------------------------------
+# ask_user -- seventh refinement (module docstring). The ONLY node in this
+# graph that calls interrupt(), and deliberately does nothing else: read
+# the pending question off state, pause, write the answer down, hand back
+# to whoever asked. See NeedsUserInput's docstring above for why an LLM
+# call or a tool dispatch has no business happening in this node -- resume
+# re-executes this whole function from the top, so anything with a side
+# effect before interrupt() would redo it every time the person answers.
+# --------------------------------------------------------------------------
+
+def ask_user(state: AgentState) -> Command[Literal["planner", "solver", "summarizer", "finder", "evaluator"]]:
+    question = state.get("pending_question") or ""
+    choices = state.get("pending_choices") or []
+    answer = interrupt({"question": question, "choices": choices})
+
+    # Into `context`, NOT `messages` -- every node here (router included)
+    # reads state["messages"][-1] as THE TASK for the whole turn;
+    # appending onto it would silently replace the actual task the next
+    # time anything looked (module docstring). `context` already means
+    # "material gathered so far for planner/solver to use" and is already
+    # shown to every prompt below via "CONTEXT GATHERED SO FAR:" -- the
+    # role that asked sees this Q&A as ordinary background on its next
+    # (fresh) attempt, the same way it would see anything finder dug up.
+    prior = state.get("context") or ""
+    qa = f'you asked: "{question}"\nthe user answered: "{answer}"'
+    role = state.get("asking_role") or "solver"
+    return Command(
+        update={
+            "context": f"{prior}\n\n{qa}" if prior else qa,
+            "pending_question": None,
+            "pending_choices": None,
+            "asking_role": None,
+            "board": [f"you answered otto's question -- {role} is trying again"],
+        },
+        goto=role,
+    )
+
+
 g = StateGraph(AgentState)
 for _name, _fn in (
     ("router", router),
@@ -1189,12 +1405,16 @@ for _name, _fn in (
     ("summarizer", summarizer),
     ("finder", finder),
     ("evaluator", evaluator),
+    ("ask_user", ask_user),
 ):
     g.add_node(_name, _fn)
 g.add_edge(START, "router")
 # Every other edge is a Command(goto=...) from the node function itself --
 # router -> whichever of the five it picks (or a plan step's route_to);
-# every specialist -> router; evaluator -> router (reject, or plan
-# approved) or END (final answer approved) -- nothing else to wire here.
+# every specialist -> router OR ask_user (got stuck, NeedsUserInput --
+# seventh refinement); evaluator -> router (reject, or plan approved),
+# END (final answer approved), or ask_user (same as a specialist);
+# ask_user -> whichever specialist/evaluator asked, once answered --
+# nothing else to wire here.
 
 app = g.compile(checkpointer=InMemorySaver())
