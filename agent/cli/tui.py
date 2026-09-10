@@ -43,6 +43,21 @@ VerticalScroll; `Static` sizes to its renderable's actual height. Nothing
 mounted as `Static` here uses a THEME-custom name (only "bold"/"dim"/
 "red"/"green"/"yellow" -- primitive Rich style words, not aliases), so it
 never needs the theme push RichLog does.
+
+Copying cleanly (2026-09-10, same day, follow-up design call: "user cannot
+copy text from model output from tui cleanly"): a mouse-selected Panel is
+never clean -- box-drawing borders, wrapped lines, and Markdown decoration
+are all part of what gets selected, the same terminal-copy problem
+output.py's own docstring already documents for `save_final`. `ctrl+y` /
+"Copy last answer" (command palette) sidesteps selection entirely: it
+sends the raw `final_output` string -- the exact text `save_final` already
+writes to disk, no Panel/Markdown around it -- to the system clipboard via
+Textual's `copy_to_clipboard` (OSC 52), which most terminals honor without
+any drag-select at all. The one gap OSC 52 itself has (Textual's own
+docstring on it): it does not work on macOS Terminal.app. `action_copy_last`
+says so in its own message rather than leaving a silent no-op, and the
+saved-file path (already printed after every turn) is the fallback either
+way.
 """
 
 from __future__ import annotations
@@ -122,7 +137,10 @@ class ScoreDialog(ModalScreen[tuple[float, str] | None]):
 
 class OttoApp(App):
     TITLE = "otto"
-    BINDINGS = [("ctrl+n", "new_session", "New session")]
+    BINDINGS = [
+        ("ctrl+n", "new_session", "New session"),
+        ("ctrl+y", "copy_last", "Copy last answer"),
+    ]
     DEFAULT_CSS = """
     #transcript { height: 1fr; }
     #transcript Collapsible { padding: 0; }
@@ -133,6 +151,11 @@ class OttoApp(App):
         super().__init__()
         self.ctx = ctx
         self.session = Session(ctx=ctx)
+        #: The last turn's raw final_output (module docstring, "Copying
+        #: cleanly") -- exactly the string save_final() wrote to disk, no
+        #: Panel/Markdown wrapper. None before any turn has finished, or
+        #: after one that produced nothing.
+        self._last_output: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -191,9 +214,31 @@ class OttoApp(App):
         yield SystemCommand("Rate last answer: good", "Score the last answer 1.0", lambda: self.action_score(1.0, ""))
         yield SystemCommand("Rate last answer: bad", "Score the last answer 0.0", lambda: self.action_score(0.0, ""))
         yield SystemCommand("Rate last answer…", "Score the last answer with a value and a comment", self.action_score_dialog)
+        yield SystemCommand("Copy last answer", "Copy the raw final answer to your clipboard", self.action_copy_last)
         yield SystemCommand("New session", "Clear history, start fresh", self.action_new_session)
 
     # ---- actions behind those commands --------------------------------
+
+    def action_copy_last(self) -> None:
+        """ctrl+y / command palette (module docstring, "Copying cleanly").
+        Sends the RAW final_output straight to the system clipboard via
+        OSC 52 -- no Panel border, no Markdown rendering, nothing a mouse
+        selection would drag in. Doesn't work on macOS Terminal.app
+        (Textual's own copy_to_clipboard docstring); says so plainly
+        rather than leaving a silent no-op, since there's no way to detect
+        that case from here and a copy that quietly did nothing is worse
+        than one that explains itself.
+        """
+        if not self._last_output:
+            self._post("[yellow]nothing to copy yet[/]")
+            return
+        self.copy_to_clipboard(self._last_output)
+        self._post(
+            "[dim]copied the last answer to your clipboard (raw text, not "
+            "the panel) -- if nothing pasted, your terminal may not "
+            "support this (e.g. macOS Terminal.app doesn't); the saved-to "
+            "path above always works[/]"
+        )
 
     def action_pick_route(self) -> None:
         def done(task: Task | None) -> None:
@@ -249,6 +294,7 @@ class OttoApp(App):
         self.session.history.clear()
         self.session.session_id = uuid.uuid4().hex
         self.session.trace_id = None
+        self._last_output = None
         self._post("[dim]new session[/]")
 
     # ---- the message box: the one thing that stays typed ---------------
@@ -278,6 +324,7 @@ class OttoApp(App):
                     self.session.trace_id = update.get("__trace_id__")
                     raw_output = (final.get("final_output") or "").strip()
                     code = raw_output or "*(no output produced)*"
+                    self._last_output = raw_output or None
                     self.call_from_thread(
                         self._post,
                         Panel(Markdown(code), title="[green]final[/]", border_style="green"),
