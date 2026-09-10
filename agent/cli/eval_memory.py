@@ -39,7 +39,14 @@ from rich import box
 from rich.table import Table
 
 from agent.cli.ui import err, out
-from agent.eval.memory_bench import BenchmarkReport, DEFAULT_CACHE, download_locomo, load_locomo, run_benchmark
+from agent.eval.memory_bench import (
+    BenchmarkReport,
+    DEFAULT_CACHE,
+    download_locomo,
+    load_locomo,
+    recalled_text_has_unparsed_bullet,
+    run_benchmark,
+)
 
 
 def eval_memory_cmd(
@@ -151,6 +158,15 @@ def eval_memory_cmd(
         f"final_view/raw token ratio: {ratio_text}[/]"
     )
 
+    unparsed = summary["unparsed_bullet_count"]
+    if unparsed:
+        err.print(
+            f"[warn]{unparsed}/{summary['bullet_count']} stored bullets are unparsed-summary "
+            f"placeholders (the summarizer's reply didn't parse for that compaction) -- "
+            f"recall_coverage is partly measuring ranking against content-free text, not a "
+            f"real summary. --show-items all will show which questions land on one.[/]"
+        )
+
     if show_items != "none":
         _print_items(report, show_items)
 
@@ -181,7 +197,8 @@ def _print_items(report: BenchmarkReport, which: str) -> None:
             shown += 1
             verdict = "[ok]answerable[/]" if r.answerable else "[bad]MISS[/]"
             via = "verbatim" if r.visible_verbatim else ("recalled" if r.recalled else "neither")
-            out.print(f"[spec]{conv.sample_id}[/] [muted]({via})[/] {verdict}")
+            flag = " [warn]unparsed-bullet[/]" if recalled_text_has_unparsed_bullet(r.recalled_text) else ""
+            out.print(f"[spec]{conv.sample_id}[/] [muted]({via})[/] {verdict}{flag}")
             out.print(f"  Q: {r.question}")
             out.print(f"  evidence: {_snippet(r.evidence_text)}")
             out.print(f"  recalled: {_snippet(r.recalled_text)}")
