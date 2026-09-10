@@ -1,9 +1,13 @@
-"""Coverage for evaluator() (agent/pipeline/nodes.py) -- judges the
-dispatched specialist's answer with the same ACTION/FINAL tool-calling
-loop every role node has (_tool_loop), then either ends the graph (approve,
-or gives up after MAX_DISPATCH_ROUNDS) or sends rejection feedback back to
-router() -- never straight back to the same specialist (2026-09-10 design
-call: "router re-dispatches").
+"""Coverage for evaluator() (agent/pipeline/nodes.py) -- dual-mode judge,
+with the same ACTION/FINAL tool-calling loop every role node has
+(_tool_loop). It judges a PLAN (state["node"] == "planner") or a candidate
+FINAL ANSWER (anything else) -- different question, different prompt.
+
+Approving a plan hands back to the overseer (there's more work left --
+the plan hasn't been executed yet); approving a final answer ends the run.
+Rejecting either always goes back to the overseer with the reason -- there
+is no round cap and no exhaustion branch anymore (2026-09-10 design call:
+"we dont need any variable to limit number of rounds a agent runs for").
 
 _parse_approval defaults to approve=False whenever _tool_loop's reply
 never contained an "APPROVE:" line at all (e.g. it exhausted on
@@ -39,13 +43,15 @@ def _state(**overrides) -> dict:
         "node": "solver",
         "feedback": "",
         "output": "yes, 17 is prime",
+        "context": "",
+        "plan": None,
         "final_output": None,
     }
     base.update(overrides)
     return base
 
 
-def test_evaluator_approves_and_ends_the_graph(monkeypatch):
+def test_evaluator_approves_a_final_answer_and_ends_the_graph(monkeypatch):
     fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: correct and verified")
     _install(monkeypatch, fake)
 
@@ -55,7 +61,20 @@ def test_evaluator_approves_and_ends_the_graph(monkeypatch):
     assert result.update["final_output"] == "yes, 17 is prime"
 
 
-def test_evaluator_rejects_and_routes_feedback_back_to_router(monkeypatch):
+def test_evaluator_judges_a_final_answer_using_the_final_answer_framing(monkeypatch):
+    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: fine")
+    _install(monkeypatch, fake)
+
+    pn.evaluator(_state(node="solver", output="def f(): return 1"))
+
+    system, human = fake.calls[0]
+    assert "SOLVER OUTPUT" in system
+    assert "as a finished answer" in system
+    assert "SOLVER OUTPUT" in human
+    assert "def f(): return 1" in human
+
+
+def test_evaluator_rejects_a_final_answer_and_routes_feedback_back_to_router(monkeypatch):
     fake = _FakeModel("FINAL:\nAPPROVE: no\nWHY: never checked divisibility")
     _install(monkeypatch, fake)
 
@@ -66,14 +85,53 @@ def test_evaluator_rejects_and_routes_feedback_back_to_router(monkeypatch):
     assert "final_output" not in result.update
 
 
-def test_evaluator_gives_up_after_max_dispatch_rounds_and_uses_the_last_answer(monkeypatch):
+def test_evaluator_rejects_repeatedly_with_no_round_cap(monkeypatch):
+    # No MAX_DISPATCH_ROUNDS anymore -- a rejection always goes back to the
+    # overseer regardless of how many rounds have already happened.
     fake = _FakeModel("FINAL:\nAPPROVE: no\nWHY: still not great")
     _install(monkeypatch, fake)
 
-    result = pn.evaluator(_state(round=pn.MAX_DISPATCH_ROUNDS))
+    result = pn.evaluator(_state(round=500))
 
-    assert result.goto == END
-    assert result.update["final_output"] == "yes, 17 is prime"
+    assert result.goto == "router"
+    assert "final_output" not in result.update
+
+
+def test_evaluator_judges_a_plan_when_the_pending_output_came_from_planner(monkeypatch):
+    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: sound and complete")
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="planner", output="1. do x\n2. do y"))
+
+    system, human = fake.calls[0]
+    assert "PLAN" in system
+    assert "would produce a satisfying result if followed" in system
+    assert "PLAN (from planner)" in human
+
+
+def test_evaluator_approving_a_plan_stores_it_and_returns_to_router_not_end(monkeypatch):
+    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: sound and complete")
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="planner", output="1. do x\n2. do y"))
+
+    assert result.goto == "router"
+    assert result.update["plan"] == "1. do x\n2. do y"
+    assert result.update["output"] is None
+    assert result.update["feedback"] == ""
+    assert "final_output" not in result.update
+
+
+def test_evaluator_rejecting_a_plan_routes_feedback_back_to_router_same_as_a_final_answer(monkeypatch):
+    fake = _FakeModel("FINAL:\nAPPROVE: no\nWHY: missing a step")
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="planner", output="1. do x"))
+
+    assert result.goto == "router"
+    assert result.update["feedback"] == "missing a step"
+    assert "plan" not in result.update
+    assert "final_output" not in result.update
 
 
 def test_evaluator_treats_a_verdict_less_reply_as_a_rejection_not_an_approval(monkeypatch):

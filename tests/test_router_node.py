@@ -1,14 +1,14 @@
-"""Coverage for router() itself (agent/pipeline/nodes.py) -- the single
-classification call that replaces the swarm pipeline's whole plan-
-negotiation loop (orchestrator_propose/orchestrator_review/
-orchestrator_consensus). No vote, no tool use: one call in, one Command
-dispatching to exactly one specialist out.
+"""Coverage for router() itself (agent/pipeline/nodes.py) -- the overseer.
+Re-invoked after every node (not just after a rejection), one call, no
+tools: it reads everything accumulated so far (context/plan/pending output
+or feedback, via _router_body) and picks exactly one of five targets
+(planner, solver, summarizer, finder, evaluator) to run next.
 
-Round 1 (no feedback yet) and a retry round (feedback from a prior
-evaluator rejection) use different prompts (ROUTER_PROMPT vs.
-ROUTER_RETRY_PROMPT) -- both are exercised here, since picking the wrong
-one silently would still produce a syntactically valid Command and only
-show up as worse routing decisions in practice, never a crash.
+Unlike the first revision, there is only ONE router prompt now (ROUTER_PROMPT)
+-- round 1 and a retry round differ only in what _router_body puts in the
+human message, not in which system prompt is used. router() also no longer
+predicts `state["node"]` ahead of time; whichever node runs next self-reports
+its own identity (see test_role_nodes.py).
 """
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
@@ -37,6 +37,8 @@ def _state(**overrides) -> dict:
         "node": None,
         "feedback": "",
         "output": None,
+        "context": "",
+        "plan": None,
         "final_output": None,
     }
     base.update(overrides)
@@ -50,9 +52,11 @@ def test_router_dispatches_to_the_node_the_model_named(monkeypatch):
     result = pn.router(_state())
 
     assert result.goto == "solver"
-    assert result.update["node"] == "solver"
     assert result.update["round"] == 1
     assert "solver" in result.update["board"][0]
+    # router() no longer predicts `node` ahead of time -- whichever node
+    # runs next self-reports its own identity (see test_role_nodes.py).
+    assert "node" not in result.update
 
 
 def test_router_falls_back_to_solver_on_an_unparseable_reply(monkeypatch):
@@ -64,7 +68,7 @@ def test_router_falls_back_to_solver_on_an_unparseable_reply(monkeypatch):
     assert result.goto == "solver"
 
 
-def test_round_one_uses_the_plain_router_prompt_with_just_the_task(monkeypatch):
+def test_round_one_uses_just_the_task_with_no_context_plan_or_feedback(monkeypatch):
     fake = _FakeModel("NODE: planner\nWHY: multi-step")
     _install(monkeypatch, fake)
 
@@ -72,10 +76,10 @@ def test_round_one_uses_the_plain_router_prompt_with_just_the_task(monkeypatch):
 
     system, human = fake.calls[0]
     assert system == pn.ROUTER_PROMPT
-    assert human == "write a function that checks if a number is prime"
+    assert human == "TASK:\nwrite a function that checks if a number is prime"
 
 
-def test_retry_round_uses_the_retry_prompt_with_feedback_and_previous_attempt(monkeypatch):
+def test_a_rejection_shows_the_same_prompt_with_the_previous_attempt_and_feedback(monkeypatch):
     fake = _FakeModel("NODE: solver\nWHY: try again with fixes")
     _install(monkeypatch, fake)
 
@@ -85,9 +89,51 @@ def test_retry_round_uses_the_retry_prompt_with_feedback_and_previous_attempt(mo
     ))
 
     system, human = fake.calls[0]
-    assert system == pn.ROUTER_RETRY_PROMPT
+    assert system == pn.ROUTER_PROMPT
     assert "planner" in human
     assert "1. do a thing" in human
     assert "the plan never actually solves the problem" in human
     assert result.update["round"] == 2
     assert result.goto == "solver"
+
+
+def test_gathered_context_and_an_approved_plan_are_both_shown_to_the_overseer(monkeypatch):
+    fake = _FakeModel("NODE: solver\nWHY: plan and context are ready")
+    _install(monkeypatch, fake)
+
+    pn.router(_state(context="found: the repo uses pytest", plan="1. write the function\n2. test it"))
+
+    _, human = fake.calls[0]
+    assert "found: the repo uses pytest" in human
+    assert "1. write the function\n2. test it" in human
+
+
+def test_a_pending_unjudged_output_is_shown_but_not_confused_with_a_rejection(monkeypatch):
+    fake = _FakeModel("NODE: evaluator\nWHY: ready to judge")
+    _install(monkeypatch, fake)
+
+    pn.router(_state(node="solver", output="def f(): return 1", feedback=""))
+
+    _, human = fake.calls[0]
+    assert "PENDING OUTPUT (from solver, not yet judged)" in human
+    assert "def f(): return 1" in human
+    assert "REJECTED ATTEMPT" not in human
+
+
+def test_choosing_evaluator_with_nothing_pending_judgment_falls_back_to_solver(monkeypatch):
+    fake = _FakeModel("NODE: evaluator\nWHY: seems done")
+    _install(monkeypatch, fake)
+
+    result = pn.router(_state(node=None, output=None, feedback=""))
+
+    assert result.goto == "solver"
+    assert "nothing pending judgment" in result.update["board"][0]
+
+
+def test_choosing_evaluator_is_honored_when_something_is_actually_pending(monkeypatch):
+    fake = _FakeModel("NODE: evaluator\nWHY: plan is ready to judge")
+    _install(monkeypatch, fake)
+
+    result = pn.router(_state(node="planner", output="1. step one", feedback=""))
+
+    assert result.goto == "evaluator"

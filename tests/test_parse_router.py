@@ -27,6 +27,14 @@ def test_every_role_node_name_round_trips():
         assert node == role
 
 
+def test_evaluator_is_also_a_valid_dispatch_target():
+    # DISPATCH_TARGETS = ROLE_NODES + ("evaluator",) -- the overseer may
+    # explicitly send work to be judged, not just to a specialist.
+    node, why = pn._parse_router("NODE: evaluator\nWHY: ready to judge")
+    assert node == "evaluator"
+    assert why == "ready to judge"
+
+
 def test_an_unrecognised_node_name_falls_back_to_solver_with_an_explanatory_why():
     node, why = pn._parse_router("NODE: astrologer\nWHY: x")
     assert node == "solver"
