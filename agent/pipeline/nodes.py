@@ -451,6 +451,17 @@ MAX_CONSECUTIVE_DEAD_REPLIES = 3
 #: reached through five node functions and a LangGraph call, none of which
 #: take agent-level configuration today, and threading one through all of
 #: them to serve the harness would be a worse trade than this.
+#: The lowest temperature Inception's chat endpoint actually honours.
+#:
+#: Their documented range is 0.5-1.0, and an out-of-range value is not clamped
+#: -- it is reset to the model default, which is 1.0 for mercury-2.5. So every
+#: node here that asked for 0.0-0.4 was being served the most random setting
+#: available, which is the exact opposite of what it asked for and had been
+#: since these were written. agent/router/llm_provider/inception_provider.py
+#: clamps as a backstop; these call sites now say what they can actually get,
+#: so nobody reads 0.0 here and believes it.
+MOST_DETERMINISTIC = 0.5
+
 MAX_TOOL_ITERATIONS = int(os.environ.get("OTTO_MAX_TOOL_ITERATIONS", "5"))
 
 #: The ACTION: enumeration every role/evaluator prompt shows, built FROM the
@@ -488,6 +499,42 @@ _TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user"))
 #: re-issue a failing command verbatim several times over, because re-trying
 #: is cheaper to produce than diagnosing. Saying plainly that a repeat needs a
 #: reason is what turns the second attempt into a question about the first.
+#: The CODE: body format for each tool, written once instead of five times.
+#:
+#: It used to be spelled out inline in every prompt at 1054 characters -- 35%
+#: of the solver's whole prompt, repeated five ways, and hand-edited five ways
+#: every time a tool was added. Together with the habits block below that left
+#: the solver's own instructions as about a sixth of what it was reading,
+#: which matters more here than it would elsewhere: a fifth habit measurably
+#: erased the effect of the four before it, so length on this model is not
+#: free.
+#:
+#: Trimmed to the formats a caller cannot guess. execute_bash takes a command,
+#: execute_python takes code, web_search and rag take a query -- saying so
+#: costs tokens and tells the model nothing it did not already know from the
+#: tool's name.
+_TOOL_BODY_HINT = (
+    "read_file: a path, optionally `path:START-END`. "
+    "list_files: a directory. "
+    "write_file: the path on the FIRST line, the file's whole content after "
+    "it -- no separator, no JSON. "
+    "edit_file: the path, then a line `---OLD---`, the exact text to replace, "
+    "a line `---NEW---`, the replacement. "
+    "complete_code: code, optionally `---SUFFIX---` then trailing code. "
+    "predict_edit: code only, no instruction. "
+    "recall_memory: a search query. "
+    "ask_user: a question, optionally then `CHOICES: a | b` -- only when "
+    "genuinely stuck on something only the person can supply; it pauses the "
+    "run and costs them real time."
+)
+
+#: The ACTION/CODE protocol, assembled once for every prompt that offers tools.
+_ACTION_BLOCK = (
+    "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<"
+    + _TOOL_BODY_HINT
+    + ">\nand you will be shown the result, then you can continue. "
+)
+
 _DIAGNOSTIC_HABITS = (
     "Four habits, whatever the task:\n"
     "1. Look at the system, not just at the thing that broke. Before you "
@@ -594,21 +641,9 @@ PLANNER_PROMPT = (
     "concrete, executable steps for OTHER specialists to carry out -- you "
     "do not execute any step yourself, and you do not decide who executes "
     "each step (the overseer assigns that later, one step at a time, as "
-    "each one runs). You may check your reasoning with a tool: reply with "
-    "exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input for "
-    "that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
-    "semantic search over this session's own compacted-away conversation "
-    "history; complete_code: prefix code, optionally then a line "
-    "\"---SUFFIX---\" "
-    "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit; ask_user: "
-    "a question for the person, optionally followed by a line \"CHOICES: "
-    "option one | option two | ...\" to also offer pick-able choices "
-    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
-    "genuinely stuck on something nobody but the person can supply, never "
-    "as a shortcut around planning yourself: it pauses the whole run and "
-    "costs them real time>\nand you "
-    "will be shown the result, then you can continue. When you are done, "
+    "each one runs). You may check your reasoning with a tool: "
+    + _ACTION_BLOCK +
+    "When you are done, "
     "reply with exactly\nFINAL:\n<a JSON array of steps, each an object "
     "with exactly one key \"task\" holding that step's description -- "
     "e.g. [{{\"task\": \"write the core function\"}}, {{\"task\": \"add "
@@ -621,21 +656,9 @@ SOLVER_PROMPT = (
     "You are the SOLVER. Work out a concrete answer to the request below, "
     "writing and running code where that helps you check it.\n\n"
     + _DIAGNOSTIC_HABITS +
-    "\nReply with "
-    "exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input for "
-    "that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
-    "semantic search over this session's own compacted-away conversation "
-    "history; complete_code: prefix code, optionally then a line "
-    "\"---SUFFIX---\" "
-    "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit; ask_user: "
-    "a question for the person, optionally followed by a line \"CHOICES: "
-    "option one | option two | ...\" to also offer pick-able choices "
-    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
-    "genuinely stuck on something nobody but the person can supply, never "
-    "as a shortcut around solving it yourself: it pauses the whole run "
-    "and costs them real time>\nand you "
-    "will be shown the result, then you can continue. When you are done, "
+    "\n"
+    + _ACTION_BLOCK +
+    "When you are done, "
     "reply with exactly\nFINAL:\n<the complete answer, nothing else -- no "
     "markdown code fences, no explanation>\nYou have at most {max_iter} "
     "exchanges before your last reply is used as-is."
@@ -644,20 +667,8 @@ SUMMARIZER_PROMPT = (
     "You are the SUMMARIZER. Condense or rewrite the given content below to "
     "satisfy the request -- you are not looking anything new up or solving "
     "a new problem. You may still use a tool if it helps verify something: "
-    "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input "
-    "for that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
-    "semantic search over this session's own compacted-away conversation "
-    "history; complete_code: prefix code, optionally then a line "
-    "\"---SUFFIX---\" "
-    "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit; ask_user: "
-    "a question for the person, optionally followed by a line \"CHOICES: "
-    "option one | option two | ...\" to also offer pick-able choices "
-    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
-    "genuinely stuck on something nobody but the person can supply, never "
-    "as a shortcut around condensing it yourself: it pauses the whole run "
-    "and costs them real time>\nand you "
-    "will be shown the result, then you can continue. When you are done, "
+    + _ACTION_BLOCK +
+    "When you are done, "
     "reply with exactly\nFINAL:\n<the summary, nothing else -- no markdown "
     "code fences, no explanation>\nYou have at most {max_iter} exchanges "
     "before your last reply is used as-is."
@@ -673,25 +684,9 @@ FINDER_PROMPT = (
     "knowledge base; web_search for the open web (rag and web_search are "
     "both stubbed today and will tell you so -- if that happens, fall "
     "back to your own knowledge and say plainly in your answer that you "
-    "could not verify it). Reply with exactly\nACTION: <" + _TOOL_MENU +
-    ">\nCODE:\n<input for that tool -- "
-    "read_file: a path, optionally with \":START-END\" for a line range; "
-    "list_files: a directory path; write_file: the path on the FIRST line "
-    "and the whole file content after it -- nothing in between, no JSON; "
-    "edit_file: the path on the first line, then a line \"---OLD---\", the "
-    "exact text to replace, a line \"---NEW---\", then what to replace it "
-    "with; "
-    "recall_memory: a plain search query, nothing else; complete_code: "
-    "prefix code, optionally then a line \"---SUFFIX---\" and trailing "
-    "code; predict_edit: code, optionally with a <|cursor|> marker, no "
-    "instruction -- it only predicts the next edit; ask_user: a question "
-    "for the person, optionally followed by a line \"CHOICES: option one "
-    "| option two | ...\" to also offer pick-able choices (omit CHOICES: "
-    "for an open-ended question) -- use this ONLY when genuinely stuck on "
-    "something nobody but the person can supply, never as a shortcut "
-    "around looking it up yourself: it pauses the whole run and costs "
-    "them real time>\nand you will be shown "
-    "the result, then you can continue. When you are done, reply with "
+    "could not verify it). "
+    + _ACTION_BLOCK +
+    "When you are done, reply with "
     "exactly\nFINAL:\n<what you found, nothing else -- no markdown code "
     "fences, no explanation>\nYou have at most {max_iter} exchanges before "
     "your last reply is used as-is."
@@ -730,20 +725,8 @@ EVALUATOR_PROMPT = (
     "and if you have reason to doubt it, look for what would change it "
     "back.\n\n"
     "You check with a tool: "
-    "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input "
-    "for that tool -- read_file: a path, optionally with \":START-END\" for a line range; list_files: a directory path; write_file: the path on the FIRST line and the whole file content after it -- nothing in between, no JSON; edit_file: the path on the first line, then a line \"---OLD---\", the exact text to replace, a line \"---NEW---\", then what to replace it with; recall_memory: a plain search query, nothing else -- "
-    "semantic search over this session's own compacted-away conversation "
-    "history; complete_code: prefix code, optionally then a line "
-    "\"---SUFFIX---\" "
-    "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit; ask_user: "
-    "a question for the person, optionally followed by a line \"CHOICES: "
-    "option one | option two | ...\" to also offer pick-able choices "
-    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
-    "genuinely stuck on something nobody but the person can supply, never "
-    "as a shortcut around judging it yourself: it pauses the whole run "
-    "and costs them real time>\nand you "
-    "will be shown the result, then you can continue. When you are done, "
+    + _ACTION_BLOCK +
+    "When you are done, "
     "reply with exactly\nFINAL:\nAPPROVE: yes or no\nWHY: one sentence\n"
     "You have at most {max_iter} exchanges before your last reply is used "
     "as-is."
@@ -1150,7 +1133,7 @@ def _decide(system_prompt: str, human_body: str, *, targets: tuple[str, ...]) ->
     decision and the narrower per-step assignment) -- identical retry
     logic either way, just different prompts/targets.
     """
-    llm = ROUTER.chat_model(Task.CHAT_FAST, temperature=0.2)
+    llm = ROUTER.chat_model(Task.CHAT_FAST, temperature=MOST_DETERMINISTIC)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     text = _call(llm, messages)
     node, why = _extract_node(text, targets)
@@ -1591,7 +1574,7 @@ def _run_role(
 
 
 def planner(state: AgentState) -> Command[Literal["router", "ask_user"]]:
-    return _run_role(state, role="planner", task=Task.PLAN, temperature=0.4, prompt=PLANNER_PROMPT)
+    return _run_role(state, role="planner", task=Task.PLAN, temperature=MOST_DETERMINISTIC, prompt=PLANNER_PROMPT)
 
 
 def solver(state: AgentState) -> Command[Literal["router", "ask_user"]]:
@@ -1600,7 +1583,7 @@ def solver(state: AgentState) -> Command[Literal["router", "ask_user"]]:
 
 def summarizer(state: AgentState) -> Command[Literal["router", "ask_user"]]:
     return _run_role(
-        state, role="summarizer", task=Task.SUMMARIZE, temperature=0.2,
+        state, role="summarizer", task=Task.SUMMARIZE, temperature=MOST_DETERMINISTIC,
         prompt=SUMMARIZER_PROMPT, context_op="replace",
     )
 
@@ -1611,7 +1594,7 @@ def finder(state: AgentState) -> Command[Literal["router", "ask_user"]]:
     # supposed to be the tool call, not deliberation. Revisit if/when
     # web_search/rag stop being stubs and finder's actual job gets harder.
     return _run_role(
-        state, role="finder", task=Task.CHAT_FAST, temperature=0.3,
+        state, role="finder", task=Task.CHAT_FAST, temperature=MOST_DETERMINISTIC,
         prompt=FINDER_PROMPT, context_op="append",
     )
 
@@ -1632,7 +1615,7 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__", "ask_us
     output = state.get("output") or ""
     judging_plan = node == "planner"
 
-    llm = ROUTER.chat_model(Task.REASON, temperature=0.0)
+    llm = ROUTER.chat_model(Task.REASON, temperature=MOST_DETERMINISTIC)
     if judging_plan:
         target, target_note = "PLAN", (
             "a properly ordered, complete JSON list of executable steps "
