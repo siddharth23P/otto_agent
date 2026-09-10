@@ -114,6 +114,47 @@ entire extra specialist round (a full ACTION/FINAL tool loop) to recover,
 every time it happens. A retry of just the one small router call is far
 cheaper and, empirically, usually succeeds on the first retry.
 
+Fifth refinement, same day (design call, verbatim: "if evaluator fails
+router should again go to planner for planning next steps based on
+current output"): a live run crashed with an uncaught httpx.ReadTimeout,
+raised mid-stream deep inside the Inception provider (solver's own call,
+that time -- not evaluator's), propagating all the way up through this
+file's `_call` and out of `app.invoke()` entirely. Two things changed:
+
+  * agent/router/llm_provider/inception_provider.py's `_stream` only
+    translated exceptions raised by the initial `client.chat.completions.
+    create(...)` call into ProviderError -- NOT exceptions raised while
+    iterating the returned stream itself (`for chunk in stream:`), which
+    is exactly where a read timeout happens (the request already
+    succeeded; the response body is still arriving). That gap is now
+    closed: the iteration is wrapped the same way the initial call is,
+    and raw httpx errors (not just the SDK's own InceptionError subtree)
+    are translated too, since a read timeout mid-stream surfaces as a raw
+    httpx.ReadTimeout, never one of the SDK's own wrapped types. The
+    invariant this restores (base.py's own docstring already states it):
+    nothing but ProviderError should ever cross the provider boundary.
+
+  * With that invariant actually holding, `_run_role` and `evaluator`
+    (below) now catch ProviderError around their own `_tool_loop` call
+    instead of letting it crash the graph. Rather than a real output or
+    verdict, they return to router() with `state["node_error"]` set
+    (state.py) -- and router() checks that FIRST, ahead of both the
+    plan-execution shortcut and the general 5-way decision, escalating to
+    planner DETERMINISTICALLY (no LLM call -- an LLM call is exactly what
+    just failed) with any active plan discarded, same as an ordinary
+    rejection-driven escalation. The literal request said "if evaluator
+    fails" -- but the crash that prompted it happened in solver, and
+    there's no principled reason a specialist's own network hiccup should
+    be handled differently from the evaluator's, so this is general: any
+    of the five nodes' own LLM call failing routes back to planner the
+    same way. "based on current output" is handled by reusing
+    _role_body's existing "PREVIOUS ATTEMPT BY <role>" background display
+    -- the failing node writes a plain-language explanation into
+    `feedback` (state["output"] itself is left untouched by the failure),
+    so planner sees exactly what a different specialist's rejected
+    attempt already looks like to it, just with a failure reason instead
+    of an evaluator's.
+
 Deliberately out of scope for this revision, same as the first:
   - web_search and rag are still STUBBED (tools.py).
   - No domain-specific verification beyond the evaluator's own tool access.
@@ -787,6 +828,27 @@ def router(state: AgentState) -> Command[Literal["planner", "solver", "summarize
     task_text = state["messages"][-1].content
     plan = state.get("plan")
     feedback = state.get("feedback") or ""
+    node_error = state.get("node_error") or ""
+
+    if node_error:
+        # A provider/network failure interrupted whoever just ran -- a
+        # specialist mid-attempt (possibly mid-plan-step), or the
+        # evaluator itself (module docstring, fifth refinement).
+        # Deterministic, no LLM call: an LLM call is exactly what just
+        # failed, so asking another one to decide what to do about it
+        # would be both ironic and just as likely to fail again. Discards
+        # any active plan the same way an ordinary rejection-driven
+        # escalation to planner already does -- a plan whose own step
+        # runner just blew up cannot simply resume where it left off.
+        update: dict = {
+            "round": round_,
+            "node_error": "",
+            "board": [f"round {round_}: overseer -- provider failure, escalating to planner ({node_error})"],
+        }
+        if plan is not None:
+            update["plan"] = None
+            update["active_step"] = None
+        return Command(update=update, goto="planner")
 
     if isinstance(plan, list) and plan and not feedback:
         # An approved plan is active and nothing is currently rejected --
@@ -895,7 +957,27 @@ def _run_role(
     )
     human_body = _role_body(state, task_text, role=role, revising=revising, executing_step=executing_step, active_step=active_step)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
-    output = _tool_loop(llm, messages)
+    try:
+        output = _tool_loop(llm, messages)
+    except ProviderError as exc:
+        # A provider/network failure interrupted this attempt before it
+        # produced anything -- fifth refinement (module docstring).
+        # Deliberately does NOT touch state["output"]/"plan"/"context": if
+        # this was executing a plan step, the step stays exactly as it
+        # was (still pending) -- router() discards the whole plan on the
+        # node_error branch anyway, so there is nothing to write back.
+        return Command(
+            update={
+                "node_error": f"{role}: {exc}",
+                "feedback": (
+                    f"the previous attempt by {role} was interrupted by a "
+                    f"provider/network failure before it produced anything "
+                    f"-- not rejected by the evaluator: {exc}"
+                ),
+                "board": [f"{role} failed with a provider error (round {state['round']}): {exc}"],
+            },
+            goto="router",
+        )
 
     update: dict = {
         "output": output,
@@ -986,7 +1068,28 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__"]]:
     system_prompt = EVALUATOR_PROMPT.format(target=target, target_note=target_note, max_iter=MAX_TOOL_ITERATIONS)
     human_body = f"ORIGINAL REQUEST:\n{task_text}\n\n{human_label}:\n{output}"
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
-    reply = _tool_loop(llm, messages)
+    try:
+        reply = _tool_loop(llm, messages)
+    except ProviderError as exc:
+        # A provider/network failure interrupted the evaluator itself --
+        # fifth refinement (module docstring). `output` (whatever is
+        # pending judgment) is left untouched; the failure text goes into
+        # `feedback` so planner sees it the same way it would see any
+        # other specialist's rejected attempt, via _role_body's existing
+        # background display.
+        what = "plan" if judging_plan else "output"
+        return Command(
+            update={
+                "node_error": f"evaluator: {exc}",
+                "feedback": (
+                    f"the evaluator was interrupted by a provider/network "
+                    f"failure before it could judge {node}'s {what} -- not "
+                    f"a real rejection: {exc}"
+                ),
+                "board": [f"evaluator failed with a provider error (round {state['round']}): {exc}"],
+            },
+            goto="router",
+        )
     # _parse_approval defaults to approve=False whenever "APPROVE:" isn't
     # found in `reply` at all (e.g. _tool_loop exhausted on unparseable
     # replies) -- fails CLOSED by construction: an evaluator that never

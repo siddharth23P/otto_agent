@@ -29,6 +29,7 @@ def test_initial_state_matches_the_agentstate_shape_with_empty_start_values():
     assert state["context"] == ""
     assert state["plan"] is None
     assert state["active_step"] is None
+    assert state["node_error"] is None
     assert state["final_output"] is None
 
 

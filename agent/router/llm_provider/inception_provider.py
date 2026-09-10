@@ -9,6 +9,26 @@ a LangGraph node and visible to Langfuse -- but the transport underneath is
 Inception is the only one of the four vendors that returns real capability
 metadata (`supported_features`, `input_modalities`, `context_length`), so
 nothing here is guessed from model-name prefixes.
+
+2026-09-10: a live run crashed with an uncaught httpx.ReadTimeout, raised
+mid-stream and propagating all the way up through agent/pipeline/nodes.py's
+`_call` and out of the whole graph. `_stream`'s own try/except only ever
+wrapped the *initial* `client.chat.completions.create(...)` call -- not
+exceptions raised while iterating the stream it returns (`for chunk in
+stream:`), which is exactly where a read timeout happens: the request
+already succeeded, the response body is still arriving. Two things fixed
+that, both below: the iteration is now wrapped the same way the initial
+call already was, and raw `httpx.HTTPError` (not just the SDK's own
+`InceptionError` subtree) is translated too, since a read timeout mid-
+stream surfaces as a raw httpx exception, never one of the SDK's own
+wrapped types (those only come from the SDK's own request/response
+handling, which a lazy stream-body read falls outside of). This restores
+the invariant base.py's own docstring already states: nothing but
+`ProviderError` should ever cross a provider boundary. See
+agent/pipeline/nodes.py's module docstring (fifth refinement) for what
+this enables one layer up -- a node's own LLM call failing no longer
+crashes the graph, it becomes a normal (if unwelcome) edge back to the
+overseer.
 """
 
 from __future__ import annotations
@@ -19,6 +39,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any, Iterator, Literal, Sequence
 
+import httpx
 from inceptionai import Inception
 from inceptionai._exceptions import (
     APIConnectionError,
@@ -97,11 +118,21 @@ def _usage(u: Any) -> dict[str, int] | None:
 
 
 def _translate(exc: Exception) -> ProviderError:
-    """Map an `inceptionai` exception onto the provider error hierarchy.
+    """Map an `inceptionai` (or raw httpx) exception onto the provider error
+    hierarchy.
 
     Order matters: AuthenticationError, PermissionDeniedError and NotFoundError
     all subclass APIStatusError, so the narrow cases must be tested first or
     they get swallowed by the broad one.
+
+    `httpx.HTTPError` is handled explicitly (2026-09-10) because it is NOT an
+    `InceptionError` -- the SDK only raises its own typed exceptions from its
+    own request/response handling; a network fault mid-stream-body-read
+    (see module docstring) surfaces as a raw httpx exception instead, and
+    without this branch it would fall through to the generic `ProviderError`
+    case below, which is still safe but loses the more specific
+    `ProviderUnavailable` classification (and the retry-worthy signal that
+    comes with it) a timeout or connection drop deserves.
     """
     if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
         return AuthError(f"inception: key rejected ({exc})")
@@ -111,6 +142,8 @@ def _translate(exc: Exception) -> ProviderError:
         if exc.status_code in (401, 403):
             return AuthError(f"inception: HTTP {exc.status_code}")
         return ProviderError(f"inception: HTTP {exc.status_code}")
+    if isinstance(exc, httpx.HTTPError):
+        return ProviderUnavailable(f"inception: {exc}")
     return ProviderError(f"inception: {exc}")
 
 
@@ -306,7 +339,7 @@ class ChatInception(BaseChatModel):
             completion = self.client.chat.completions.create(
                 **self._payload(messages, stop, **kwargs)
             )
-        except InceptionError as exc:
+        except (InceptionError, httpx.HTTPError) as exc:
             raise _translate(exc) from exc
 
         choice = completion.choices[0]
@@ -351,7 +384,7 @@ class ChatInception(BaseChatModel):
 
         try:
             stream = self.client.chat.completions.create(**payload)
-        except InceptionError as exc:
+        except (InceptionError, httpx.HTTPError) as exc:
             raise _translate(exc) from exc
 
         # Diffusion does not stream deltas. Every chunk is a full snapshot of
@@ -364,65 +397,75 @@ class ChatInception(BaseChatModel):
         finish_reason: str | None = None
         stamped = False
 
-        for chunk in stream:
-            if not chunk.choices:
-                # The usage-only chunk: `choices` is empty and `usage` is
-                # populated. The SDK's ChatCompletionChunk does not declare a
-                # `usage` field even though the API documents sending one, so
-                # read it defensively rather than trusting the type.
-                usage = getattr(chunk, "usage", None)
-                if usage is None and isinstance(getattr(chunk, "model_extra", None), Mapping):
-                    usage = chunk.model_extra.get("usage")
-                input_tokens = _field(usage, "prompt_tokens")
-                output_tokens = _field(usage, "completion_tokens")
-                if input_tokens is not None or output_tokens is not None:
-                    input_tokens = input_tokens or 0
-                    output_tokens = output_tokens or 0
-                    yield ChatGenerationChunk(
-                        message=AIMessageChunk(
-                            content="",
-                            usage_metadata={
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                                "total_tokens": _field(usage, "total_tokens")
-                                or input_tokens + output_tokens,
-                            },
+        # 2026-09-10: this iteration is its own try/except, separate from
+        # the one around `create(...)` above -- the request itself already
+        # succeeded by the time we get here; a network fault now (a read
+        # timeout on the response body, a dropped connection mid-stream)
+        # surfaces as a raw httpx exception, not one of the SDK's own
+        # wrapped types, and previously propagated straight out of this
+        # generator uncaught. See module docstring.
+        try:
+            for chunk in stream:
+                if not chunk.choices:
+                    # The usage-only chunk: `choices` is empty and `usage` is
+                    # populated. The SDK's ChatCompletionChunk does not declare a
+                    # `usage` field even though the API documents sending one, so
+                    # read it defensively rather than trusting the type.
+                    usage = getattr(chunk, "usage", None)
+                    if usage is None and isinstance(getattr(chunk, "model_extra", None), Mapping):
+                        usage = chunk.model_extra.get("usage")
+                    input_tokens = _field(usage, "prompt_tokens")
+                    output_tokens = _field(usage, "completion_tokens")
+                    if input_tokens is not None or output_tokens is not None:
+                        input_tokens = input_tokens or 0
+                        output_tokens = output_tokens or 0
+                        yield ChatGenerationChunk(
+                            message=AIMessageChunk(
+                                content="",
+                                usage_metadata={
+                                    "input_tokens": input_tokens,
+                                    "output_tokens": output_tokens,
+                                    "total_tokens": _field(usage, "total_tokens")
+                                    or input_tokens + output_tokens,
+                                },
+                            )
                         )
-                    )
-                continue
-            choice = chunk.choices[0]
-            text = choice.delta.content or ""
-            # getattr, not direct access: real ChatCompletionChunk choices
-            # always declare finish_reason, but the test suite's fakes don't
-            # all bother -- same defensiveness as `_field()` above for usage.
-            reason = getattr(choice, "finish_reason", None)
-            if reason:
-                # Recorded even on a chunk with empty `text`: the terminal
-                # chunk of a diffusion stream can carry the finish reason
-                # with no further content change.
-                finish_reason = reason
-            if not text:
-                continue
+                    continue
+                choice = chunk.choices[0]
+                text = choice.delta.content or ""
+                # getattr, not direct access: real ChatCompletionChunk choices
+                # always declare finish_reason, but the test suite's fakes don't
+                # all bother -- same defensiveness as `_field()` above for usage.
+                reason = getattr(choice, "finish_reason", None)
+                if reason:
+                    # Recorded even on a chunk with empty `text`: the terminal
+                    # chunk of a diffusion stream can carry the finish reason
+                    # with no further content change.
+                    finish_reason = reason
+                if not text:
+                    continue
 
-            if self.diffusing:
-                snapshot = text
-                if self.frame_sink is not None:
-                    self.frame_sink(text)
-                if run_manager and not stamped:
-                    # Stamps Langfuse's completion_start_time on the first
-                    # frame. Without it, time-to-first-token would equal total
-                    # latency for every diffusion call, since the only content
-                    # chunk is yielded after the stream is exhausted.
-                    stamped = True
-                    run_manager.on_llm_new_token("")
-                continue
+                if self.diffusing:
+                    snapshot = text
+                    if self.frame_sink is not None:
+                        self.frame_sink(text)
+                    if run_manager and not stamped:
+                        # Stamps Langfuse's completion_start_time on the first
+                        # frame. Without it, time-to-first-token would equal total
+                        # latency for every diffusion call, since the only content
+                        # chunk is yielded after the stream is exhausted.
+                        stamped = True
+                        run_manager.on_llm_new_token("")
+                    continue
 
-            generation = ChatGenerationChunk(message=AIMessageChunk(content=text))
-            if run_manager:
-                # Drives Langfuse / CLI token callbacks. Without this, streamed
-                # tokens never reach any handler.
-                run_manager.on_llm_new_token(text, chunk=generation)
-            yield generation
+                generation = ChatGenerationChunk(message=AIMessageChunk(content=text))
+                if run_manager:
+                    # Drives Langfuse / CLI token callbacks. Without this, streamed
+                    # tokens never reach any handler.
+                    run_manager.on_llm_new_token(text, chunk=generation)
+                yield generation
+        except (InceptionError, httpx.HTTPError) as exc:
+            raise _translate(exc) from exc
 
         if snapshot:
             # The settled answer, emitted once, so the accumulated message is
@@ -530,7 +573,7 @@ class InceptionProvider(BaseProvider):
                 # Endpoint not enabled for this account. One unavailable task
                 # must not blank out the other two.
                 continue
-            except InceptionError as exc:
+            except (InceptionError, httpx.HTTPError) as exc:
                 raise _translate(exc) from exc
 
             for model in page.data:
@@ -572,7 +615,7 @@ class InceptionProvider(BaseProvider):
             completion = self._client.fim.completions.create(
                 model=model_id, prompt=prefix, suffix=suffix, **kwargs
             )
-        except InceptionError as exc:
+        except (InceptionError, httpx.HTTPError) as exc:
             raise _translate(exc) from exc
         return Completion(
             text=completion.choices[0].text,
@@ -610,7 +653,7 @@ class InceptionProvider(BaseProvider):
                 messages=[{"role": "user", "content": prompt}],
                 **kwargs,
             )
-        except InceptionError as exc:
+        except (InceptionError, httpx.HTTPError) as exc:
             raise _translate(exc) from exc
         return Completion(
             text=completion.choices[0].message.content or "",

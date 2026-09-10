@@ -20,6 +20,12 @@ just the flat state["output"]) and always APPENDS a labeled step summary
 onto context, regardless of the role's own normal context_op (summarizer's
 usual "replace" would erase earlier steps' results mid-plan, defeating the
 whole point of sequencing them).
+
+A third branch -- a provider/network failure (2026-09-10, fifth refinement
+to nodes.py's module docstring) -- covers _tool_loop raising ProviderError
+instead of returning a reply at all: _run_role no longer lets that crash
+the graph, it returns to router() with state["node_error"] set and
+state["output"]/"plan" left untouched.
 """
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
@@ -34,6 +40,23 @@ class _FakeModel:
     def stream(self, messages):
         self.calls.append([m.content for m in messages])
         yield AIMessageChunk(content=self._reply)
+
+
+class _FailingModel:
+    """Raises instead of ever producing a reply -- models a provider/
+    network failure (e.g. the observed httpx.ReadTimeout, already
+    normalised to ProviderError by the provider layer -- see
+    agent/router/llm_provider/inception_provider.py) rather than a
+    badly-formatted-but-successful one.
+    """
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+        self.calls = 0
+
+    def stream(self, messages):
+        self.calls += 1
+        raise self._exc
 
 
 def _install(monkeypatch, fake):
@@ -51,6 +74,7 @@ def _state(**overrides) -> dict:
         "context": "",
         "plan": None,
         "active_step": None,
+        "node_error": None,
         "final_output": None,
     }
     base.update(overrides)
@@ -289,3 +313,57 @@ def test_active_step_out_of_range_or_without_a_list_plan_is_not_treated_as_execu
 
     assert "plan" not in result.update
     assert result.update["context"] == "a short summary"  # normal "replace" behavior applies
+
+
+# --------------------------------------------------------------------------
+# A provider/network failure mid-attempt (2026-09-10, fifth refinement) --
+# _tool_loop raises ProviderError instead of returning. _run_role returns
+# to router() with node_error set rather than crashing the whole graph.
+# --------------------------------------------------------------------------
+
+def test_a_provider_failure_returns_to_router_with_node_error_set_instead_of_crashing(monkeypatch):
+    fake = _FailingModel(pn.ProviderError("inception: The read operation timed out"))
+    _install(monkeypatch, fake)
+
+    result = pn.solver(_state())
+
+    assert result.goto == "router"
+    assert "solver" in result.update["node_error"]
+    assert "timed out" in result.update["node_error"]
+
+
+def test_a_provider_failure_writes_feedback_explaining_it_was_not_a_rejection(monkeypatch):
+    fake = _FailingModel(pn.ProviderError("inception: The read operation timed out"))
+    _install(monkeypatch, fake)
+
+    result = pn.finder(_state())
+
+    assert "provider/network failure" in result.update["feedback"]
+    assert "not rejected by the evaluator" in result.update["feedback"]
+    assert "timed out" in result.update["feedback"]
+
+
+def test_a_provider_failure_leaves_output_and_board_says_which_role_failed(monkeypatch):
+    fake = _FailingModel(pn.ProviderError("boom"))
+    _install(monkeypatch, fake)
+
+    result = pn.summarizer(_state(output="whatever ran before this call"))
+
+    assert "output" not in result.update  # left exactly as it was
+    assert "summarizer" in result.update["board"][0]
+    assert "provider error" in result.update["board"][0]
+
+
+def test_a_provider_failure_during_a_plan_step_does_not_write_back_into_the_step(monkeypatch):
+    fake = _FailingModel(pn.ProviderError("boom"))
+    _install(monkeypatch, fake)
+
+    plan = [{"task": "write it", "route_to": "solver", "output": None}]
+    result = pn.solver(_state(plan=plan, active_step=0))
+
+    assert result.goto == "router"
+    assert "node_error" in result.update
+    # the step itself is left untouched -- router()'s node_error branch
+    # discards the whole plan rather than trying to keep it going.
+    assert "plan" not in result.update
+    assert "context" not in result.update
