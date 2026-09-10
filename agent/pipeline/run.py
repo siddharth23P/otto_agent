@@ -33,6 +33,7 @@ def _initial(text: str) -> dict:
         "output": None,
         "context": "",
         "plan": None,
+        "active_step": None,
         "final_output": None,
     }
 

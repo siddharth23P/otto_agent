@@ -3,11 +3,13 @@ with the same ACTION/FINAL tool-calling loop every role node has
 (_tool_loop). It judges a PLAN (state["node"] == "planner") or a candidate
 FINAL ANSWER (anything else) -- different question, different prompt.
 
-Approving a plan hands back to the overseer (there's more work left --
-the plan hasn't been executed yet); approving a final answer ends the run.
-Rejecting either always goes back to the overseer with the reason -- there
-is no round cap and no exhaustion branch anymore (2026-09-10 design call:
-"we dont need any variable to limit number of rounds a agent runs for").
+Approving a plan PARSES it (_parse_plan_steps) into a list of PlanStep
+dicts (agent/pipeline/state.py) and hands back to the overseer with
+active_step cleared -- there's more work left, the plan hasn't been
+executed yet. Approving a final answer ends the run. Rejecting either
+always goes back to the overseer with the reason -- there is no round cap
+and no exhaustion branch anymore (2026-09-10 design call: "we dont need
+any variable to limit number of rounds a agent runs for").
 
 _parse_approval defaults to approve=False whenever _tool_loop's reply
 never contained an "APPROVE:" line at all (e.g. it exhausted on
@@ -45,6 +47,7 @@ def _state(**overrides) -> dict:
         "output": "yes, 17 is prime",
         "context": "",
         "plan": None,
+        "active_step": None,
         "final_output": None,
     }
     base.update(overrides)
@@ -101,32 +104,45 @@ def test_evaluator_judges_a_plan_when_the_pending_output_came_from_planner(monke
     fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: sound and complete")
     _install(monkeypatch, fake)
 
-    result = pn.evaluator(_state(node="planner", output="1. do x\n2. do y"))
+    result = pn.evaluator(_state(node="planner", output='[{"task": "do x"}, {"task": "do y"}]'))
 
     system, human = fake.calls[0]
     assert "PLAN" in system
-    assert "would produce a satisfying result if followed" in system
-    assert "PLAN (from planner)" in human
+    assert "JSON list of executable steps" in system
+    assert "PLAN (from planner, should be a JSON array of steps)" in human
 
 
-def test_evaluator_approving_a_plan_stores_it_and_returns_to_router_not_end(monkeypatch):
+def test_evaluator_approving_a_plan_parses_it_into_step_dicts_and_returns_to_router_not_end(monkeypatch):
     fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: sound and complete")
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="planner", output='[{"task": "do x"}, {"task": "do y"}]'))
+
+    assert result.goto == "router"
+    assert result.update["plan"] == [
+        {"task": "do x", "route_to": None, "output": None},
+        {"task": "do y", "route_to": None, "output": None},
+    ]
+    assert result.update["active_step"] is None
+    assert result.update["output"] is None
+    assert result.update["feedback"] == ""
+    assert "final_output" not in result.update
+
+
+def test_evaluator_approving_a_malformed_plan_falls_back_to_one_step_rather_than_dropping_it(monkeypatch):
+    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: it's fine even though it's not JSON")
     _install(monkeypatch, fake)
 
     result = pn.evaluator(_state(node="planner", output="1. do x\n2. do y"))
 
-    assert result.goto == "router"
-    assert result.update["plan"] == "1. do x\n2. do y"
-    assert result.update["output"] is None
-    assert result.update["feedback"] == ""
-    assert "final_output" not in result.update
+    assert result.update["plan"] == [{"task": "1. do x\n2. do y", "route_to": None, "output": None}]
 
 
 def test_evaluator_rejecting_a_plan_routes_feedback_back_to_router_same_as_a_final_answer(monkeypatch):
     fake = _FakeModel("FINAL:\nAPPROVE: no\nWHY: missing a step")
     _install(monkeypatch, fake)
 
-    result = pn.evaluator(_state(node="planner", output="1. do x"))
+    result = pn.evaluator(_state(node="planner", output='[{"task": "do x"}]'))
 
     assert result.goto == "router"
     assert result.update["feedback"] == "missing a step"
