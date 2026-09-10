@@ -292,3 +292,39 @@ def test_write_file_still_treats_a_json_looking_first_line_as_a_path(workspace):
     result = pt.write_file('{"not": "a write body"}\nsome content\n')
 
     assert not result.ok or (workspace / '{"not": "a write body"}').exists()
+
+
+# ---- everything runs to completion, in view ------------------------------
+
+
+def test_a_backgrounded_command_is_refused_not_quietly_run():
+    """Every tool call in this graph is synchronous, and the loop depends on
+    it: the model decides what to do next from what the last command actually
+    printed. A backgrounded command returns instantly with empty stdout and
+    exit 0, which reads as "it worked" for work that has not started."""
+    for command in ["echo hi &", "nohup server &", "setsid worker", "sleep 1 &\necho done"]:
+        result = pt.execute_bash(command)
+        assert not result.ok, command
+        assert "backgrounds or detaches" in result.stderr
+
+
+def test_ordinary_commands_are_not_mistaken_for_backgrounding():
+    """`&&`, and an `&` inside a quoted argument, are not detaching."""
+    for command in ["a && b", "grep x y | wc -l", "awk '{print $1 & 2}' f", "ls -la"]:
+        assert pt._detaching_reason(command) is None, command
+
+
+def test_long_output_keeps_both_ends(workspace):
+    """A compiler prints its first and most informative error at the top and
+    then cascades. Keeping only the tail tells the model what happened last
+    instead of what went wrong first."""
+    clipped = pt._clip("START" + ("x" * (pt._TAIL * 2)) + "END")
+
+    assert clipped.startswith("START")
+    assert clipped.endswith("END")
+    assert "characters omitted" in clipped
+    assert len(clipped) < pt._TAIL + 200
+
+
+def test_short_output_is_untouched():
+    assert pt._clip("just a line") == "just a line"
