@@ -50,43 +50,43 @@ def eval_hle_cmd(
     as_json: Annotated[bool, typer.Option("--json", help="Print the full report as JSON.")] = False,
 ) -> None:
     if mode not in {"raw", "agent"}:
-        err(f"mode must be 'raw' or 'agent', not {mode!r}")
+        err.print(f"mode must be 'raw' or 'agent', not {mode!r}")
         raise typer.Exit(2)
 
     path = data_path or DEFAULT_CACHE
     try:
         download_hle(path, token=hf_token)
     except DatasetGated as exc:
-        err(str(exc))
+        err.print(str(exc))
         raise typer.Exit(1)
 
     rows, skipped = sample_questions(load_hle(path), limit=limit, seed=seed)
-    out(f"scoring {len(rows)} text-only question(s) in {mode} mode "
+    out.print(f"scoring {len(rows)} text-only question(s) in {mode} mode "
         f"({skipped} image question(s) skipped -- Otto's chat path is text-only)")
 
     def _progress(r):
         mark = "correct" if r.correct else "wrong  "
-        out(f"  {mark}  {r.llm_calls:>3} call(s)  {r.question[:72]}")
+        out.print(f"  {mark}  {r.llm_calls:>3} call(s)  {r.question[:72]}")
 
     results = run_hle(rows, mode=mode, on_result=None if as_json else _progress)
     report = summarise(results)
 
     if as_json:
-        out(json.dumps({"mode": mode, "skipped_image_questions": skipped,
+        out.print(json.dumps({"mode": mode, "skipped_image_questions": skipped,
                         "summary": report,
                         "items": [r.__dict__ for r in results]}, indent=2))
         return
 
-    out("")
-    out(f"accuracy: {report['accuracy']:.1%} of {report['n']}"
+    out.print("")
+    out.print(f"accuracy: {report['accuracy']:.1%} of {report['n']}"
         f"   model calls: {report['llm_calls_total']} "
         f"({report['llm_calls_per_question']:.1f} per question)")
     for name, stats in report["by_category"].items():
-        out(f"  {name:<34} {stats['accuracy']:>6.1%}  (n={stats['n']})")
+        out.print(f"  {name:<34} {stats['accuracy']:>6.1%}  (n={stats['n']})")
 
     if show_items:
-        out("")
+        out.print("")
         for r in results:
-            out(f"[{'correct' if r.correct else 'wrong'}] {r.question[:110]}")
-            out(f"   expected: {r.correct_answer[:110]}")
-            out(f"   extracted: {r.extracted[:110]}")
+            out.print(f"[{'correct' if r.correct else 'wrong'}] {r.question[:110]}")
+            out.print(f"   expected: {r.correct_answer[:110]}")
+            out.print(f"   extracted: {r.extracted[:110]}")
