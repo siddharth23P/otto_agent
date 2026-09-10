@@ -155,6 +155,27 @@ file's `_call` and out of `app.invoke()` entirely. Two things changed:
     attempt already looks like to it, just with a failure reason instead
     of an evaluator's.
 
+Sixth refinement, same day, live-tested: "Hi" / "Solve N Queens with
+brute force" / "improve above solution" -- the third turn had no idea
+what "above solution" was and looped trying to guess. Root cause: every
+turn started `state["messages"]` from scratch (agent/pipeline/run.py's
+`_initial()` only ever seeded it with the CURRENT turn's text), even
+though chat.py's/tui.py's own `Session.history` was already tracking the
+whole conversation client-side -- it just never got handed to the graph.
+Two halves, both needed: run.py's new `history` parameter actually feeds
+prior turns into `state["messages"]`; `_conversation_so_far()` (below)
+is what makes every prompt-builder in THIS file (`_router_body`,
+`_step_route_body`, `_role_body`, and evaluator()'s own human_body) show
+it, as a "CONVERSATION SO FAR:" block ahead of TASK:/ORIGINAL REQUEST:.
+Without both halves this doesn't work -- state carrying the messages but
+no prompt ever displaying them would be just as blind as before.
+Deliberately still NOT a fix for "the model asks the user a clarifying
+question mid-run" (there is no such capability anywhere in this graph
+yet, a separate and larger gap the same live test surfaced) -- this only
+makes sure the model has what it needs to not HAVE to ask in a case like
+"improve above solution", where the answer was one turn away the whole
+time.
+
 Deliberately out of scope for this revision, same as the first:
   - web_search and rag are still STUBBED (tools.py).
   - No domain-specific verification beyond the evaluator's own tool access.
@@ -752,8 +773,37 @@ def _format_plan(plan: list[PlanStep]) -> str:
 # feedback), just framed for their own purpose.
 # --------------------------------------------------------------------------
 
+def _conversation_so_far(state: AgentState) -> str:
+    """Prior turns of this session's conversation, as plain dialogue lines
+    -- everything in state["messages"] except the very last one (today's
+    task, which every caller below already shows separately as TASK:).
+
+    2026-09-10 design call, live-tested: "improve above solution" as a
+    fresh turn had nothing to improve -- state["messages"] held only that
+    one sentence, because agent/pipeline/run.py's _initial() never seeded
+    it with anything earlier. That half of the fix is run.py's new
+    `history` parameter; THIS half is making every prompt below actually
+    show what it carries once it's there. Empty on a session's first turn,
+    and for every eval/debug caller that never passes `history` at all
+    (run.py's default `()`) -- in both cases `state["messages"]` has
+    exactly one entry, so this returns "" and nothing changes for them.
+    """
+    prior = state["messages"][:-1]
+    if not prior:
+        return ""
+    lines = []
+    for m in prior:
+        speaker = "you" if isinstance(m, HumanMessage) else "otto"
+        lines.append(f"{speaker}: {_content_text(m.content)}")
+    return "\n".join(lines)
+
+
 def _router_body(state: AgentState, task_text: str) -> str:
-    parts = [f"TASK:\n{task_text}"]
+    parts = []
+    history = _conversation_so_far(state)
+    if history:
+        parts.append(f"CONVERSATION SO FAR:\n{history}")
+    parts.append(f"TASK:\n{task_text}")
     context = state.get("context") or ""
     if context:
         parts.append(f"CONTEXT GATHERED SO FAR:\n{context}")
@@ -774,7 +824,11 @@ def _router_body(state: AgentState, task_text: str) -> str:
 
 
 def _step_route_body(state: AgentState, task_text: str, plan: list[PlanStep], idx: int) -> str:
-    parts = [
+    parts = []
+    history = _conversation_so_far(state)
+    if history:
+        parts.append(f"CONVERSATION SO FAR:\n{history}")
+    parts += [
         f"TASK:\n{task_text}",
         f"PLAN:\n{_format_plan(plan)}",
         f"STEP TO ASSIGN (step {idx + 1}):\n{plan[idx]['task']}",
@@ -786,7 +840,11 @@ def _step_route_body(state: AgentState, task_text: str, plan: list[PlanStep], id
 
 
 def _role_body(state: AgentState, task_text: str, *, role: str, revising: bool, executing_step: bool, active_step: int | None) -> str:
-    parts = [f"TASK:\n{task_text}"]
+    parts = []
+    history = _conversation_so_far(state)
+    if history:
+        parts.append(f"CONVERSATION SO FAR:\n{history}")
+    parts.append(f"TASK:\n{task_text}")
     plan = state.get("plan")
     if plan:
         parts.append(f"PLAN:\n{_format_plan(plan)}")
@@ -1066,7 +1124,11 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__"]]:
         target, target_note = f"{node.upper()} OUTPUT", "as a finished answer"
         human_label = f"{node.upper()} OUTPUT"
     system_prompt = EVALUATOR_PROMPT.format(target=target, target_note=target_note, max_iter=MAX_TOOL_ITERATIONS)
-    human_body = f"ORIGINAL REQUEST:\n{task_text}\n\n{human_label}:\n{output}"
+    history = _conversation_so_far(state)
+    human_body = (
+        (f"CONVERSATION SO FAR:\n{history}\n\n" if history else "")
+        + f"ORIGINAL REQUEST:\n{task_text}\n\n{human_label}:\n{output}"
+    )
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     try:
         reply = _tool_loop(llm, messages)

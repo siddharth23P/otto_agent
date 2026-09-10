@@ -99,6 +99,29 @@ def test_evaluator_judges_a_final_answer_using_the_final_answer_framing(monkeypa
     assert "def f(): return 1" in human
 
 
+def test_evaluator_shows_prior_conversation_ahead_of_the_original_request(monkeypatch):
+    # 2026-09-10, sixth refinement -- the evaluator needs the same
+    # conversation context as everyone else to judge whether an "improve
+    # above solution"-shaped answer actually improved the right thing.
+    from langchain_core.messages import AIMessage
+
+    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: fine")
+    _install(monkeypatch, fake)
+
+    state = _state(node="solver", output="def f(): return 2  # improved", messages=[
+        HumanMessage("solve N queens with brute force"),
+        AIMessage("def solve(n): ..."),
+        HumanMessage("improve above solution"),
+    ])
+    pn.evaluator(state)
+
+    _, human = fake.calls[0]
+    assert human.startswith("CONVERSATION SO FAR:\n")
+    assert "you: solve N queens with brute force" in human
+    assert "otto: def solve(n): ..." in human
+    assert "ORIGINAL REQUEST:\nimprove above solution" in human
+
+
 def test_evaluator_rejects_a_final_answer_and_routes_feedback_back_to_router(monkeypatch):
     fake = _FakeModel("FINAL:\nAPPROVE: no\nWHY: never checked divisibility")
     _install(monkeypatch, fake)

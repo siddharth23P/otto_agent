@@ -169,6 +169,36 @@ def test_round_one_uses_just_the_task_with_no_context_plan_or_feedback(monkeypat
     assert human == "TASK:\nwrite a function that checks if a number is prime"
 
 
+def test_prior_conversation_is_shown_ahead_of_the_task_when_present(monkeypatch):
+    # 2026-09-10, sixth refinement -- live-tested: "improve above solution"
+    # needs to see the earlier turns to know what "above" even refers to.
+    # state["messages"] holds every prior turn now (agent/pipeline/run.py's
+    # `history`); _conversation_so_far() is what surfaces it here.
+    from langchain_core.messages import AIMessage
+
+    fake = _FakeModel("NODE: solver\nWHY: continue the earlier work")
+    _install(monkeypatch, fake)
+
+    state = _state(messages=[
+        HumanMessage("Hi"),
+        AIMessage("hello! how can I help?"),
+        HumanMessage("solve N queens with brute force"),
+        AIMessage("def solve(n): ..."),
+        HumanMessage("improve above solution"),
+    ])
+    pn.router(state)
+
+    _, human = fake.calls[0]
+    assert human.startswith("CONVERSATION SO FAR:\n")
+    assert "you: Hi" in human
+    assert "otto: hello! how can I help?" in human
+    assert "you: solve N queens with brute force" in human
+    assert "otto: def solve(n): ..." in human
+    assert "TASK:\nimprove above solution" in human
+    # the current turn's own text is not doubled into the history block
+    assert human.count("improve above solution") == 1
+
+
 def test_gathered_context_alone_is_shown_to_the_overseer_on_a_fresh_dispatch(monkeypatch):
     fake = _FakeModel("NODE: solver\nWHY: context is ready")
     _install(monkeypatch, fake)
@@ -349,6 +379,28 @@ def test_context_gathered_so_far_is_shown_during_step_assignment(monkeypatch):
 
     _, human = fake.calls[0]
     assert "earlier finding: uses pytest" in human
+
+
+def test_prior_conversation_is_shown_during_step_assignment_too(monkeypatch):
+    # _step_route_body gets the same treatment as _router_body -- sixth
+    # refinement.
+    from langchain_core.messages import AIMessage
+
+    fake = _FakeModel("NODE: solver\nWHY: ready")
+    _install(monkeypatch, fake)
+
+    plan = [{"task": "some step", "route_to": None, "output": None}]
+    state = _state(plan=plan, feedback="", messages=[
+        HumanMessage("earlier turn"),
+        AIMessage("earlier reply"),
+        HumanMessage("write a function that checks if a number is prime"),
+    ])
+    pn.router(state)
+
+    _, human = fake.calls[0]
+    assert human.startswith("CONVERSATION SO FAR:\n")
+    assert "you: earlier turn" in human
+    assert "otto: earlier reply" in human
 
 
 # --------------------------------------------------------------------------
