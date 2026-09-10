@@ -294,6 +294,8 @@ rather than routing through finder first.
 """
 from __future__ import annotations
 
+import os
+
 import json
 import logging
 from typing import Any, Literal
@@ -353,7 +355,31 @@ MAX_DIFFUSION_RETRIES = 3
 #: turn, not how many turns the overseer may hand out. Applies identically
 #: to every role node and the evaluator (_tool_loop is shared by all of
 #: them).
-MAX_TOOL_ITERATIONS = 5
+#: How many ACTION/tool exchanges one node gets before it must answer with
+#: what it has. 5 is right for what this graph was built for -- a node
+#: checking its own work, where a sixth exchange usually means it is stuck
+#: rather than making progress -- and it stays the default.
+#:
+#: It is overridable because agentic benchmarks are a genuinely different
+#: shape of task: published SWE-bench and terminal-agent traces routinely run
+#: dozens of tool calls in one attempt (read a file, edit it, run the tests,
+#: read the failure, edit again), and a cap of 5 would measure the cap rather
+#: than the agent. An env var rather than a parameter because _tool_loop is
+#: reached through five node functions and a LangGraph call, none of which
+#: take agent-level configuration today, and threading one through all of
+#: them to serve the harness would be a worse trade than this.
+MAX_TOOL_ITERATIONS = int(os.environ.get("OTTO_MAX_TOOL_ITERATIONS", "5"))
+
+#: The ACTION: enumeration every role/evaluator prompt shows, built FROM the
+#: registry rather than typed out in each prompt. It was hand-kept in sync
+#: through three rounds of tool additions, with tests/test_prompt_tool_sync.py
+#: standing guard over the copies; deriving it means the next tool added to
+#: TOOL_DISPATCH appears in all five prompts by construction, and that test
+#: now checks the derivation reaches them rather than checking five hand-
+#: written lists against one registry. `ask_user` is appended by hand because
+#: it is deliberately NOT in TOOL_DISPATCH -- it unwinds the whole tool loop
+#: by raising (see NeedsUserInput below) instead of returning a ToolResult.
+_TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user"))
 
 logger = logging.getLogger(__name__)
 
@@ -437,8 +463,7 @@ PLANNER_PROMPT = (
     "do not execute any step yourself, and you do not decide who executes "
     "each step (the overseer assigns that later, one step at a time, as "
     "each one runs). You may check your reasoning with a tool: reply with "
-    "exactly\nACTION: <execute_python|execute_bash|web_search|rag|"
-    "recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input for "
+    "exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input for "
     "that tool -- recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
     "history; complete_code: prefix code, optionally then a line "
@@ -463,8 +488,7 @@ PLANNER_PROMPT = (
 SOLVER_PROMPT = (
     "You are the SOLVER. Work out a concrete answer to the request below, "
     "writing and running code where that helps you check it. Reply with "
-    "exactly\nACTION: <execute_python|execute_bash|web_search|rag|"
-    "recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input for "
+    "exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input for "
     "that tool -- recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
     "history; complete_code: prefix code, optionally then a line "
@@ -486,8 +510,7 @@ SUMMARIZER_PROMPT = (
     "You are the SUMMARIZER. Condense or rewrite the given content below to "
     "satisfy the request -- you are not looking anything new up or solving "
     "a new problem. You may still use a tool if it helps verify something: "
-    "reply with exactly\nACTION: <execute_python|execute_bash|web_search|"
-    "rag|recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input "
+    "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input "
     "for that tool -- recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
     "history; complete_code: prefix code, optionally then a line "
@@ -516,9 +539,8 @@ FINDER_PROMPT = (
     "knowledge base; web_search for the open web (rag and web_search are "
     "both stubbed today and will tell you so -- if that happens, fall "
     "back to your own knowledge and say plainly in your answer that you "
-    "could not verify it). Reply with exactly\nACTION: "
-    "<execute_python|execute_bash|web_search|rag|recall_memory|"
-    "complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool -- "
+    "could not verify it). Reply with exactly\nACTION: <" + _TOOL_MENU +
+    ">\nCODE:\n<input for that tool -- "
     "recall_memory: a plain search query, nothing else; complete_code: "
     "prefix code, optionally then a line \"---SUFFIX---\" and trailing "
     "code; predict_edit: code, optionally with a <|cursor|> marker, no "
@@ -555,8 +577,7 @@ ROLE_REVISE_PROMPT = (
 EVALUATOR_PROMPT = (
     "Judge whether the {target} below actually satisfies the original "
     "request -- {target_note}. You may check your judgment with a tool: "
-    "reply with exactly\nACTION: <execute_python|execute_bash|web_search|"
-    "rag|recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input "
+    "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<input "
     "for that tool -- recall_memory: a plain search query, nothing else -- "
     "semantic search over this session's own compacted-away conversation "
     "history; complete_code: prefix code, optionally then a line "

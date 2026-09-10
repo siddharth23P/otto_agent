@@ -1,0 +1,182 @@
+"""Coverage for the workspace tier: agent/pipeline/workspace.py's per-run
+binding and path confinement, and the four file tools plus the workspace-aware
+execute_bash/execute_python in agent/pipeline/tools.py.
+
+The point of the whole tier is that a task can read a file, change it, run
+something, and read the result back -- which nothing in this repo could do
+before, since execute_bash/execute_python each ran in a temp dir destroyed
+inside the single call. So the tests that matter most here are the ones about
+state SURVIVING between calls, and about it never surviving outside the
+directory the caller chose.
+"""
+import os
+
+import pytest
+
+import agent.pipeline.tools as pt
+from agent.pipeline.workspace import (
+    OutsideWorkspace,
+    bind_workspace,
+    current_workspace,
+    resolve_in_workspace,
+)
+
+
+@pytest.fixture
+def workspace(tmp_path):
+    with bind_workspace(tmp_path) as ws:
+        yield ws
+
+
+# ---- confinement ---------------------------------------------------------
+
+
+def test_nothing_is_bound_by_default():
+    assert current_workspace() is None
+
+
+def test_resolve_rejects_paths_that_escape_the_root(workspace):
+    for escape in ["../outside.txt", "/etc/passwd", "a/../../outside.txt",
+                   "a/b/../../../outside.txt"]:
+        with pytest.raises(OutsideWorkspace):
+            resolve_in_workspace(escape)
+
+
+def test_resolve_rejects_a_symlink_pointing_out_of_the_workspace(workspace):
+    os.symlink("/etc", workspace / "link")
+
+    with pytest.raises(OutsideWorkspace):
+        resolve_in_workspace("link/passwd")
+
+
+def test_resolve_allows_a_file_that_does_not_exist_yet(workspace):
+    """A write has to pass the check before the file is there -- the case a
+    plain Path.resolve() on a missing leaf would not cover."""
+    assert resolve_in_workspace("new/dir/file.py") == workspace / "new/dir/file.py"
+
+
+def test_binding_restores_the_previous_workspace_on_exit(tmp_path):
+    outer, inner = tmp_path / "outer", tmp_path / "inner"
+    with bind_workspace(outer):
+        with bind_workspace(inner):
+            assert current_workspace() == inner.resolve()
+        assert current_workspace() == outer.resolve()
+    assert current_workspace() is None
+
+
+# ---- write_file / read_file ----------------------------------------------
+
+
+def test_write_then_read_round_trips_and_creates_parent_dirs(workspace):
+    written = pt.write_file("pkg/sub/mod.py\ndef f():\n    return 1\n")
+
+    assert written.ok
+    assert (workspace / "pkg/sub/mod.py").read_text() == "def f():\n    return 1\n"
+    assert "def f():" in pt.read_file("pkg/sub/mod.py").stdout
+
+
+def test_write_file_keeps_separator_looking_content_verbatim(workspace):
+    """Why there is no delimiter between the path line and the body: any
+    delimiter that can be typed can appear in a real file, and a write that
+    truncates at a `---` inside a document is worse than a plainer format."""
+    body = "doc.md\n# Title\n\n---\n\nsection after a horizontal rule\n"
+
+    pt.write_file(body)
+
+    assert (workspace / "doc.md").read_text() == "# Title\n\n---\n\nsection after a horizontal rule\n"
+
+
+def test_read_file_can_return_just_a_line_range(workspace):
+    pt.write_file("f.txt\n" + "\n".join(f"line {i}" for i in range(1, 21)))
+
+    result = pt.read_file("f.txt:5-7")
+
+    assert "line 5" in result.stdout and "line 7" in result.stdout
+    assert "line 4" not in result.stdout and "line 8" not in result.stdout
+
+
+def test_read_file_reports_a_missing_file_rather_than_raising(workspace):
+    result = pt.read_file("nope.txt")
+
+    assert not result.ok
+    assert "not a file" in result.stderr
+
+
+# ---- edit_file -----------------------------------------------------------
+
+
+def test_edit_file_replaces_an_exact_unique_snippet(workspace):
+    pt.write_file("m.py\ndef f():\n    return 1\n")
+
+    result = pt.edit_file("m.py\n---OLD---\n    return 1\n---NEW---\n    return 2")
+
+    assert result.ok
+    assert (workspace / "m.py").read_text() == "def f():\n    return 2\n"
+
+
+def test_edit_file_refuses_when_the_old_text_is_not_there(workspace):
+    pt.write_file("m.py\ndef f():\n    return 1\n")
+
+    result = pt.edit_file("m.py\n---OLD---\n    return 99\n---NEW---\n    return 2")
+
+    assert not result.ok
+    assert "never appears" in result.stderr
+    assert (workspace / "m.py").read_text() == "def f():\n    return 1\n"
+
+
+def test_edit_file_refuses_an_ambiguous_match_rather_than_guessing(workspace):
+    pt.write_file("m.py\nx = 1\ny = 1\n")
+
+    result = pt.edit_file("m.py\n---OLD---\n= 1\n---NEW---\n= 2")
+
+    assert not result.ok
+    assert "appears 2 times" in result.stderr
+    assert (workspace / "m.py").read_text() == "x = 1\ny = 1\n"
+
+
+# ---- list_files ----------------------------------------------------------
+
+
+def test_list_files_skips_vcs_and_build_noise(workspace):
+    pt.write_file("src/app.py\n#")
+    pt.write_file(".git/objects/abcdef\nbinary")
+    pt.write_file("node_modules/lib/index.js\n//")
+
+    listing = pt.list_files("").stdout
+
+    assert "src/app.py" in listing
+    assert ".git" not in listing
+    assert "node_modules" not in listing
+
+
+# ---- state surviving between calls ---------------------------------------
+
+
+def test_bash_and_python_share_the_workspace_across_calls(workspace):
+    pt.write_file("m.py\ndef f():\n    return 41 + 1\n")
+
+    assert pt.execute_bash("cat m.py").stdout.strip().endswith("return 41 + 1")
+    assert pt.execute_python("import m; print(m.f())").stdout.strip() == "42"
+
+    pt.execute_bash("echo made-by-bash > from_bash.txt")
+
+    assert (workspace / "from_bash.txt").exists()
+    assert "made-by-bash" in pt.read_file("from_bash.txt").stdout
+
+
+def test_execute_python_never_leaves_its_snippet_in_the_workspace(workspace):
+    """A snippet.py appearing in the repo under edit would show up in the
+    agent's own next listing and in `git status`, indistinguishable from a
+    file the task asked for."""
+    pt.execute_python("print('hello')")
+
+    assert not (workspace / "snippet.py").exists()
+
+
+def test_with_no_workspace_bound_execution_stays_throwaway():
+    """The old behaviour, unchanged, and what every ordinary chat turn gets."""
+    pt.execute_bash("echo leaked > should_not_persist.txt")
+
+    second = pt.execute_bash("ls -1")
+
+    assert "should_not_persist.txt" not in second.stdout

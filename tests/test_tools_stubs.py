@@ -58,13 +58,34 @@ def test_rag_stub_fails_cleanly_with_a_legible_reason():
     assert "not implemented" in result.stderr
 
 
-def test_all_seven_tools_are_registered_read_only():
+def test_every_tool_is_registered_with_a_tier_and_dispatchable():
     assert set(TOOL_TIERS) == {
         "execute_python", "execute_bash", "web_search", "rag",
         "complete_code", "predict_edit", "recall_memory",
+        "read_file", "list_files", "write_file", "edit_file",
     }
-    assert all(tier == "read_only" for tier in TOOL_TIERS.values())
     assert set(TOOL_DISPATCH) == set(TOOL_TIERS)
+
+
+def test_no_dispatchable_tool_is_mutating():
+    """The invariant the tier system exists for (module docstring): a role node
+    or the evaluator is still iterating and has not been judged, so nothing it
+    can reach may be irreversible. WORKSPACE writes are reachable but confined
+    to a directory the caller opened and can throw away -- see the tier's own
+    note -- which is why they are not MUTATING."""
+    assert all(tier in {pt.READ_ONLY, pt.WORKSPACE} for tier in TOOL_TIERS.values())
+    assert pt.MUTATING not in TOOL_TIERS.values()
+
+
+def test_every_workspace_tool_refuses_when_no_workspace_is_bound():
+    """What keeps this from widening an ordinary chat turn: a run that never
+    opened a workspace cannot write anywhere at all."""
+    workspace_tools = [name for name, tier in TOOL_TIERS.items() if tier == pt.WORKSPACE]
+    assert workspace_tools
+    for name in workspace_tools:
+        result = TOOL_DISPATCH[name]("some/path.txt\nbody")
+        assert not result.ok, f"{name} should refuse with no workspace bound"
+        assert "no workspace is bound" in result.stderr
 
 
 def test_recall_memory_fails_cleanly_with_no_store_bound_for_this_run():
