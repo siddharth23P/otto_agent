@@ -404,6 +404,13 @@ def _action_target(tool_name: str, body: str) -> str:
     36, 37 and 35 lines, without the compiler ever being run once.
     """
     first_line = next((line for line in body.splitlines() if line.strip()), "")
+    if tool_name == "view_image":
+        # The path alone is the wrong target here. Asking a second, narrower
+        # question about one image is exactly how this tool is meant to be
+        # used -- a vision model returns words, so narrowing across calls is
+        # the only way to get at detail -- and keying on the path would flag
+        # that as repetition and tell the agent to stop.
+        return f"view_image:{body.strip()[:200]}"
     if tool_name in {"write_file", "edit_file", "read_file", "list_files"}:
         return first_line.strip()[:120]
     return f"{tool_name}:{first_line.strip()[:120]}"
