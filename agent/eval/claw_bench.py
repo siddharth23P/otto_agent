@@ -219,6 +219,22 @@ def sandbox_runner(sandbox_url: str, deadline: "Deadline") -> Callable[[str, flo
     return run
 
 
+def task_budget(task, max_seconds: float | None = None) -> float:
+    """How long this task may run for.
+
+    Its own budget, unless the caller wants a cheaper sample. Tasks here are
+    allowed 120 to 900 seconds and the hard ones use all of it, so a sweep at
+    full budget is hours of wall time and real money. A cap makes a sample
+    affordable -- and makes its scores LOWER than a full-budget run would, so
+    it belongs in the report next to them.
+
+    A ceiling, never a floor: a cap above a task's own budget leaves the
+    task's, because raising one would stop the run matching the benchmark.
+    """
+    budget = float(task.environment.timeout_seconds)
+    return budget if max_seconds is None else min(budget, float(max_seconds))
+
+
 @dataclass
 class Deadline:
     """Two stages: past `wrap_up_at` every tool returns a "time is nearly up"
@@ -418,6 +434,7 @@ def run_one(
     architecture: str = "graph",
     session_id: str | None = None,
     user_agent=None,
+    max_seconds: float | None = None,
 ) -> tuple[Path, dict]:
     """Run one Claw-Eval task through Otto and write a conforming trace.
 
@@ -439,7 +456,7 @@ def run_one(
     session_id = session_id or f"claw-{uuid.uuid4().hex[:12]}"
 
     recorder = TraceRecorder(claw=claw, trace_id=trace_id)
-    deadline = Deadline.of(float(task.environment.timeout_seconds))
+    deadline = Deadline.of(task_budget(task, max_seconds))
     dispatcher = claw.ToolDispatcher(task.get_endpoint_map())
 
     prompt = build_prompt(task, in_container=sandbox_url is not None)
@@ -663,6 +680,7 @@ def run_task_file(
     architecture: str = "graph",
     port_offset: int = 0,
     sandbox_image: str | None = None,
+    max_seconds: float | None = None,
 ) -> TaskOutcome:
     """One task: start its services and container, run Otto, snapshot the
     environment, grade. The lifecycle is Claw-Eval's own, called in their
@@ -701,6 +719,7 @@ def run_task_file(
                 sandbox_url=sandbox_url,
                 architecture=architecture,
                 user_agent=user_agent,
+                max_seconds=max_seconds,
             )
 
             if handle is not None:
