@@ -374,3 +374,152 @@ def test_an_escape_is_still_reported_as_an_escape(tmp_path):
     with bind_workspace(tmp_path):
         with pytest.raises(OutsideWorkspace, match="outside"):
             resolve_in_workspace("../../etc/passwd")
+
+
+# --------------------------------------------------------------------------
+# edit_file's cascade
+# --------------------------------------------------------------------------
+#
+# Exact match alone was the whole implementation. Models quote `old_text` with
+# whitespace drift -- a tab that became spaces, a trailing space lost in the
+# read, an indentation level changed when the snippet was echoed back -- and
+# the field's answer is a cascade of looser matches, not a smarter model.
+#
+# Every pass still requires a UNIQUE hit. Looseness buys tolerance of how the
+# text was quoted, never tolerance of ambiguity about where it goes.
+
+def _edit(tmp_path, original, old, new):
+    (tmp_path / "f.py").write_text(original)
+    with bind_workspace(tmp_path):
+        result = pt.edit_file(f"f.py\n---OLD---\n{old}\n---NEW---\n{new}")
+    return result, (tmp_path / "f.py").read_text()
+
+
+def test_an_exact_quote_still_matches(tmp_path):
+    result, after = _edit(tmp_path, "a = 1\nb = 2\n", "b = 2", "b = 3")
+    assert result.returncode == 0
+    assert "b = 3" in after
+
+
+def test_trailing_whitespace_drift_is_tolerated(tmp_path):
+    """The most common drift, and invisible in a diff."""
+    result, after = _edit(tmp_path, "def f():   \n    return 1\n",
+                          "def f():\n    return 1", "def f():\n    return 2")
+    assert result.returncode == 0, result.stderr
+    assert "return 2" in after
+    assert "matched ignoring trailing whitespace" in result.stdout
+
+
+def test_a_snippet_requoted_at_a_different_indent_is_tolerated(tmp_path):
+    result, after = _edit(tmp_path, "class C:\n        x = 1\n        y = 2\n",
+                          "x = 1\ny = 2", "x = 9\ny = 9")
+    assert result.returncode == 0, result.stderr
+    assert "x = 9" in after
+
+
+def test_a_snippet_with_a_misremembered_middle_is_anchored(tmp_path):
+    """Last resort, and narrow: three lines minimum, both anchors unique."""
+    original = "start_marker\nline one\nline two\nline three\nend_marker\n"
+    result, after = _edit(tmp_path, original,
+                          "start_marker\n...\nend_marker", "replaced")
+    assert result.returncode == 0, result.stderr
+    assert "replaced" in after
+    assert "line two" not in after
+
+
+def test_an_exact_match_is_reported_without_a_note(tmp_path):
+    """A clean quote should not be told it was loose. Note that a trailing
+    space only needs the looser pass when it is INTERIOR to the span -- a
+    single line's trailing space is still an exact substring match."""
+    result, _ = _edit(tmp_path, "x = 1   \n", "x = 1", "x = 2")
+    assert result.returncode == 0
+    assert "matched" not in result.stdout
+
+
+def test_a_looser_match_still_refuses_when_it_is_ambiguous(tmp_path):
+    """Looseness is tolerance of how the text was quoted, never of which one
+    was meant. Guessing writes the edit into the wrong place."""
+    result, after = _edit(tmp_path, "v = 1   \nother\nv = 1\n", "v = 1", "v = 2")
+    assert result.returncode == 1
+    assert "exactly once" in result.stderr
+    assert "v = 2" not in after
+
+
+def test_text_that_is_simply_absent_says_so(tmp_path):
+    result, _ = _edit(tmp_path, "a = 1\n", "completely different", "x")
+    assert result.returncode == 1
+    assert "never appears" in result.stderr
+
+
+def test_an_exact_match_wins_over_a_looser_one(tmp_path):
+    """The cascade is ordered: a snippet that matches exactly somewhere must
+    not be relocated by a looser pass finding somewhere else first."""
+    original = "  target\ntarget\n"
+    result, after = _edit(tmp_path, original, "target", "hit")
+    assert result.returncode == 1, "an exact-but-ambiguous match should refuse"
+
+
+# --------------------------------------------------------------------------
+# The container path uses the same matcher
+# --------------------------------------------------------------------------
+#
+# It used to carry its own exact-match copy, which would now need its own
+# cascade and would have to stay in step with the local one forever. That is
+# exactly how two copies of the tool loop came to differ on the single line
+# that mattered. One implementation, reached twice.
+
+def _fake_container(files: dict):
+    """A command runner backed by a dict, honouring the read/write scripts."""
+    import base64
+    import shlex as _shlex
+
+    def run(command: str, timeout: float):
+        parts = _shlex.split(command)
+        path = parts[-2] if len(parts) >= 2 and parts[-1] != parts[-2] else parts[-1]
+        if "b64encode" in command:
+            target = parts[-1]
+            if target not in files:
+                return "", f"cannot read {target}", 2
+            return base64.b64encode(files[target].encode()).decode(), "", 0
+        target, payload = parts[-2], parts[-1]
+        files[target] = base64.b64decode(payload).decode()
+        return f"edited {target}", "", 0
+
+    return run
+
+
+def test_a_container_edit_tolerates_the_same_drift(tmp_path):
+    from agent.pipeline.execution import bind_command_runner
+
+    files = {"/workspace/f.py": "def f():   \n    return 1\n"}
+    with bind_command_runner(_fake_container(files)):
+        result = pt.edit_file(
+            "/workspace/f.py\n---OLD---\ndef f():\n    return 1\n---NEW---\ndef f():\n    return 2"
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert "return 2" in files["/workspace/f.py"]
+    assert "matched ignoring trailing whitespace" in result.stdout
+
+
+def test_a_container_edit_refuses_an_ambiguous_match(tmp_path):
+    from agent.pipeline.execution import bind_command_runner
+
+    files = {"/workspace/f.py": "v = 1\nother\nv = 1\n"}
+    with bind_command_runner(_fake_container(files)):
+        result = pt.edit_file("/workspace/f.py\n---OLD---\nv = 1\n---NEW---\nv = 2")
+
+    assert result.returncode == 1
+    assert "exactly once" in result.stderr
+    assert "v = 2" not in files["/workspace/f.py"]
+
+
+def test_a_container_edit_reports_a_missing_file_rather_than_writing_one(tmp_path):
+    from agent.pipeline.execution import bind_command_runner
+
+    files = {}
+    with bind_command_runner(_fake_container(files)):
+        result = pt.edit_file("/workspace/gone.py\n---OLD---\na\n---NEW---\nb")
+
+    assert result.returncode == 1
+    assert files == {}
