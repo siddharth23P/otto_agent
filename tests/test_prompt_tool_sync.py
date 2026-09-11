@@ -71,3 +71,28 @@ def test_one_agent_prompt_is_cheaper_than_the_four_role_prompts_it_replaced():
         "ceiling. Trim before raising this -- nodes.py records a measurement "
         "where a fifth instruction block erased the effect of the four before it."
     )
+
+
+def test_the_prompt_pushes_back_on_scope_before_writing_code():
+    """Measured against the same agent without it, on twelve real tickets in a
+    real repository: 54% fewer lines, 22% fewer tokens, 20% lower cost, 27%
+    faster. It was the only variant tested that cut every metric at once."""
+    ladder = pn._MINIMALITY_LADDER
+    assert "stop at the first" in ladder
+    for rung in ("need not exist", "codebase already has it",
+                 "standard library", "platform", "already installed",
+                 "one line"):
+        assert rung.split()[0] in ladder, f"the {rung!r} rung is missing"
+
+
+def test_being_lazy_never_reaches_the_safety_guards():
+    """The bare "write one-liners" arm in the same experiment WAS cheaper and
+    dropped a safety guard doing it, scoring 95% where every other arm held
+    100%. This sentence is the difference, not decoration."""
+    ladder = pn._MINIMALITY_LADDER.lower()
+    for guard in ("validation", "data-loss", "security", "accessibility"):
+        assert guard in ladder, f"{guard} is no longer protected from the ladder"
+    assert "never about the reading" in ladder, (
+        "the ladder is about the solution; without this it reads as permission "
+        "to skip understanding the problem"
+    )

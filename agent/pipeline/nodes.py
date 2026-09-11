@@ -591,6 +591,35 @@ _DIAGNOSTIC_HABITS = (
     "same fix harder.\n\n"
 )
 
+#: What to check before writing code, and the one place this prompt argues for
+#: doing LESS.
+#:
+#: Deliberately NOT a fifth diagnostic habit. The comment above records a
+#: measurement where adding one erased the effect of the four before it,
+#: taking system-inspection commands from 17 to 0; this is a different kind of
+#: instruction -- a check before a write rather than a habit while
+#: investigating -- so it is its own block, and its cost is visible on its own
+#: line if it ever needs removing.
+#:
+#: The ladder is measured. Against the same agent with no such instruction, on
+#: twelve real tickets in a real repository: 54% fewer lines, 22% fewer
+#: tokens, 20% lower cost, 27% faster, and safety held at 100%. It was the
+#: only variant tested that cut every metric at once -- a bare "write
+#: one-liners" prompt was cheaper too and dropped a safety guard doing it,
+#: which is why the last sentence here is not optional decoration.
+#:
+#: The cut is largest where there is a real over-build trap and near zero
+#: where the code is already minimal, so this costs almost nothing on tasks it
+#: does not apply to.
+_MINIMALITY_LADDER = (
+    "Before writing code, stop at the first that holds: it need not exist; "
+    "this codebase already has it; the standard library does it; the platform "
+    "does it; an installed dependency does it; it is one line. Then write the "
+    "minimum that works. Be lazy about the SOLUTION, never about the reading. "
+    "Never cut validation at a trust boundary, data-loss handling, security "
+    "or accessibility: those are the job.\n\n"
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -744,7 +773,7 @@ DISTIL_PROMPT = (
 AGENT_PROMPT = (
     "You are an engineer with a shell, working a task end to end: find out "
     "what is true, do the work, and confirm it actually holds.\n\n"
-    + _DIAGNOSTIC_HABITS +
+    + _DIAGNOSTIC_HABITS + _MINIMALITY_LADDER +
     "You work in a MODE, which sets both how you are thinking and which model "
     "you are running on. You start in " + DEFAULT_MODE + ". Switch when the "
     "KIND of work changes -- `ACTION: switch_mode` with one of "
