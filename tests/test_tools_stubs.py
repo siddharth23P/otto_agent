@@ -42,20 +42,34 @@ def test_execute_bash_times_out_on_a_hanging_command():
     assert not result.ok
 
 
-def test_web_search_stub_fails_cleanly_with_a_legible_reason():
-    result = web_search("who won the game last night")
+def test_web_search_without_a_key_degrades_instead_of_crashing():
+    """No ANTHROPIC_API_KEY means the WEB route has no viable candidate -- and
+    it deliberately has no fallback, because a model with no web access would
+    answer from memory while looking like a search. That must reach the tool
+    loop as an ordinary failed call, not as an exception."""
+    result = web_search("what shipped in Python 3.14")
 
     assert not result.ok
-    assert result.returncode != 0
-    assert "not implemented" in result.stderr
-    assert "who won the game last night" in result.stderr
+    assert "web_search failed" in result.stderr
 
 
-def test_rag_stub_fails_cleanly_with_a_legible_reason():
-    result = rag("what does our onboarding doc say")
+def test_web_search_refuses_an_empty_query():
+    assert not web_search("   ").ok
+
+
+def test_rag_without_a_workspace_says_there_are_no_files():
+    """rag searches the FILES in the bound workspace; recall_memory searches
+    what this conversation said. Keeping those distinct in the failure text
+    matters as much as in the docstrings -- two tools that sound alike cost
+    tool-loop turns."""
+    result = rag("where is the retry budget configured")
 
     assert not result.ok
-    assert "not implemented" in result.stderr
+    assert "no workspace is bound" in result.stderr
+
+
+def test_rag_refuses_an_empty_query():
+    assert not rag("  ").ok
 
 
 def test_every_tool_is_registered_with_a_tier_and_dispatchable():

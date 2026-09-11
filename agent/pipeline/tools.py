@@ -105,6 +105,7 @@ from agent.memory.retrieval import recall
 from agent.memory.session import current_store
 from agent.pipeline.execution import current_command_runner
 from agent.pipeline.vision import describe_image, sniff_media_type
+from langchain_core.messages import HumanMessage
 from agent.pipeline.workspace import (
     OutsideWorkspace,
     current_workspace,
@@ -765,31 +766,117 @@ def view_image(body: str) -> ToolResult:
     return ToolResult(stdout=_clip(f"{header}\n{answer}"), stderr="", returncode=0)
 
 
+#: Anthropic's server-side web search runs on their infrastructure and returns
+#: its results as content blocks in the same response, which is why this fits
+#: Otto's tool contract exactly: a query string in, text out, no change to the
+#: ACTION/CODE protocol and no search-API key for Otto to hold.
+#:
+#: Two variants exist and the newer one is NOT a superset: `web_search_20260209`
+#: (dynamic filtering) requires Claude 4.6 or later and is rejected with a 400
+#: by the cheap tier this routes to, while `web_search_20250305` is accepted
+#: everywhere. Verified against the live API rather than assumed. Raise the
+#: WEB route's pin past 4.6 and this should move with it.
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+
+
 def web_search(query: str) -> ToolResult:
-    """STUB (see module docstring) -- always fails with a legible reason
-    instead of a crash or a silent empty result, so a caller's tool-loop
-    (nodes.py's _tool_loop) gets something to react to (fall back to its
-    own knowledge, say so in its answer) rather than looking like a tool
-    that ran and simply found nothing.
+    """Search the live web and return what the search found, with sources.
+
+    CODE: body is the query, in plain words -- not a URL and not a shell
+    command. The model may decide a query needs no search (asked for a fact it
+    already knows, it will just answer); that is a successful result, not a
+    failure.
+
+    Unconfigured is a clean failure, not a crash: with no ANTHROPIC_API_KEY the
+    WEB route has no viable candidate and no fallback -- deliberately, since
+    falling through to a model with no web access would answer from memory
+    while looking like a search -- and that arrives here as a ProviderError.
     """
-    return ToolResult(
-        stdout="",
-        stderr=f"web_search is not implemented yet (query={query!r}) -- "
-               f"stubbed pending a real search integration",
-        returncode=1,
-    )
+    if not query.strip():
+        return ToolResult(stdout="", stderr="web_search: the query must not be empty", returncode=1)
+    try:
+        from agent.router.mapping import Task
+
+        llm = _get_router().chat_model(Task.WEB).bind_tools([WEB_SEARCH_TOOL])
+        reply = llm.invoke([HumanMessage(
+            f"Search the web and answer this, citing the sources you used:\n{query}"
+        )])
+    except ProviderError as exc:
+        return ToolResult(stdout="", stderr=f"web_search failed: {exc}", returncode=1)
+    except Exception as exc:  # a vendor SDK error must not escape the tool loop
+        return ToolResult(stdout="", stderr=f"web_search failed: {exc}", returncode=1)
+
+    text = _blocks_to_text(reply.content)
+    if not text.strip():
+        return ToolResult(
+            stdout="", stderr=f"web_search returned nothing for {query!r}", returncode=1,
+        )
+    return ToolResult(stdout=_clip(text), stderr="", returncode=0)
+
+
+def _blocks_to_text(content) -> str:
+    """The readable text of a reply that may be a plain string or a list of
+    blocks. A web-search reply interleaves `server_tool_use` and
+    `web_search_tool_result` blocks with the text ones; only the text is worth
+    handing back, since the search results are already summarised into it."""
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content or []:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and block.get("type") == "text":
+            parts.append(block.get("text", ""))
+    return "".join(parts)
+
+
+#: One indexed corpus per (workspace, fingerprint). Re-indexing on every query
+#: would re-embed the whole tree each time; keying on the fingerprint means an
+#: edited file is picked up on the next query and an unchanged tree is not.
+_RAG_INDEXES: dict[tuple[str, str], "MemoryStore"] = {}
 
 
 def rag(query: str) -> ToolResult:
-    """STUB (see module docstring) -- same reasoning as web_search() above;
-    no knowledge base / vector store exists yet to actually query.
+    """Search the CONTENTS of the files in this workspace, semantically.
+
+    CODE: body is a plain question, not a path and not a shell command --
+    "where is the retry budget configured", not "grep -r retry".
+
+    Distinct from `recall_memory`, which searches what this CONVERSATION said
+    earlier and then compacted away. This searches what is WRITTEN IN THE
+    FILES. When you want a specific string, `execute_bash` with grep is faster
+    and exact; reach for this when you do not know the word the code uses.
+
+    Requires a bound workspace, and returns a clean failure without one.
     """
-    return ToolResult(
-        stdout="",
-        stderr=f"rag is not implemented yet (query={query!r}) -- "
-               f"stubbed pending a real knowledge base",
-        returncode=1,
-    )
+    if not query.strip():
+        return ToolResult(stdout="", stderr="rag: the query must not be empty", returncode=1)
+    root = current_workspace()
+    if root is None:
+        return ToolResult(
+            stdout="",
+            stderr="rag: no workspace is bound for this run, so there are no files to search",
+            returncode=1,
+        )
+    try:
+        from agent.memory.retrieval import recall
+        from agent.memory.store import MemoryStore
+        from agent.pipeline.rag import corpus_fingerprint, index_corpus
+
+        key = (str(root), corpus_fingerprint(root))
+        store = _RAG_INDEXES.get(key)
+        if store is None:
+            store = MemoryStore(Path(tempfile.gettempdir()) / f"otto-rag-{key[1]}.db")
+            if index_corpus(store, "corpus", root) == 0:
+                return ToolResult(
+                    stdout="",
+                    stderr=f"rag: no indexable text files under {root}",
+                    returncode=1,
+                )
+            _RAG_INDEXES[key] = store
+        return ToolResult(stdout=_clip(recall(store, "corpus", query)), stderr="", returncode=0)
+    except Exception as exc:  # indexing or embedding trouble must not crash the loop
+        return ToolResult(stdout="", stderr=f"rag failed: {exc}", returncode=1)
 
 
 def recall_memory(query: str) -> ToolResult:

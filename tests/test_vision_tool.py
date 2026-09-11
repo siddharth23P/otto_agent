@@ -276,3 +276,48 @@ def test_narrowing_questions_about_one_image_are_not_flagged_as_repetition():
 
     assert first != second
     assert first == same
+
+
+# ---- rag over the workspace corpus ---------------------------------------
+
+
+def test_rag_finds_a_file_by_meaning_rather_than_by_the_word_used(workspace):
+    """The reason this exists alongside grep: the query and the file share no
+    keyword. `execute_bash` with grep is faster and exact when you know the
+    string; this is for when you do not."""
+    (workspace / "ops.md").write_text(
+        "# Runbook\nThe retry budget is configured in config/retries.yaml, "
+        "default 3 attempts before giving up.\n"
+    )
+    (workspace / "unrelated.py").write_text("def handler():\n    return 200\n")
+
+    result = pt.rag("how many times does it try again before it stops?")
+
+    assert result.ok
+    assert "retries.yaml" in result.stdout
+
+
+def test_rag_skips_binaries_and_vcs_noise(workspace):
+    from agent.pipeline.rag import indexable_files
+
+    (workspace / "keep.py").write_text("x = 1")
+    (workspace / "pixel.png").write_bytes(PNG)
+    (workspace / ".git").mkdir()
+    (workspace / ".git" / "config.py").write_text("junk")
+
+    names = sorted(p.name for p in indexable_files(workspace))
+
+    assert names == ["keep.py"]
+
+
+def test_rag_reindexes_when_a_file_changes(workspace):
+    """The fingerprint is names, sizes and mtimes -- cheap enough to run per
+    query, so an edit is picked up without re-embedding an unchanged tree."""
+    from agent.pipeline.rag import corpus_fingerprint
+
+    target = workspace / "doc.md"
+    target.write_text("first contents")
+    before = corpus_fingerprint(workspace)
+    target.write_text("second contents, a different length entirely")
+
+    assert corpus_fingerprint(workspace) != before
