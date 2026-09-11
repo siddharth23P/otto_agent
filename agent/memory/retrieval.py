@@ -72,6 +72,21 @@ from agent.memory.tokens import count_tokens
 #: docstring: this does NOT limit what stage 2 can find.
 DEFAULT_TOP_K = 3
 
+#: How many bullets a PROCEDURAL recall reads -- "what did I already try here",
+#: asked mid-task while acting.
+#:
+#: One, not three, and that is measured rather than tidy. Across memory
+#: substrates, retrieval depth pulls in opposite directions for the two jobs
+#: this store does: accuracy on user-history question answering rises
+#: monotonically with k, while task-time recall FALLS about 7 points going from
+#: k=1 to k=5, because retrieved context starves attention from the thing the
+#: agent is meant to be acting on. A separate ablation independently peaks at
+#: k=1 and degrades from k>=2 (2608.15008, 2509.25140).
+#:
+#: Same store, two read policies. The old single `top_k` served the QA job and
+#: quietly taxed the acting one.
+PROCEDURAL_TOP_K = 1
+
 #: How many RAW CHUNKS stage 2 actually returns, before neighbour expansion.
 #: This is the cap that makes recall() a slice of a budgeted prompt (agent/
 #: memory/queue.py's X_BUDGET/Y_BUDGET) rather than a second unbounded dump.
@@ -214,7 +229,9 @@ def recall(
     store: MemoryStore,
     kind: str,
     query: str,
-    top_k: int = DEFAULT_TOP_K,
+    *,
+    purpose: str = "recall",
+    top_k: int | None = None,
     max_chunks: int = DEFAULT_MAX_CHUNKS,
     neighbour_window: int = DEFAULT_NEIGHBOUR_WINDOW,
     token_budget: int = DEFAULT_TOKEN_BUDGET,
@@ -225,6 +242,12 @@ def recall(
     "nothing to recall yet" message if this `kind` has never compacted
     anything.
     """
+    # "acting" is a narrower read than "recall" on purpose -- see
+    # PROCEDURAL_TOP_K. The default stays the broad one, so a caller that does
+    # not say what it is for gets what it got before.
+    if top_k is None:
+        top_k = PROCEDURAL_TOP_K if purpose == "acting" else DEFAULT_TOP_K
+
     bullets = store.current_bullets(kind)
     if not bullets:
         return _NOTHING_YET

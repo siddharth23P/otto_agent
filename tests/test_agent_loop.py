@@ -463,7 +463,7 @@ def test_a_long_run_compacts_its_old_tool_results(monkeypatch):
     pn.agent(_state())
 
     sent = [m.content for m in fake.seen[-1]]
-    assert any("dropped to make room" in m for m in sent), "nothing was compacted"
+    assert any("compacted" in m for m in sent), "nothing was compacted"
 
 
 def test_compaction_never_touches_the_task(monkeypatch):
@@ -718,3 +718,54 @@ def test_a_rejection_leaves_records_open_rather_than_guessing():
     settled = pn._settle(checklist, pn._parse_verdict(
         "FINAL:\nMET: 1/2\nBLOCKED: no\nAPPROVE: no\nWHY: b is missing"))
     assert [i["status"] for i in settled] == ["pending", "pending"]
+
+
+def test_compaction_replaces_a_result_with_its_summary_not_its_first_bytes(monkeypatch):
+    """`actions` already holds one line per call, written when it ran. Keeping
+    the first 240 characters keeps whatever came first, which for a failing
+    command is usually the banner and not the error."""
+    messages = [
+        HumanMessage("TOOL RESULT:\n" + "x" * 5000),
+        HumanMessage("recent, untouched"),
+    ]
+    monkeypatch.setattr(pn, "KEEP_VERBATIM", 1)
+
+    pn._compact(messages, ["solve: execute_bash pytest -> FAILED (exit 1): E0433"])
+
+    assert "E0433" in messages[0].content
+    assert "x" * 100 not in messages[0].content
+
+
+def test_compaction_never_touches_what_the_run_is_for(monkeypatch):
+    """Type-blind compaction takes constraint recall from 53% to 10% over five
+    rounds. Losing a tool result costs a re-run; losing a constraint means the
+    agent does the wrong thing confidently for the rest of the session."""
+    monkeypatch.setattr(pn, "KEEP_VERBATIM", 0)
+    protected = [
+        HumanMessage("TOOL RESULT:\nTASK:\n" + "x" * 5000),
+        HumanMessage("TOOL RESULT:\nTHIS IS WHAT HAS TO BE TRUE WHEN YOU ARE DONE:\n" + "y" * 5000),
+        HumanMessage("TOOL RESULT:\nHOLD. send_message changes something\n" + "z" * 5000),
+    ]
+    before = [m.content for m in protected]
+
+    pn._compact(protected, [])
+
+    assert [m.content for m in protected] == before
+
+
+def test_the_summary_still_lines_up_after_some_are_compacted(monkeypatch):
+    """Off-by-one here would attach the wrong summary to the wrong call, which
+    is worse than not compacting at all."""
+    monkeypatch.setattr(pn, "KEEP_VERBATIM", 1)
+    messages = [
+        HumanMessage("TOOL RESULT:\n" + "a" * 5000),
+        HumanMessage("TOOL RESULT:\nshort"),
+        HumanMessage("TOOL RESULT:\n" + "c" * 5000),
+        HumanMessage("recent"),
+    ]
+
+    pn._compact(messages, ["first call", "second call", "third call"])
+
+    assert "first call" in messages[0].content
+    assert messages[1].content == "TOOL RESULT:\nshort"
+    assert "third call" in messages[2].content

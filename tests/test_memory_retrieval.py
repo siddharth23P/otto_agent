@@ -212,3 +212,41 @@ def test_recall_falls_back_to_recent_chunks_when_none_have_an_embedding(store, m
 
     assert "turn 5" in result and "turn 4" in result
     assert "turn 0" not in result
+
+
+# --------------------------------------------------------------------------
+# Two read policies over one store
+# --------------------------------------------------------------------------
+#
+# Retrieval depth pulls in opposite directions for the two jobs this store
+# does. Accuracy on user-history question answering rises monotonically with k;
+# task-time recall FALLS about 7 points from k=1 to k=5, because retrieved
+# context starves attention from the thing being acted on. A second ablation
+# independently peaks at k=1 and degrades from k>=2.
+
+def test_acting_reads_narrower_than_recalling():
+    from agent.memory.retrieval import DEFAULT_TOP_K, PROCEDURAL_TOP_K
+
+    assert PROCEDURAL_TOP_K < DEFAULT_TOP_K
+    assert PROCEDURAL_TOP_K == 1
+
+
+def test_the_default_read_is_unchanged_for_a_caller_that_says_nothing(tmp_path):
+    """A caller that does not declare a purpose gets exactly what it got
+    before this split existed."""
+    import inspect
+
+    from agent.memory import retrieval
+
+    signature = inspect.signature(retrieval.recall)
+    assert signature.parameters["purpose"].default == "recall"
+    assert signature.parameters["top_k"].default is None
+
+
+def test_recall_memory_asks_for_the_acting_read():
+    """It is called mid-task, while the agent is doing something."""
+    import inspect
+
+    from agent.pipeline import tools
+
+    assert 'purpose="acting"' in inspect.getsource(tools.recall_memory)
