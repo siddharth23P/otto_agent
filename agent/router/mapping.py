@@ -16,8 +16,21 @@ class Task(StrEnum):
 
     CHAT_FAST = "chat_fast"
     REASON = "reason"
+    #: Judging an attempt, as opposed to producing one. Split off REASON on
+    #: 2026-09-11 for one reason: the evaluator and the solver shared it, and
+    #: they now want different vendors. A task keyed by intent cannot express
+    #: "same intent, different seat", so the seats became separate intents.
+    EVALUATE = "evaluate"
     PLAN = "plan"
     SUMMARIZE = "summarize"
+    #: Looking at an image. Reached only by the `view_image` tool, never by a
+    #: role node -- the graph itself stays text-only (see agent/pipeline/
+    #: vision.py for why that is a deliberate ceiling rather than an oversight).
+    VISION = "vision"
+    #: Searching the live web. Reached only by the `web_search` tool, which
+    #: uses the vendor's own server-side search rather than a search API key
+    #: Otto would have to hold.
+    WEB = "web"
     CODE_COMPLETE = "code_complete"
     CODE_EDIT = "code_edit"
 
@@ -141,6 +154,14 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
     ),
 
     Task.REASON: (
+        # The solver seat. It is the most turn-hungry role in the graph, so it
+        # is also where model choice costs the most -- cheap tier first, and
+        # upgrade only what measurement says is losing points.
+        Candidate(
+            spec="openai:gpt-5-mini",
+            requires=frozenset({Capability.CHAT, Capability.REASONING}),
+            params={"temperature": 0.0, "max_tokens": 8192},
+        ),
         Candidate(
             spec="inception:mercury-2.5",
             requires=frozenset({Capability.CHAT}),
@@ -188,7 +209,30 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
         ),
     ),
 
+    Task.EVALUATE: (
+        # Judging is where a weak model cost the most this session: the
+        # evaluator approved work it had never checked, repeatedly. It gets a
+        # real reasoning model, at the cheap end of one -- upgrade only if
+        # measurement says this tier is what is losing points.
+        Candidate(
+            spec="anthropic:claude-haiku-4-5-20251001",
+            requires=frozenset({Capability.CHAT, Capability.REASONING}),
+            params={"temperature": 0.0, "max_tokens": 4096},
+        ),
+        Candidate(
+            spec="inception:mercury-2.5",
+            requires=frozenset({Capability.CHAT}),
+            params={"temperature": 0.5, "reasoning_effort": "medium",
+                    "diffusing": False, "max_tokens": 8192},
+        ),
+    ),
+
     Task.PLAN: (
+        Candidate(
+            spec="anthropic:claude-haiku-4-5-20251001",
+            requires=frozenset({Capability.CHAT, Capability.REASONING}),
+            params={"temperature": 0.0, "max_tokens": 4096},
+        ),
         Candidate(
             spec="inception:mercury-2.5",
             requires=frozenset({Capability.CHAT}),
@@ -204,9 +248,37 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
 
     Task.SUMMARIZE: (
         Candidate(
+            spec="gemini:gemini-2.5-flash-lite",
+            requires=frozenset({Capability.CHAT}),
+            params={"temperature": 0.0, "max_tokens": 4096},
+        ),
+        Candidate(
             spec="inception:mercury-2.5",
             requires=frozenset({Capability.CHAT}),
-            params={"temperature": 0.1, "reasoning_effort": "instant", "diffusing": True},
+            params={"temperature": 0.5, "reasoning_effort": "instant", "diffusing": True},
+        ),
+    ),
+
+    Task.VISION: (
+        # Deliberately NO Inception fallback. Mercury has no vision, and a
+        # chain that quietly fell through to a text model would answer
+        # confidently about an image it never saw. NoViableRoute -> a failing
+        # ToolResult is the correct outcome when no Gemini key is configured.
+        Candidate(
+            spec="gemini:gemini-2.5-flash",
+            requires=frozenset({Capability.CHAT, Capability.VISION}),
+            params={"temperature": 0.0, "max_tokens": 4096},
+        ),
+    ),
+
+    Task.WEB: (
+        # No Inception fallback either, for the same shape of reason: Mercury
+        # has no web access, so falling through would answer from memory while
+        # looking like a search.
+        Candidate(
+            spec="anthropic:claude-haiku-4-5-20251001",
+            requires=frozenset({Capability.CHAT, Capability.TOOLS}),
+            params={"temperature": 0.0, "max_tokens": 4096},
         ),
     ),
 

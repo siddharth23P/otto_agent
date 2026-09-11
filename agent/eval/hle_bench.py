@@ -179,7 +179,7 @@ def _answer_raw(question: str) -> tuple[str, int]:
     from agent.pipeline.nodes import ROUTER, _call
     from agent.router.mapping import Task
 
-    llm = ROUTER.chat_model(Task.REASON, temperature=0.5)
+    llm = ROUTER.chat_model(Task.REASON)
     reply = _call(llm, [SystemMessage(ANSWER_FORMAT_PROMPT), HumanMessage(question)])
     return reply, 1
 
@@ -222,7 +222,10 @@ def judge(question: str, response: str, correct_answer: str) -> tuple[str, bool]
     from agent.pipeline.nodes import ROUTER, _call
     from agent.router.mapping import Task
 
-    llm = ROUTER.chat_model(Task.REASON, temperature=0.5)
+    # Task.EVALUATE, not REASON: this is a judge, and the two seats are on
+    # different vendors now. Leaving it on REASON would silently grade HLE with
+    # the solver's model while the graph's own evaluator used another.
+    llm = ROUTER.chat_model(Task.EVALUATE)
     reply = _call(llm, [HumanMessage(JUDGE_PROMPT.format(
         question=question, response=response, correct_answer=correct_answer,
     ))])
