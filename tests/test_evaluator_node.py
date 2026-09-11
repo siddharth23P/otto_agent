@@ -27,6 +27,21 @@ from langgraph.graph import END
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from agent.pipeline import nodes as pn
+from agent.router.llm_provider.base import ProviderError
+
+
+class _FakeMultiModel:
+    """One scripted reply per call, recording the messages each time -- the
+    evaluator is two phases now, so a single-reply fake cannot drive it."""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.calls = []
+
+    def stream(self, messages):
+        self.calls.append([str(m.content) for m in messages])
+        from langchain_core.messages import AIMessageChunk
+        yield AIMessageChunk(content=self._replies.pop(0) if self._replies else "FINAL:\nAPPROVE: yes\nWHY: ok")
 
 
 class _FakeModel:
@@ -98,7 +113,7 @@ def test_evaluator_judges_a_final_answer_using_the_final_answer_framing(monkeypa
 
     pn.evaluator(_state(node="agent", output="def f(): return 1"))
 
-    system, human = fake.calls[0]
+    system, human = fake.calls[1]
     assert "ANSWER" in system
     assert "as a finished answer" in system
     assert "ANSWER:" in human
@@ -122,7 +137,7 @@ def test_the_evaluator_no_longer_judges_blind(monkeypatch):
         context="the failing test was test_auth",
     ))
 
-    _, human = fake.calls[0]
+    _, human = fake.calls[1]
     assert "pytest -> ok" in human, "the judge cannot see what was run"
     assert "solve -> plan" in human, "the judge cannot see how the run worked"
     assert "0 failed" in human, "the judge cannot see the evidence"
@@ -158,7 +173,7 @@ def test_evaluator_shows_prior_conversation_ahead_of_the_original_request(monkey
     ])
     pn.evaluator(state)
 
-    _, human = fake.calls[0]
+    _, human = fake.calls[1]
     assert human.startswith("CONVERSATION SO FAR:\n")
     assert "you: solve N queens with brute force" in human
     assert "otto: def solve(n): ..." in human
@@ -222,15 +237,17 @@ def test_evaluator_can_self_check_via_a_tool_before_rendering_its_verdict(monkey
             yield AIMessageChunk(content=self._replies.pop(0))
 
     multi = _Multi([
+        # The first call is now phase one: the rubric, from the task alone.
+        "- 17 has no divisor other than 1 and itself",
         "ACTION: execute_python\nCODE:\nprint(17 % 2, 17 % 3)",
-        "FINAL:\nAPPROVE: yes\nWHY: verified no small factors divide it",
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: verified no small factors divide it",
     ])
     _install(monkeypatch, multi)
 
     result = pn.evaluator(_state())
 
     assert result.goto == END
-    tool_result = multi.calls[1][-1]
+    tool_result = multi.calls[2][-1]
     assert "TOOL RESULT" in tool_result
 
 
@@ -340,3 +357,103 @@ def test_the_evaluator_prompt_promises_the_budget_it_is_given():
     source = inspect.getsource(pn.evaluator)
     assert "max_iter=MAX_EVALUATOR_ITERATIONS" in source
     assert "max_iter=MAX_TOOL_ITERATIONS" not in source
+
+
+# --------------------------------------------------------------------------
+# The rubric phase -- why the judgment is worth its calls at all
+# --------------------------------------------------------------------------
+#
+# RefineBench: self-refinement over five turns is 31.3% for the best model and
+# -2.5% to 0% for most. The SAME models reach 90-98% given an external
+# checklist. A judge that only re-reads the actor's own output measures at
+# approximately nothing, and that is what this one was.
+
+def test_the_rubric_is_written_before_the_answer_is_visible(monkeypatch):
+    """Load-bearing, not tidy. Criteria written while looking at an answer are
+    criteria the answer happens to meet."""
+    fake = _FakeMultiModel([
+        "- the number 55 appears",
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: it does",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.evaluator(_state(node="agent", output="the answer is 55"))
+
+    rubric_call = "\n".join(fake.calls[0])
+    assert "55" not in rubric_call, "the rubric phase could see the answer"
+    assert "is 17 prime?" in rubric_call or "TASK" in rubric_call
+
+
+def test_the_criteria_reach_the_judgment(monkeypatch):
+    fake = _FakeMultiModel([
+        "- fib(10) must be 55\n- the file must exist",
+        "FINAL:\nMET: 2/2\nBLOCKED: no\nAPPROVE: yes\nWHY: both hold",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.evaluator(_state(node="agent", output="55"))
+
+    judgment = "\n".join(fake.calls[1])
+    assert "fib(10) must be 55" in judgment
+    assert "the file must exist" in judgment
+
+
+def test_a_failed_rubric_call_degrades_rather_than_losing_the_judgment(monkeypatch):
+    """A provider hiccup in phase one must not cost the verdict. No rubric is
+    worse than a rubric, but it is not broken."""
+    class _FailThenJudge:
+        def __init__(self):
+            self.calls = 0
+
+        def stream(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                raise ProviderError("rubric call timed out")
+            yield AIMessageChunk(content="FINAL:\nAPPROVE: yes\nWHY: fine")
+
+    _install(monkeypatch, _FailThenJudge())
+    result = pn.evaluator(_state(node="agent", output="an answer"))
+    assert result.goto == END
+
+
+def test_the_verdict_keeps_process_and_outcome_apart(monkeypatch):
+    """Three of four criteria met and nothing working are both rejections, and
+    must not look alike to anything reading this back."""
+    near = pn._parse_verdict("FINAL:\nMET: 3/4\nBLOCKED: no\nAPPROVE: no\nWHY: one short")
+    nothing = pn._parse_verdict("FINAL:\nMET: 0/4\nBLOCKED: no\nAPPROVE: no\nWHY: none met")
+
+    assert near.approved is nothing.approved is False
+    assert near.process > nothing.process
+
+
+def test_an_environment_blocker_is_not_recorded_as_the_agent_being_wrong(monkeypatch):
+    """Otherwise a real obstacle is counted as a failure -- and retried
+    identically, which is what a plain rejection invites."""
+    fake = _FakeMultiModel([
+        "- the service returns data",
+        "FINAL:\nMET: 0/1\nBLOCKED: yes\nAPPROVE: no\nWHY: the service was down",
+    ])
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="agent", output="could not reach it"))
+
+    assert "blocked by the environment" in result.update["feedback"]
+
+
+def test_the_criteria_count_reaches_the_feedback(monkeypatch):
+    """"3/4 criteria met" tells the loop where to aim; "rejected" does not."""
+    fake = _FakeMultiModel([
+        "- a\n- b\n- c\n- d",
+        "FINAL:\nMET: 3/4\nBLOCKED: no\nAPPROVE: no\nWHY: d is missing",
+    ])
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="agent", output="partial"))
+
+    assert "3/4 criteria met" in result.update["feedback"]
+
+
+def test_the_rubric_is_bounded(monkeypatch):
+    """Criteria are scored one by one, and overlapping ones double-count a
+    single mistake."""
+    assert len(pn._parse_rubric("\n".join(f"- criterion {i}" for i in range(20)))) == pn.RUBRIC_MAX

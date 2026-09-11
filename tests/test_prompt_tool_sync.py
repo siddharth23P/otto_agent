@@ -22,7 +22,8 @@ from agent.router.mapping import TASK_ROUTES
 
 def _formatted_evaluator(*, target: str, target_note: str) -> str:
     return pn.EVALUATOR_PROMPT.format(
-        max_iter=pn.MAX_TOOL_ITERATIONS, target=target, target_note=target_note,
+        max_iter=pn.MAX_EVALUATOR_ITERATIONS, target=target, target_note=target_note,
+        rubric='- a checkable criterion',
     )
 
 
