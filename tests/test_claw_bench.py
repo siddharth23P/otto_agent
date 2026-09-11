@@ -183,3 +183,20 @@ def test_a_finished_run_reports_its_own_final_output():
 
 def test_no_state_at_all_is_an_empty_answer_not_a_crash():
     assert cb._final_text(None) == ""
+
+
+def test_a_task_runs_for_its_own_budget_by_default():
+    assert cb.task_budget(_task(timeout_seconds=900)) == 900.0
+
+
+def test_a_budget_cap_lowers_a_generous_task_budget():
+    """Tasks here allow 120 to 900 seconds and the hard ones use all of it,
+    so a sweep at full budget is hours. The cap is what makes a sample
+    affordable -- and it lowers scores, which is why it is reported."""
+    assert cb.task_budget(_task(timeout_seconds=900), 120) == 120.0
+
+
+def test_a_cap_above_the_task_budget_does_not_raise_it():
+    """A ceiling, never a floor -- a 120s task given --max-seconds 600 must
+    still stop at 120, or the run stops matching the benchmark."""
+    assert cb.task_budget(_task(timeout_seconds=120), 600) == 120.0

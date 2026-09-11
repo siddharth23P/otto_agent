@@ -74,6 +74,11 @@ def eval_claw_cmd(
     ] = None,
     no_judge: Annotated[bool, typer.Option("--no-judge", help="Skip the LLM judge.")] = False,
     port_offset: Annotated[int, typer.Option(help="Shift every mock service port, for parallel runs.")] = 0,
+    max_seconds: Annotated[
+        Optional[float],
+        typer.Option(help="Cap each task's budget below its own (tasks allow 120-900s). "
+                          "Cheaper samples, and lower scores -- say so when reporting."),
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print the full report as JSON.")] = False,
 ) -> None:
     if architecture not in {"graph", "single"}:
@@ -117,6 +122,7 @@ def eval_claw_cmd(
                 claw, task_yaml,
                 trace_dir=out_dir, cfg=cfg, judge=judge,
                 architecture=architecture, port_offset=port_offset,
+                max_seconds=max_seconds,
             )
         except Exception as exc:
             # One task's container or service failing is not a reason to lose
@@ -136,6 +142,7 @@ def eval_claw_cmd(
     report = {
         "architecture": architecture,
         "tag": tag,
+        "max_seconds": max_seconds,
         "trace_dir": str(out_dir),
         "summary": _summary(outcomes),
         "tasks": [
