@@ -1032,26 +1032,120 @@ def _code_body(text: str) -> str:
     return _SPECIAL_TOKEN.sub("", body).strip()
 
 
-def _parse_worker_reply(text: str) -> tuple[Literal["action", "final", "unparseable"], str, str]:
+#: A bare identifier, for pulling a tool name out of whatever the model wrapped
+#: it in. Tool names are ASCII snake_case by construction (TOOL_DISPATCH).
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: The loop's own pseudo-tools. They never appear in TOOL_DISPATCH -- they
+#: change the loop's state rather than returning a result -- but a reply naming
+#: one is naming a real thing, so name RESOLUTION has to know about them. Whether
+#: the loop in question will honour it is a separate question, answered by that
+#: loop: `_tool_loop` (the evaluator's) rejects `delegate` on purpose.
+_LOOP_TOOLS = ("ask_user", "switch_mode", "delegate")
+
+#: How close a misspelling has to be before it is treated as the tool it
+#: resembles. 0.8 accepts `execute_pyton` and `read_files`; it does not accept
+#: `read_file` for `edit_file`, which differ by more than a typo and where
+#: guessing wrong would run the wrong tool rather than waste a round trip.
+_NEAR_MISS_CUTOFF = 0.8
+
+
+def _resolve_tool(line: str, allowed) -> str:
+    """The tool named on an ACTION: line, out of whatever decorated it.
+
+    Every shape here was produced by a real model against this protocol:
+
+        ACTION: execute_bash to list the files      prose after the name
+        ACTION: `execute_bash`                      backticks
+        ACTION: **execute_bash**                    bold
+        ACTION: execute_bash.                       a full stop
+
+    All four used to reach the dispatch table verbatim, miss, and come back as
+    "tool 'execute_bash.' is not available" -- a wasted model call each time,
+    for a reply that named the right tool. A text protocol has nothing
+    structurally enforcing its action schema, which is the dominant production
+    failure class (plausible reasoning decoupled from the action contract), and
+    the counter-evidence is that it closes in code: one harness eliminated all
+    illegal moves across 145 environments by validating on the emit path.
+
+    Resolution order is deliberate. An exact token match anywhere on the line
+    wins first, so the prose case resolves rather than being guessed at. Only
+    then does a near miss get considered, and only for the FIRST token -- a
+    fuzzy match against a word buried in a sentence is how a parser starts
+    inventing tool calls. When nothing resolves, the first token is returned
+    unchanged so the caller's "not available" message still names what the
+    model actually said.
+    """
+    import difflib
+
+    vocabulary = set(allowed) | set(_LOOP_TOOLS)
+    tokens = _IDENTIFIER.findall(line)
+    if not tokens:
+        return line.strip()
+    for token in tokens:
+        if token in vocabulary:
+            return token
+    near = difflib.get_close_matches(tokens[0], sorted(vocabulary), n=1,
+                                     cutoff=_NEAR_MISS_CUTOFF)
+    return near[0] if near else tokens[0]
+
+
+def _parse_worker_reply(
+    text: str, *, allowed=(),
+) -> tuple[Literal["action", "final", "unparseable"], str, str]:
     """Split a reply into (kind, tool_name, body).
 
-    For an ACTION: (`"action"`, the tool name on that line, the CODE: body).
-    For a FINAL: with a non-empty body: (`"final"`, `""`, the answer text).
-    Anything else -- no ACTION:/FINAL: marker anywhere, or a FINAL: with
-    nothing (or only whitespace) after it -- is `"unparseable"`, which
-    _tool_loop treats as a signal to retry with corrective feedback rather
-    than accepting it.
+    For an ACTION: (`"action"`, the tool named on that line resolved against
+    `allowed`, the CODE: body). For a FINAL: with a non-empty body:
+    (`"final"`, `""`, the answer text). Anything else -- no ACTION:/FINAL:
+    marker anywhere, or a FINAL: with nothing after it -- is `"unparseable"`,
+    which both loops treat as a signal to retry with corrective feedback
+    rather than accepting it.
+
+    WHICHEVER MARKER COMES FIRST WINS. This used to check ACTION: first
+    regardless of position, so a reply that answered and then suggested a
+    follow-up step --
+
+        FINAL:
+        the report is written to /workspace/report.md
+        ACTION: execute_bash
+        CODE:
+        cat /workspace/report.md
+
+    -- silently discarded the answer and ran the command instead. The loop
+    then had no output to return, and the run paid for another exchange to
+    get back an answer it had already been given. Reading in document order is
+    also simply what the reply means.
     """
-    if "ACTION:" in text:
-        action_line = text.split("ACTION:", 1)[1].split("\n", 1)[0].strip()
-        code = _code_body(text)
-        return "action", action_line, code
-    if "FINAL:" in text:
-        body = text.split("FINAL:", 1)[-1].strip()
+    action_at = text.find("ACTION:")
+    final_at = text.find("FINAL:")
+    if action_at != -1 and (final_at == -1 or action_at < final_at):
+        line = text[action_at + len("ACTION:"):].split("\n", 1)[0]
+        return "action", _resolve_tool(line, allowed), _code_body(text)
+    if final_at != -1:
+        body = text[final_at + len("FINAL:"):].strip()
         if body:
             return "final", "", body
         return "unparseable", "", text.strip()
     return "unparseable", "", text.strip()
+
+
+def _action_problem(tool_name: str, body: str, allowed) -> str:
+    """Why this action cannot be run, or "" if it can.
+
+    The emit-path contract, checked before anything is dispatched. Both
+    conditions used to be discovered by the tool itself, several seconds and
+    one confusing error later: an unavailable tool, and an ACTION: with no
+    CODE: body at all -- which reached the shell as an empty command and came
+    back as a returncode the model then had to interpret.
+    """
+    if tool_name not in allowed:
+        return (f"tool {tool_name!r} is not available "
+                f"(allowed: {sorted(allowed)})")
+    if not body.strip():
+        return (f"{tool_name} was called with no CODE: body. Put what it "
+                "should act on under a CODE: line.")
+    return ""
 
 
 def _model_label(llm) -> str:
@@ -1127,7 +1221,7 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
         if budget is not None and budget.spent():
             return output
         text = _call(llm, messages)
-        kind_of_reply, tool_name, body = _parse_worker_reply(text)
+        kind_of_reply, tool_name, body = _parse_worker_reply(text, allowed=dispatch)
 
         if kind_of_reply == "final":
             return _strip_code_fence(body)
@@ -1162,11 +1256,8 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
             # just another TOOL_DISPATCH entry.
             question, choices = _parse_ask_user_body(body)
             raise NeedsUserInput(question or "(no question given)", choices)
-        if tool_name not in dispatch:
-            evidence = (
-                f"tool {tool_name!r} is not available "
-                f"(allowed: {sorted(dispatch)})"
-            )
+        if problem := _action_problem(tool_name, body, dispatch):
+            evidence = problem
         else:
             result = dispatch[tool_name](body)
             if actions is not None:
@@ -1724,7 +1815,12 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
                 messages.append(HumanMessage(note))
 
         text = _call(llm, messages)
-        kind_of_reply, tool_name, body = _parse_worker_reply(text)
+        # Resolved against what this run can actually call, which includes
+        # whatever agent/pipeline/toolkit.py bound for it -- a benchmark's
+        # task-specific tools are exactly the names a model is most likely to
+        # decorate or misspell, having seen them once in a prompt.
+        dispatch = dispatch_table()
+        kind_of_reply, tool_name, body = _parse_worker_reply(text, allowed=dispatch)
 
         if kind_of_reply == "final":
             return _strip_code_fence(body), "final", mode
@@ -1783,7 +1879,6 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
             continue
 
         did_work_since_swap = True
-        dispatch = dispatch_table()
 
         # The gate. Before a tool that cannot be undone runs for the first time
         # against a given target, make the model check it against what it
@@ -1797,11 +1892,8 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
             _emit({"agent": {"board": [f"holding {tool_name} for a check"]}})
             continue
 
-        if tool_name not in dispatch:
-            evidence = (
-                f"tool {tool_name!r} is not available "
-                f"(allowed: {sorted(dispatch)})"
-            )
+        if problem := _action_problem(tool_name, body, dispatch):
+            evidence = problem
         else:
             result = dispatch[tool_name](body)
             line = _summarise_action(tool_name, body, result)
