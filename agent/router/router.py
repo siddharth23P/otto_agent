@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from langchain.chat_models import BaseChatModel
 
 from agent.router.llm_provider import reset as registry_reset
-from agent.router.llm_provider import get_provider, provider_class, provider_names
+from agent.router.llm_provider import get_provider
+from agent.router.llm_provider import provider_class, provider_names
+from agent.router.llm_provider.temperature import apply_to_params
 from agent.router.llm_provider.base import AuthError, Capability, CapabilityNotSupported, ModelInfo, ProviderError
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 
@@ -240,7 +242,21 @@ class Router:
         if d.endpoint is not Endpoint.CHAT:
             raise CapabilityNotSupported(f"{d.task.value} routes to {d.endpoint.value}, not chat")
         provider = get_provider(d.provider)
-        return provider.chat_model(d.model.id, **{**d.params, **overrides})
+        # Temperature is decided per MODEL, not per call site and not per
+        # vendor: Inception silently resets anything under 0.5 to 1.0, and
+        # OpenAI's reasoning models reject any value at all. See
+        # agent/router/llm_provider/temperature.py.
+        params = apply_to_params(d.provider, d.model.id, {**d.params, **overrides})
+        llm = provider.chat_model(d.model.id, **params)
+        # Stamped so a failure downstream can name the vendor this came from:
+        # agent/pipeline/nodes.py's _call needs it to record a retirement
+        # against the right catalogue. Defensive, because not every chat class
+        # tolerates an unknown attribute.
+        try:
+            object.__setattr__(llm, "_otto_provider", d.provider)
+        except Exception:  # pragma: no cover -- slotted/frozen model classes
+            pass
+        return llm
     
     def chat_model(self, task: Task, *, only: str | None = None, **overrides) -> BaseChatModel:
         return self.model_for(self.resolve(task,only=only), **overrides)

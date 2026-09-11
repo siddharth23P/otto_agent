@@ -412,7 +412,11 @@ def provider(monkeypatch) -> FakeProvider:
 def test_chat_model_passes_the_resolved_id_and_route_params(provider):
     assert router().chat_model(Task.CHAT_FAST) == "a-chat-model"
     assert provider.chat["model"] == "mercury-2.5"
-    assert provider.chat["temperature"] == 0.2
+    # 0.2 is what the route ASKS for; 0.5 is what Inception will honour.
+    # That vendor does not clamp an out-of-range value, it resets it to the
+    # model default of 1.0 -- so sending 0.2 would produce the MOST random
+    # setting available. See agent/router/llm_provider/temperature.py.
+    assert provider.chat["temperature"] == 0.5
     assert provider.chat["diffusing"] is True
 
 
