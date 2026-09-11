@@ -921,3 +921,149 @@ def test_reminders_are_periodic_not_constant():
     assert pn._reminders(1, None) == ""
     assert pn._reminders(pn.REMINDER_EVERY, None) != ""
     assert pn._reminders(pn.REMINDER_EVERY + 1, None) == ""
+
+
+# --------------------------------------------------------------------------
+# Delegation: the one shape of multi-agent the evidence supports
+# --------------------------------------------------------------------------
+#
+# Where every agent shares a model, a single agent role-playing the workflow
+# matches or beats the multi-agent version at lower cost. A sub-agent earns its
+# keep only when the model genuinely differs or the context must be isolated.
+# And reasoning belongs at the orchestrator: +18.2 and +36.7 points at 8% added
+# latency there, marginal-to-negative at +77% in the sub-agents.
+
+def test_a_subtask_runs_on_the_other_modes_model(monkeypatch):
+    asked = []
+
+    def chat_model(task, *a, **kw):
+        asked.append(task)
+        return fake
+
+    fake = _Scripted([
+        "ACTION: delegate\nCODE:\nfind\nlook up the config value",
+        "FINAL:\nthe value is 42",
+        "FINAL:\nall done",
+    ])
+    monkeypatch.setattr(pn.ROUTER, "chat_model", chat_model)
+    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["done"])
+
+    result = pn.agent(_state(mode="solve"))
+
+    assert pn.MODES["find"].task in asked
+    assert result.update["output"] == "all done"
+
+
+def test_the_subtask_does_not_get_the_parents_conversation(monkeypatch):
+    """A contract goes down, never a transcript."""
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint('parent private working')",
+        "ACTION: delegate\nCODE:\nfind\nlook something up",
+        "FINAL:\nthe child answer",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="solve"))
+
+    # The third call is the child's first exchange.
+    child_saw = "\n".join(str(m.content) for m in fake.seen[2])
+    assert "parent private working" not in child_saw
+    assert "look something up" in child_saw
+
+
+def test_the_parent_gets_a_report_not_a_trajectory(monkeypatch):
+    """What comes back up is the answer. The child's working is discarded,
+    which is what stops a long delegation costing the parent its context."""
+    fake = _Scripted([
+        "ACTION: delegate\nCODE:\nfind\nlook it up",
+        "ACTION: execute_python\nCODE:\nprint('child private working')",
+        "FINAL:\nthe child answer",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="solve"))
+
+    parent_saw = "\n".join(m.content for m in fake.seen[-1])
+    assert "the child answer" in parent_saw
+    assert "child private working" not in parent_saw
+
+
+def test_delegating_to_your_own_mode_is_refused(monkeypatch):
+    """The degenerate case the literature warns about: sub-agents used purely
+    as context-isolation threads, paying coordination for what the parent could
+    do itself."""
+    fake = _Scripted([
+        "ACTION: delegate\nCODE:\nsolve\ndo the thing",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="solve"))
+
+    assert any("already in solve" in str(m.content) for sent in fake.seen for m in sent)
+
+
+def test_a_subtask_cannot_delegate(monkeypatch):
+    """One level. A sub-agent that delegates is a subtask that was never
+    bounded, and the depth would compound silently."""
+    fake = _Scripted([
+        "ACTION: delegate\nCODE:\nfind\nouter job",
+        "ACTION: delegate\nCODE:\nplan\ninner job",
+        "FINAL:\nchild answer",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="solve"))
+
+    assert any("not available inside a delegated" in str(m.content)
+               for sent in fake.seen for m in sent)
+
+
+def test_the_subtask_is_bounded(monkeypatch):
+    """A sub-agent that needs a long conversation is a subtask that was not
+    bounded properly, and the parent is better placed to notice than the child."""
+    monkeypatch.setattr(pn, "MAX_DELEGATE_ITERATIONS", 2)
+    fake = _Scripted(
+        ["ACTION: delegate\nCODE:\nfind\nlook it up"]
+        + ["ACTION: execute_python\nCODE:\nprint(1)"] * 20
+        + ["FINAL:\ndone"]
+    )
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="solve"))
+
+    # 1 parent delegate call + 2 child exchanges, then the parent carries on.
+    # Without the cap the child would consume every scripted reply.
+    assert any("finished without an answer" in str(m.content)
+               for sent in fake.seen for m in sent), "the subtask was not bounded"
+
+
+def test_what_the_subtask_did_joins_the_parents_record(monkeypatch):
+    """Its conversation is discarded; the account of what it ran is not."""
+    fake = _Scripted([
+        "ACTION: delegate\nCODE:\nfind\nlook it up",
+        "ACTION: execute_python\nCODE:\nprint('evidence')",
+        "FINAL:\nfound it",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    result = pn.agent(_state(mode="solve"))
+
+    assert any("delegated" in line for line in result.update["actions"])
+
+
+def test_a_malformed_delegation_says_what_was_wrong(monkeypatch):
+    fake = _Scripted([
+        "ACTION: delegate\nCODE:\nnot-a-mode\ndo something",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="solve"))
+
+    assert any("first line must be a mode" in str(m.content)
+               for sent in fake.seen for m in sent)

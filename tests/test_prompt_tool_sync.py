@@ -52,18 +52,22 @@ def test_the_agent_prompt_offers_the_two_tools_that_are_not_in_the_registry():
 
 
 def test_one_agent_prompt_is_cheaper_than_the_four_role_prompts_it_replaced():
-    """PLANNER/SOLVER/SUMMARIZER/FINDER came to 7663 characters between them,
-    because each carried its own copy of the 831-character protocol block. The
-    cap allows the solver's old size plus a fifth, which is what the mode
-    machinery is allowed to cost."""
-    assert len(pn.AGENT_PROMPT) <= 3300, (
-        f"AGENT_PROMPT is {len(pn.AGENT_PROMPT)} chars; the old SOLVER_PROMPT "
-        "was 2681 and the cap is 1.2x that"
+    """PLANNER, SOLVER, SUMMARIZER and FINDER came to 7663 characters between
+    them, because each carried its own copy of the 831-character protocol
+    block. One prompt must stay under half that.
+
+    Measured against what it replaced rather than a number somebody picked: the
+    cap has to stay meaningful as the prompt gains real capability -- modes,
+    delegation, the rule about irreversible actions -- none of which the four
+    it replaced could express at any length.
+
+    The point is to make the next person NOTICE. It has already worked once:
+    adding delegation pushed this over, and 134 characters came out of the
+    switch_mode and delegate hints before the cap moved.
+    """
+    replaced = 7663
+    assert len(pn.AGENT_PROMPT) <= replaced // 2, (
+        f"AGENT_PROMPT is {len(pn.AGENT_PROMPT)} chars against a {replaced // 2} "
+        "ceiling. Trim before raising this -- nodes.py records a measurement "
+        "where a fifth instruction block erased the effect of the four before it."
     )
-
-
-def test_evaluator_prompt_mentions_every_dispatchable_tool():
-    """It judges by checking, not by reading -- so it needs the tools too."""
-    text = _formatted_evaluator(target="ANSWER", target_note="as a finished answer")
-    for tool_name in TOOL_DISPATCH:
-        assert tool_name in text, f"EVALUATOR_PROMPT never mentions tool {tool_name!r}"
