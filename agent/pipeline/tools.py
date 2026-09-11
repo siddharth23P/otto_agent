@@ -101,7 +101,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
 
-from agent.memory.retrieval import recall
+from agent.memory.retrieval import (
+    EVICTED_KIND, HISTORY_KIND, NOTHING_COMPACTED, recall, recall_chunks,
+)
 from agent.memory.session import current_store
 from agent.pipeline import browsing
 from agent.pipeline import screen as screening
@@ -1182,7 +1184,9 @@ def rag(query: str) -> ToolResult:
             returncode=1,
         )
     try:
-        from agent.memory.retrieval import recall
+        from agent.memory.retrieval import (
+    EVICTED_KIND, HISTORY_KIND, NOTHING_COMPACTED, recall, recall_chunks,
+)
         from agent.memory.store import MemoryStore
         from agent.pipeline.rag import corpus_fingerprint, index_corpus
 
@@ -1203,11 +1207,17 @@ def rag(query: str) -> ToolResult:
 
 
 def recall_memory(query: str) -> ToolResult:
-    """Semantic search (agent/memory/retrieval.py's recall()) over THIS
-    session's own compacted-away conversation history -- kind="history",
-    always; there is no "context" (in-turn) memory to search yet (module
-    docstring's Phase 2 note). `query` is a plain search string, nothing
-    else -- not code, not a shell command.
+    """Semantic search (agent/memory/retrieval.py) over what this session has
+    compacted away: the CONVERSATION (kind="history", summarised into bullets
+    by agent/memory/queue.py) and the TOOL OUTPUT evicted from this run's own
+    transcript (kind="context", written by agent/pipeline/nodes.py's
+    `_compact`). `query` is a plain search string, nothing else -- not code,
+    not a shell command.
+
+    The second of those is why `_compact` is no longer one-way. A result older
+    than the recent tail used to be replaced by its one-line summary and the
+    bytes were simply gone; the honest thing to tell the model was "run it
+    again", which is true, rather than "search for it", which was not.
 
     Two distinct ways this can come back empty-handed, both reported as a
     normal failing ToolResult rather than a crash (same shape as web_search/
@@ -1230,10 +1240,23 @@ def recall_memory(query: str) -> ToolResult:
         # purpose="acting": this is asked mid-task, while the agent is doing
         # something, which is the read that measurably wants to be narrow --
         # see agent/memory/retrieval.py's PROCEDURAL_TOP_K.
-        text = recall(store, "history", query, purpose="acting")
+        history = recall(store, HISTORY_KIND, query, purpose="acting")
+        evicted = recall_chunks(store, EVICTED_KIND, query)
     except Exception as exc:  # a memory-layer bug must not crash the tool loop
         return ToolResult(stdout="", stderr=f"recall_memory failed: {exc}", returncode=1)
-    return ToolResult(stdout=text, stderr="", returncode=0)
+
+    # Labelled, because they are different KINDS of thing and an agent acting
+    # on them should know which is which: one is what was said, the other is
+    # what a command printed. Unlabelled and concatenated, a tool result reads
+    # as something the person told it.
+    parts = []
+    if history and history != NOTHING_COMPACTED:
+        parts.append("FROM THE CONVERSATION:\n" + history)
+    if evicted:
+        parts.append("FROM EARLIER TOOL OUTPUT IN THIS RUN:\n" + evicted)
+    if not parts:
+        return ToolResult(stdout=NOTHING_COMPACTED, stderr="", returncode=0)
+    return ToolResult(stdout="\n\n".join(parts), stderr="", returncode=0)
 
 
 #: Lazily constructed, NOT at import time (unlike nodes.py's module-level

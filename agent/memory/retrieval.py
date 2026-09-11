@@ -134,7 +134,20 @@ DEFAULT_TOKEN_BUDGET = 3_000
 
 logger = logging.getLogger(__name__)
 
-_NOTHING_YET = "(nothing has been compacted away yet -- there is nothing to recall)"
+NOTHING_COMPACTED = "(nothing has been compacted away yet -- there is nothing to recall)"
+
+#: The two kinds a session stores under, named here because both the memory
+#: layer and agent/pipeline/ have to agree on them and this is the lowest
+#: module they share -- agent/pipeline/tools.py cannot import nodes.py, which
+#: is what writes the second one.
+#:
+#: "history" is the CONVERSATION, compacted by a summariser into cited
+#: bullets (agent/memory/queue.py). "context" is TOOL OUTPUT evicted from one
+#: run's transcript, stored as chunks with no bullet layer at all: it was
+#: already reduced to a line in `actions` when the call ran, and summarising
+#: it again would pay a model call to abstract an abstraction.
+HISTORY_KIND = "history"
+EVICTED_KIND = "context"
 
 
 def _comparable(items: list, model: str) -> list:
@@ -225,6 +238,49 @@ def _select(
     return sorted(chosen.values(), key=lambda c: (c.seq is None, c.seq))
 
 
+def recall_chunks(
+    store: MemoryStore,
+    kind: str,
+    query: str,
+    *,
+    max_chunks: int = DEFAULT_MAX_CHUNKS,
+    neighbour_window: int = DEFAULT_NEIGHBOUR_WINDOW,
+    token_budget: int = DEFAULT_TOKEN_BUDGET,
+) -> str:
+    """Like recall(), for a store with no bullet layer at all.
+
+    `recall()` finds its candidates by compiling the hash_refs of every live
+    bullet, which is right for conversation history: something summarised it,
+    and those summaries are both the index and useful context to print above
+    the results. Some material has no summariser and needs none -- evicted tool
+    output, for instance, which agent/pipeline/nodes.py has already reduced to
+    a one-line record in `actions`. Summarising it again would be paying a
+    model call to abstract something that was already abstracted once.
+
+    So this ranks the chunks directly. Same ranking, same neighbour expansion,
+    same token budget; no bullets in and none printed. Empty string when the
+    kind holds nothing, rather than recall()'s "nothing compacted yet" -- the
+    caller is combining this with other sources and an absence should read as
+    an absence, not as a sentence.
+    """
+    hashes = store.chunk_hashes(kind)
+    if not hashes:
+        return ""
+
+    try:
+        query_vec = embed_query(query)
+        query_model = current_model_name()
+    except EmbeddingUnavailable:
+        query_vec, query_model = None, ""
+
+    candidates = store.get_chunk_rows(kind, hashes)
+    shown = _select(
+        store, kind, _rank_chunks(candidates, query_vec, max_chunks, query_model),
+        neighbour_window, token_budget,
+    )
+    return "\n".join(f"  > {c.content}" for c in shown)
+
+
 def recall(
     store: MemoryStore,
     kind: str,
@@ -250,7 +306,7 @@ def recall(
 
     bullets = store.current_bullets(kind)
     if not bullets:
-        return _NOTHING_YET
+        return NOTHING_COMPACTED
 
     try:
         query_vec = embed_query(query)

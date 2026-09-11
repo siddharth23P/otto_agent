@@ -307,6 +307,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from agent.memory.embeddings import current_model_name as embedding_model_name
+from agent.memory.embeddings import embed
+from agent.memory.hashing import content_hash
+from agent.memory.retrieval import EVICTED_KIND
+from agent.memory.session import current_store
 from agent.memory.lessons import (
     Lesson, learning_enabled, parse_distilled, recall_lessons, record_lessons,
 )
@@ -1727,13 +1732,12 @@ def _compact(messages: list, actions: list[str] | None = None) -> int:
 
     This BOUNDS the transcript on its own -- after compaction a run at the
     default 120-call ceiling holds roughly 8 verbatim results plus a hundred
-    240-character stubs, some 15k tokens, well inside every routed window. What
-    it does not do is make the dropped bytes retrievable, which is the second
-    tier: feeding evicted exchanges through a `kind="context"` TieredQueue
-    (agent/memory/) so `recall_memory` can search them. That is worth building
-    and is deliberately NOT half-built here -- until it exists the honest thing
-    to tell the model is that the result can be produced again, which is true,
-    rather than that it can be searched for, which is not.
+    240-character stubs, some 15k tokens, well inside every routed window.
+
+    It used to stop there, and the dropped bytes were simply gone. `_keep_evicted`
+    below is the second tier: the full text goes into the session store under
+    EVICTED_KIND before the message is overwritten, so `recall_memory` can
+    search it. Still no model call, and still nothing summarised.
     """
     rewritten = 0
     protected = len(messages) - KEEP_VERBATIM
@@ -1758,12 +1762,64 @@ def _compact(messages: list, actions: list[str] | None = None) -> int:
         # happened to come first, which for a failing command is usually the
         # banner and not the error.
         summary = summaries[index] if index < len(summaries) else ""
+        # The full text, kept where `recall_memory` can find it again, BEFORE
+        # the message is overwritten. This is the second tier.
+        kept = _keep_evicted(text)
+        # The stub says where the rest went -- but ONLY when it actually went
+        # somewhere. A model that can see the bytes are missing and is not told
+        # they are searchable will re-run the command, which is what it was
+        # correctly told to do before the second tier existed; and a model told
+        # to search for something nothing stored will spend a call being told
+        # no memory is bound. Both are wrong in the other's situation, so the
+        # hint follows the storing.
         messages[i] = HumanMessage(
-            f"TOOL RESULT (compacted): {summary}" if summary else
-            text[:COMPACTED_RESULT_CHARS] + "\n... [older result, compacted]"
+            (f"TOOL RESULT (compacted): {summary}" if summary else
+             text[:COMPACTED_RESULT_CHARS] + "\n... [older result, compacted]")
+            + (EVICTED_HINT if kept else "")
         )
         rewritten += 1
     return rewritten
+
+
+#: Appended to every compacted stub. One short line, because it is appended
+#: to as many stubs as a long run has old tool calls.
+EVICTED_HINT = "\n(the full output is searchable: ACTION: recall_memory)"
+
+
+def _keep_evicted(text: str) -> bool:
+    """Put an evicted tool result somewhere `recall_memory` can still find it.
+
+    Until this existed, `_compact` was one-way: a result older than the recent
+    tail was replaced by its one-line summary and the bytes were gone. The
+    honest thing to tell the model then was "you can run that again", which is
+    true, and not "you can search for it", which was not. Now it is.
+
+    No model call, and no bullets. Chunks with their own embeddings, ranked
+    directly by agent/memory/retrieval.py's `recall_chunks`.
+
+    Returns whether the text was actually kept, which is what decides whether
+    the stub left behind may claim it is searchable.
+
+    False and silent when no store is bound -- every run outside a chat
+    session, the whole benchmark harness included. An embedder that is down
+    still returns True: an unembedded chunk is unrankable, not lost, and
+    becomes rankable again when the store is re-embedded.
+    """
+    store = current_store()
+    if store is None or not text.strip():
+        return False
+    try:
+        vector = embed([text])[0]
+        model = embedding_model_name()
+    except Exception as exc:  # noqa: BLE001 -- never fail a run over this
+        logger.debug("evicted result stored without an embedding: %s", exc)
+        vector, model = None, None
+    try:
+        store.add_chunk(EVICTED_KIND, content_hash(text), text, vector, model)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not store an evicted result: %s", exc)
+        return False
+    return True
 
 
 def _transcript_size(messages: list) -> int:
