@@ -118,3 +118,47 @@ def test_an_unmeasured_provider_is_left_alone():
 def test_a_fixed_policy_drops_rather_than_clamps():
     assert TemperaturePolicy(fixed=True).apply(0.7) is None
     assert TemperaturePolicy(low=0.5, high=1.0).apply(0.0) == 0.5
+
+
+# ---- models that are alive but cannot do the job -------------------------
+
+
+def test_non_chat_model_families_are_filtered_out():
+    """Capability detection is generous -- Gemini's provider tags every
+    gemini-* model VISION-capable. A pin hides that; a capability fallback does
+    not, and picked a text-to-speech model the first time one was tried."""
+    from agent.router.llm_provider.retired import is_serviceable, is_unusable
+
+    assert is_unusable("gemini", "gemini-2.5-flash-preview-tts")
+    assert is_unusable("gemini", "gemini-3.5-transcribe")
+    assert is_unusable("gemini", "imagen-4.0-generate-001")
+    assert is_unusable("openai", "text-embedding-3-small")
+    assert is_unusable("openai", "whisper-1")
+
+    assert not is_unusable("gemini", "gemini-3-flash-preview")
+    assert not is_unusable("openai", "gpt-5-mini")
+    assert is_serviceable("gemini", "gemini-3-flash-preview")
+
+
+def test_a_model_that_serves_a_different_api_reads_as_permanently_unusable():
+    """Gemini answers a generateContent call to some ids with 'This model only
+    supports Interactions API'. Not a retirement, but picking it twice in one
+    run is pure waste."""
+    from agent.router.llm_provider.retired import looks_retired
+
+    assert looks_retired(Exception("400 INVALID_ARGUMENT: This model only supports Interactions API"))
+
+
+def test_vision_keeps_a_capability_fallback_so_a_withdrawal_is_survivable():
+    """A pin is right at the head of a chain -- cost is a property of the exact
+    id -- but brittle against exactly what the retirement filter does. The
+    query candidate keeps the capability when the pin goes away."""
+    from agent.router.llm_provider.base import Capability
+    from agent.router.mapping import TASK_ROUTES, Task
+
+    chain = TASK_ROUTES[Task.VISION]
+
+    assert chain[0].spec, "the head should be a pin, for predictable cost"
+    assert chain[-1].is_query, "the tail should be a capability query"
+    assert Capability.VISION in chain[-1].requires
+    assert chain[-1].provider == "gemini"

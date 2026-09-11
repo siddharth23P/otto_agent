@@ -27,7 +27,11 @@ from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.language_models import BaseChatModel
 
-from agent.router.llm_provider.retired import is_retired, looks_retired, note_retired
+from agent.router.llm_provider.retired import (
+    is_serviceable,
+    looks_retired,
+    note_retired,
+)
 
 __all__ = [
     "Capability",
@@ -352,7 +356,7 @@ class BaseProvider(ABC):
             # cleanly and then fails mid-run, which is the failure this exists
             # to prevent (agent/router/llm_provider/retired.py).
             self._models = [
-                m for m in self._fetch_models() if not is_retired(self.name, m.id)
+                m for m in self._fetch_models() if is_serviceable(self.name, m.id)
             ]
         if capability is None:
             return list(self._models)

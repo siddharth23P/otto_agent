@@ -683,6 +683,27 @@ _REMOTE_IMAGE_SCRIPT = (
 )
 
 
+def _translated(llm, exc: Exception) -> ProviderError:
+    """A vendor SDK exception as one of Otto's own, recording a permanent
+    unusability against the right catalogue on the way through.
+
+    The tools that call `.invoke()` directly bypass nodes.py's `_call`, which
+    is where this translation normally happens, so they would otherwise let a
+    raw `google.genai` or `anthropic` error escape with no vendor attached.
+    """
+    from agent.router.llm_provider.base import translate_unknown
+
+    provider = getattr(llm, "_otto_provider", "") if llm is not None else ""
+    model_id = ""
+    for attr in ("model", "model_name", "model_id"):
+        value = getattr(llm, attr, None) if llm is not None else None
+        if isinstance(value, str):
+            model_id = value
+            break
+    return translate_unknown(exc, provider=provider, model_id=model_id)
+
+
+
 def view_image(body: str) -> ToolResult:
     """Look at an image file and answer a question about it.
 
@@ -741,6 +762,7 @@ def view_image(body: str) -> ToolResult:
             "view_image", f"{path!r} is not an image this can read (checked its first bytes)",
         )
 
+    llm = None
     try:
         # Imported here, not at module level, for the same reason _get_router()
         # is lazy: agent/eval/runner.py imports this module for offline golden
@@ -756,8 +778,16 @@ def view_image(body: str) -> ToolResult:
         # arrives here as a ProviderError. It must degrade like any other
         # failing tool, never take down a benchmark run.
         return _workspace_failure("view_image", f"could not look at {path!r}: {exc}")
-    except Exception as exc:  # a vendor SDK error must not escape either
-        return _workspace_failure("view_image", f"could not look at {path!r}: {exc}")
+    except Exception as exc:
+        # This path calls .invoke() directly, so it meets the vendor's own SDK
+        # exceptions rather than anything Otto owns -- translated here for the
+        # same reason nodes.py's _call translates them, and so a model the
+        # vendor says is permanently unusable is remembered rather than picked
+        # again by the next capability fallback in this run.
+        return _workspace_failure(
+            "view_image",
+            f"could not look at {path!r}: {_translated(llm, exc)}",
+        )
 
     header = (
         f"view_image: a vision model looked at {path} "
@@ -803,8 +833,10 @@ def web_search(query: str) -> ToolResult:
         )])
     except ProviderError as exc:
         return ToolResult(stdout="", stderr=f"web_search failed: {exc}", returncode=1)
-    except Exception as exc:  # a vendor SDK error must not escape the tool loop
-        return ToolResult(stdout="", stderr=f"web_search failed: {exc}", returncode=1)
+    except Exception as exc:  # raw vendor SDK error -- see _translated
+        return ToolResult(
+            stdout="", stderr=f"web_search failed: {_translated(None, exc)}", returncode=1,
+        )
 
     text = _blocks_to_text(reply.content)
     if not text.strip():

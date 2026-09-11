@@ -276,6 +276,26 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
             requires=frozenset({Capability.CHAT, Capability.VISION}),
             params={"temperature": 0.0, "max_tokens": 4096},
         ),
+        # Capability query, not a pin -- the first use of the machinery this
+        # module has carried unused since it was written. A pin is right for
+        # the head of a chain because cost is a property of the exact id, but
+        # it is brittle against exactly what retired.py now filters: if the
+        # pinned model is withdrawn, VISION has no route at all and every
+        # image task fails. This says "any Gemini model that can still see",
+        # preferring the smallest context that qualifies, so the capability
+        # survives a retirement even though the cost guarantee does not.
+        Candidate(
+            provider="gemini",
+            requires=frozenset({Capability.CHAT, Capability.VISION}),
+            # Narrowed to the flash family as well as the capability. The
+            # unusable-model filter removes what is obviously not a chat model,
+            # but capability tags alone are too generous to pick a replacement
+            # blind -- this keeps the fallback inside the family the pin was
+            # chosen from, so a withdrawal changes the model without changing
+            # the class of model.
+            name_contains="flash",
+            params={"temperature": 0.0, "max_tokens": 4096},
+        ),
     ),
 
     Task.WEB: (
