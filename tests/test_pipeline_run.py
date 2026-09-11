@@ -140,3 +140,60 @@ def test_as_ask_event_defaults_choices_to_empty_list_when_absent():
     ask = _as_ask_event(update, "thread-1")
 
     assert ask["__ask__"]["choices"] == []
+
+
+# --------------------------------------------------------------------------
+# _stream_events -- the loop rewrite's stream shape
+# --------------------------------------------------------------------------
+#
+# app.stream() yields a bare payload for one stream mode and a (mode, payload)
+# TUPLE for several, so asking for "custom" alongside "updates" changes the
+# shape every caller sees. _stream_events is the one place that knows it.
+#
+# Why "custom" is needed at all: "updates" emits once per node RETURN. That was
+# fine when a node returned every few seconds. With one long-running agent loop
+# it means nothing reaches the screen until the loop finishes -- `otto chat`
+# would sit silent for minutes and then print one panel.
+
+from agent.pipeline.run import _stream_events
+
+
+def test_a_custom_event_passes_straight_through():
+    """The loop emits these already node-shaped, so chat.py and tui.py need no
+    changes -- their `next(iter(update.items()))` still works."""
+    payload = {"agent": {"board": ["solve: execute_bash pytest -> exit 1"]}}
+    events = list(_stream_events([("custom", payload)], "t1"))
+    assert events == [(payload, False)]
+
+
+def test_an_ordinary_update_passes_through_too():
+    payload = {"evaluator": {"board": ["approved"]}}
+    assert list(_stream_events([("updates", payload)], "t1")) == [(payload, False)]
+
+
+def test_an_interrupt_in_the_updates_stream_becomes_an_ask_event():
+    update = {"__interrupt__": (Interrupt(value={"question": "which one?", "choices": ["a", "b"]}),)}
+    [(event, is_ask)] = list(_stream_events([("updates", update)], "thread-9"))
+    assert is_ask
+    assert event["__ask__"] == {"question": "which one?", "choices": ["a", "b"], "thread_id": "thread-9"}
+
+
+def test_a_custom_event_is_never_mistaken_for_an_interrupt():
+    """The loop's own events are not checked for `__interrupt__` -- only
+    LangGraph puts that key in an updates payload, and scanning custom
+    payloads for it would let a board line ending a run by accident."""
+    payload = {"agent": {"board": ["__interrupt__ is just text here"]}}
+    [(event, is_ask)] = list(_stream_events([("custom", payload)], "t1"))
+    assert not is_ask
+
+
+def test_live_events_arrive_before_the_node_returns():
+    """The ordering that makes this worth doing: custom events are yielded as
+    they happen, and the node's own update lands last."""
+    stream = [
+        ("custom", {"agent": {"board": ["step 1"]}}),
+        ("custom", {"agent": {"board": ["step 2"]}}),
+        ("updates", {"agent": {"board": ["done"]}}),
+    ]
+    boards = [e["agent"]["board"][0] for e, _ in _stream_events(stream, "t1")]
+    assert boards == ["step 1", "step 2", "done"]
