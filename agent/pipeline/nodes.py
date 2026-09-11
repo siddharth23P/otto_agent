@@ -325,6 +325,7 @@ from agent.pipeline.tools import (
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router import outcomes as seat_outcomes
+from agent.router import health as provider_health
 from agent.router.mapping import Task
 from agent.router.router import Router
 
@@ -877,6 +878,13 @@ def _call(llm, messages: list) -> str:
             # not caught by a later clause of the same try, which is what keeps
             # an unrelated ValueError propagating. Collapsing these into one
             # handler with isinstance checks breaks both.
+            # Before translating: the raw exception still carries the status
+            # and any Retry-After header, and agent/router/health.py needs
+            # both. Translating first would throw away the one thing that
+            # tells a rate limit from an outage.
+            provider_health.note_failure(
+                exc, provider=getattr(current, "_otto_provider", ""),
+                model_id=_model_label(current))
             raise translate_unknown(
                 exc,
                 provider=getattr(current, "_otto_provider", ""),
@@ -884,6 +892,12 @@ def _call(llm, messages: list) -> str:
             ) from exc
         if reply is None:
             return ""
+
+        # A call that came back settles "is this vendor reachable", whichever
+        # model answered it -- so this clears the provider breaker as well as
+        # the model's own cooldown.
+        provider_health.HEALTH.note_success(
+            getattr(current, "_otto_provider", ""), _model_label(current))
 
         finish_reason = (reply.response_metadata or {}).get("finish_reason")
         if not (getattr(current, "diffusing", False) and finish_reason == "length"):

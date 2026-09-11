@@ -11,6 +11,7 @@ from agent.router.llm_provider import provider_class, provider_names
 from agent.router.llm_provider.temperature import apply_to_params
 from agent.router.llm_provider.base import AuthError, Capability, CapabilityNotSupported, ModelInfo, ProviderError
 from agent.router import outcomes as seat_outcomes
+from agent.router import health as provider_health
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 
 @dataclass(frozen=True,slots=True)
@@ -191,7 +192,8 @@ class Router:
                 failures[name] = str(exc)
         return failures
     
-    def _match(self, c: Candidate, only: str | None = None) -> ModelInfo | str:
+    def _match(self, c: Candidate, only: str | None = None, *,
+               honour_cooldowns: bool = True) -> ModelInfo | str:
         provider = c.provider_name
         if only is not None and provider != only:
             return f"{provider} is not the pinned vendor"
@@ -206,6 +208,15 @@ class Router:
         model = self._select(pool, c)
         if model is None:
             return "no model matched"
+        # Last, and only when `cooling` is being honoured -- a candidate that
+        # is merely unwell is still the right answer when the alternative is
+        # no answer, so `resolve` re-runs the chain ignoring this if every
+        # candidate was skipped for it.
+        # Through the MODULE, not a name bound at import: `bind_health`
+        # swaps the module global, and a captured reference would
+        # silently keep consulting the one this process started with.
+        if honour_cooldowns and (why := provider_health.HEALTH.cooling(provider, model.id)):
+            return why
         return model
 
     def _select(self, pool, c: Candidate) -> ModelInfo | None:
@@ -237,6 +248,24 @@ class Router:
                     reverse=biggest)[0]
         
     def resolve(self, task: Task, *, only: str | None = None) -> RoutingDecision:
+        """The first viable candidate, preferring one that is not cooling.
+
+        Two passes, because a circuit breaker that leaves a task with no route
+        has turned a slow provider into a broken agent. The first pass skips
+        anything agent/router/health.py says is unwell; if that leaves nothing,
+        the second takes the chain as it stands. Cooldowns are a preference,
+        never a prohibition.
+        """
+        try:
+            return self._resolve(task, only=only, honour_cooldowns=True)
+        except NoViableRoute as exc:
+            if not any("cooling" in s.reason for s in exc.skipped):
+                raise
+            # Everything viable was merely unwell. Ask again anyway.
+            return self._resolve(task, only=only, honour_cooldowns=False)
+
+    def _resolve(self, task: Task, *, only: str | None,
+                 honour_cooldowns: bool) -> RoutingDecision:
         skips: list[Skip] = []
         declared = TASK_ROUTES[task]
         # Declared order, re-ordered by what this installation has actually
@@ -252,7 +281,8 @@ class Router:
         position = {id(c): i for i, c in enumerate(declared)}
         for tried, c in enumerate(chain):
             i = position[id(c)]
-            outcome = self._match(c, only=only)
+            outcome = self._match(c, only=only,
+                                  honour_cooldowns=honour_cooldowns)
             if isinstance(outcome, str):
                 skips.append(Skip(i, render(c), outcome))
                 continue
