@@ -27,6 +27,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.language_models import BaseChatModel
 
+from agent.router.llm_provider.retired import is_retired, looks_retired, note_retired
+
 __all__ = [
     "Capability",
     "ModelInfo",
@@ -212,7 +214,7 @@ _VENDOR_SDK_ROOTS = frozenset({"openai", "anthropic", "google", "httpx", "httpx2
 _UNAVAILABLE_MARKERS = ("Connection", "Timeout", "APIStatus", "ServiceUnavailable")
 
 
-def translate_unknown(exc: Exception) -> ProviderError:
+def translate_unknown(exc: Exception, *, provider: str = "", model_id: str = "") -> ProviderError:
     """Last-resort translation for an exception raised by a chat model Otto
     does not own.
 
@@ -224,6 +226,13 @@ def translate_unknown(exc: Exception) -> ProviderError:
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     name = type(exc).__name__
     detail = f"{name}: {exc}"
+
+    # A vendor saying a model is permanently gone is worth remembering: the
+    # catalogue still lists it, so without this the next node in the same run
+    # resolves the same dead id and fails the same way.
+    if provider and model_id and looks_retired(exc):
+        note_retired(provider, model_id, detail)
+        return ModelNotFound(detail)
 
     if status in (401, 403):
         return AuthError(detail)
@@ -337,7 +346,14 @@ class BaseProvider(ABC):
         Cached after the first call; pass `refresh=True` to re-fetch.
         """
         if self._models is None or refresh:
-            self._models = self._fetch_models()
+            # Filtered here rather than at the routing layer so EVERY consumer
+            # -- routing, `otto models`, the doctor, health reports -- sees the
+            # same catalogue. A retired id that reaches Router._select resolves
+            # cleanly and then fails mid-run, which is the failure this exists
+            # to prevent (agent/router/llm_provider/retired.py).
+            self._models = [
+                m for m in self._fetch_models() if not is_retired(self.name, m.id)
+            ]
         if capability is None:
             return list(self._models)
         return [m for m in self._models if capability in m.capabilities]

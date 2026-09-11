@@ -812,7 +812,11 @@ def _call(llm, messages: list) -> str:
             # not caught by a later clause of the same try, which is what keeps
             # an unrelated ValueError propagating. Collapsing these into one
             # handler with isinstance checks breaks both.
-            raise translate_unknown(exc) from exc
+            raise translate_unknown(
+                exc,
+                provider=getattr(current, "_otto_provider", ""),
+                model_id=_model_label(current),
+            ) from exc
         if reply is None:
             return ""
 
