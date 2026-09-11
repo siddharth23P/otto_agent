@@ -460,3 +460,15 @@ def test_the_rubric_is_bounded(monkeypatch):
     """Criteria are scored one by one, and overlapping ones double-count a
     single mistake."""
     assert len(pn._parse_rubric("\n".join(f"- criterion {i}" for i in range(20)))) == pn.RUBRIC_MAX
+
+
+def test_the_rubric_prompt_asks_for_coverage():
+    """Measured regression: told to write criteria about the answer rather than
+    the steps, the judge wrote criteria a thin answer could satisfy. On a
+    report task the agent read one of several notes, said "action items found:
+    0" for the rest, and was approved -- 0.78 -> 0.42, on 6 tool calls where it
+    had previously made 18.
+
+    Coverage is part of the answer, not part of the route."""
+    assert "COVERAGE" in pn.RUBRIC_PROMPT
+    assert "every one of them" in pn.RUBRIC_PROMPT
