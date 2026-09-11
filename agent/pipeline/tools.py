@@ -104,6 +104,7 @@ from typing import Callable, Iterator
 from agent.memory.retrieval import recall
 from agent.memory.session import current_store
 from agent.pipeline import browsing
+from agent.pipeline import screen as screening
 from agent.pipeline.execution import current_command_runner
 from agent.pipeline.vision import describe_image, sniff_media_type
 from langchain_core.messages import HumanMessage
@@ -861,7 +862,11 @@ def view_image(body: str) -> ToolResult:
         try:
             # Never _clip this: clipping base64 yields silently corrupt image
             # bytes, which surface as a baffling answer rather than an error.
-            data = base64.b64decode(stdout.strip(), validate=True)
+            # Whitespace stripped rather than trusted away: `base64 -w0` should
+            # produce none, but a container whose base64 predates that flag
+            # would fail strict decoding on a line break -- which is exactly
+            # how this failed the first time it ran.
+            data = base64.b64decode("".join(stdout.split()), validate=True)
         except (ValueError, binascii.Error) as exc:
             return _workspace_failure("view_image", f"{path!r} did not transfer cleanly: {exc}")
     else:
@@ -930,6 +935,95 @@ def view_image(body: str) -> ToolResult:
 #: everywhere. Verified against the live API rather than assumed. Raise the
 #: WEB route's pin past 4.6 and this should move with it.
 WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+
+
+def look(question: str) -> ToolResult:
+    """Look at the container's desktop and answer a question about it. CODE:
+    body is the question, alone:
+
+        which window is in front, and what does its title bar say?
+        roughly where is the OK button?
+
+    What comes back is WORDS. The capture goes through the vision model exactly
+    as `view_image` does and the image never enters the conversation --
+    agent/pipeline/vision.py argues for that ceiling at length. Which is why
+    this takes a question rather than returning a picture.
+
+    Reach for this only when a command cannot do the job. Agents that prefer
+    the code path take about a third fewer steps at a higher score, and the
+    desktop image carries the same shell you already have.
+    """
+    remote = current_command_runner()
+    if remote is None:
+        return _workspace_failure(
+            "look", "no container is bound for this run, so there is no screen to look at",
+        )
+    if not question.strip():
+        return _workspace_failure("look", "say what you want to know about the screen")
+
+    stdout, stderr, code = remote(screening.CAPTURE, 30.0)
+    if code != 0 or not stdout.strip():
+        return _workspace_failure(
+            "look", stderr.strip() or "could not capture the screen -- is a desktop running?",
+        )
+    try:
+        # Whitespace stripped rather than trusted away: `base64 -w0` should
+        # produce none, but base64 wraps at 76 columns without it and
+        # strict decoding rejects the newline. That is exactly how this
+        # failed the first time it ran against a real desktop.
+        data = base64.b64decode("".join(stdout.split()), validate=True)
+    except (ValueError, binascii.Error) as exc:
+        return _workspace_failure("look", f"the capture did not transfer cleanly: {exc}")
+    if len(data) > screening.MAX_CAPTURE_BYTES:
+        return _workspace_failure("look", f"the capture is {len(data)} bytes, too large to read")
+
+    media_type = sniff_media_type(data)
+    if media_type is None:
+        return _workspace_failure("look", "the capture was not a readable image")
+    try:
+        from agent.router.mapping import Task
+
+        llm = _get_router().chat_model(Task.VISION)
+        answer = describe_image(
+            llm, base64.b64encode(data).decode(), media_type, question.strip(),
+        )
+    except ProviderError as exc:
+        return _workspace_failure("look", f"could not look at the screen: {exc}")
+    return ToolResult(stdout=_clip(answer), stderr="", returncode=0)
+
+
+def look_act(body: str) -> ToolResult:
+    """Click or type on the container's desktop. CODE: body is one operation:
+
+        click 840 512
+        type the text to enter wherever focus is
+
+    Separate from `look` because clicking changes something and looking does
+    not, which is what puts this behind the same hold that covers sending a
+    message.
+    """
+    remote = current_command_runner()
+    if remote is None:
+        return _workspace_failure("look_act", "no container is bound for this run")
+    parsed = screening.parse_act(body)
+    if isinstance(parsed, str):
+        return _workspace_failure("look_act", parsed)
+    op, argument = parsed
+
+    if op == "click":
+        point = screening.parse_point(argument)
+        if isinstance(point, str):
+            return _workspace_failure("look_act", point)
+        command, done = screening.click_command(*point), f"clicked {point[0]},{point[1]}"
+    else:
+        if not argument:
+            return _workspace_failure("look_act", "type needs something to type")
+        command, done = screening.type_command(argument), f"typed {len(argument)} characters"
+
+    stdout, stderr, code = remote(command, 30.0)
+    if code != 0:
+        return _workspace_failure("look_act", stderr.strip() or f"{op} failed")
+    return ToolResult(stdout=done, stderr="", returncode=0)
 
 
 def _browse(body: str, allowed: tuple[str, ...], tool: str) -> ToolResult:
@@ -1208,6 +1302,8 @@ TOOL_TIERS: dict[str, str] = {
     "write_file": WORKSPACE,
     "edit_file": WORKSPACE,
     "browse": READ_ONLY,
+    "look": READ_ONLY,
+    "look_act": MUTATING,
     "browse_act": MUTATING,
     "web_search": READ_ONLY,
     "rag": READ_ONLY,
@@ -1230,6 +1326,8 @@ TOOL_DISPATCH: dict[str, Callable[[str], ToolResult]] = {
     "write_file": write_file,
     "edit_file": edit_file,
     "browse": browse,
+    "look": look,
+    "look_act": look_act,
     "browse_act": browse_act,
     "web_search": web_search,
     "rag": rag,
