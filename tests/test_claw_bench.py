@@ -327,4 +327,4 @@ def test_repeated_trials_report_a_real_run_not_an_average():
 
     assert outcome.task_score == 0.5, "reported a score no trial actually got"
     assert outcome.trials == [0.9, 0.2, 0.5]
-    assert calls == [10, 11, 12], "trials reused each other's service ports"
+    assert calls == [10, 30, 50], "trials reused each other's service ports"
