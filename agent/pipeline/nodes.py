@@ -310,7 +310,9 @@ from langgraph.types import Command, interrupt
 from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
-from agent.pipeline.tools import MUTATING, READ_ONLY, TOOL_DISPATCH, TOOL_TIERS
+from agent.pipeline.tools import (
+    MUTATING, READ_ONLY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
+)
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router.mapping import Task
@@ -468,7 +470,7 @@ MAX_TOOL_ITERATIONS = int(os.environ.get("OTTO_MAX_TOOL_ITERATIONS", "5"))
 #: TOOL_DISPATCH: they change the LOOP's own state rather than returning a
 #: ToolResult -- one pauses the run, the other changes which model answers
 #: next and under what guidance.
-_TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user", "switch_mode"))
+_TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user", "switch_mode", "delegate"))
 
 #: KEEP THIS SHORT. A fifth habit was added and measured -- "search for the
 #: exact text of an error rather than reasoning about it", which for the task
@@ -518,8 +520,10 @@ _TOOL_BODY_HINT = (
     "complete_code: code, optionally `---SUFFIX---` then trailing code. "
     "predict_edit: code only, no instruction. "
     "recall_memory: a search query. "
-    "switch_mode: one word -- " + "|".join(mode_names()) + " -- and optionally "
-    "why on the next line. The conversation continues; nothing is lost. "
+    "switch_mode: one word from " + "|".join(mode_names()) + ", optionally why "
+    "after it -- the conversation carries on. "
+    "delegate: that same word, then one bounded job. It runs on that mode's "
+    "model with none of this conversation and reports back. "
     "ask_user: a question, optionally then `CHOICES: a | b`. Ask when an "
     "action you are about to take cannot be undone AND more than one target "
     "fits -- which recipient, which record, which file. Picking one and "
@@ -1606,7 +1610,9 @@ def _transcript_size(messages: list) -> int:
 def _agent_loop(state: AgentState, messages: list, *, mode: str,
                 actions: list[str], mode_log: list[str],
                 seed: list | None = None,
-                checklist: list[dict] | None = None) -> tuple[str, str, str]:
+                checklist: list[dict] | None = None,
+                max_iterations: int | None = None,
+                may_delegate: bool = True) -> tuple[str, str, str]:
     """Run one conversation until it answers, pauses, or runs out of budget.
 
     Returns `(output, why_it_stopped, mode)`. `output` is only ever set from an
@@ -1632,7 +1638,7 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     iteration = 0
     llm = ROUTER.chat_model(MODES[mode].task)
 
-    while True:
+    while max_iterations is None or iteration < max_iterations:
         if _transcript_size(messages) > LOOP_COMPACT_AT:
             dropped = _compact(messages, actions)
             if dropped:
@@ -1676,6 +1682,24 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
         if tool_name == "ask_user":
             question, choices = _parse_ask_user_body(body)
             raise NeedsUserInput(question or "(no question given)", choices)
+
+        if tool_name == "delegate":
+            if not may_delegate:
+                # One level only. A sub-agent that delegates is a subtask that
+                # was never bounded, and the depth would compound silently.
+                evidence = ("delegate is not available inside a delegated "
+                            "subtask -- do this one yourself")
+            else:
+                result = _delegate(state, body, actions=actions, parent_mode=mode)
+                evidence = (
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
+                    f"returncode: {result.returncode}"
+                )
+            iteration += 1
+            messages.append(AIMessage(text))
+            messages.append(HumanMessage(f"TOOL RESULT:\n{evidence}"))
+            did_work_since_swap = True
+            continue
 
         if tool_name == "switch_mode":
             messages.append(AIMessage(text))
@@ -1737,6 +1761,106 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
             evidence += "\n\n" + reminder
         messages.append(AIMessage(text))
         messages.append(HumanMessage(f"TOOL RESULT:\n{evidence}"))
+
+    # Only a bounded sub-loop reaches here. The parent loop has no iteration
+    # cap -- it runs until it answers, pauses, or runs out of budget -- so its
+    # `while` is always true and every exit above is a `return`.
+    return output, "exhausted", mode
+
+
+#: How many exchanges a delegated subtask gets. Small on purpose: a sub-agent
+#: that needs a long conversation is a subtask that was not bounded properly,
+#: and the parent is better placed to notice that than the child is.
+MAX_DELEGATE_ITERATIONS = 8
+
+
+#: Told to the sub-agent instead of the parent's conversation.
+#:
+#: The measured shape. Reasoning belongs at the ORCHESTRATOR: putting it there
+#: was worth +18.2 and +36.7 points on two benchmarks at 8% added latency,
+#: where putting it in the sub-agents was marginal-to-negative at +77%. And
+#: sub-agent SIZE barely mattered once the orchestrator thought -- 23.0 / 23.0
+#: / 23.6 across models twenty times apart. So the child is thin by design, not
+#: by economy.
+DELEGATE_CONTRACT = (
+    "You have been given one bounded job by another agent, which is handling "
+    "the wider task. Do exactly this and nothing beyond it:\n\n{instruction}\n\n"
+    "You do not have the conversation it came from and you do not need it. "
+    "When you are done reply with exactly\nFINAL:\n<what you found or did, "
+    "stated so someone who cannot see your working can act on it>"
+)
+
+
+def _delegate(state: AgentState, body: str, *, actions: list[str],
+              parent_mode: str) -> ToolResult:
+    """Run one bounded subtask in a fresh context, on another mode's model.
+
+    This is the one shape of multi-agent the evidence actually supports. Where
+    every agent shares a model, a single agent role-playing the workflow
+    matches or beats the multi-agent version at lower cost -- so a sub-agent
+    earns its keep only when the model genuinely differs, or the context must
+    be isolated, or both. Otto's modes differ by model, which is what makes
+    this worth having rather than a second way to spend calls.
+
+    What crosses in each direction is the point. Down: a contract, never the
+    parent's transcript. Up: a report, never a trajectory. The child's working
+    is discarded when it returns, which is what keeps a long delegation from
+    costing the parent its context window.
+    """
+    head, _, instruction = body.partition("\n")
+    want = parse_mode_body(head)
+    if want is None:
+        return ToolResult(
+            stdout="",
+            stderr=(f"delegate: first line must be a mode -- one of "
+                    f"{', '.join(mode_names())}. Then the job on the lines after it."),
+            returncode=1,
+        )
+    if not instruction.strip():
+        return ToolResult(
+            stdout="", stderr="delegate: say what the job is on the lines after the mode.",
+            returncode=1,
+        )
+    if want == parent_mode:
+        # Same model, no isolation gained that a fresh prompt would not give.
+        # This is the degenerate case the literature warns about: sub-agents
+        # used purely as context-isolation threads, paying coordination for
+        # something the parent could do itself.
+        return ToolResult(
+            stdout="",
+            stderr=(f"delegate: you are already in {want} mode, so this would run on "
+                    "the same model with no context you do not have. Just do it."),
+            returncode=1,
+        )
+
+    child: list = [SystemMessage(AGENT_PROMPT)]
+    if note := render_note():
+        child.append(SystemMessage(note))
+    child.append(HumanMessage(DELEGATE_CONTRACT.format(instruction=instruction.strip())))
+    child.append(_mode_message(want))
+
+    taken: list[str] = []
+    _emit({"agent": {"board": [f"delegated to {want}: {instruction.strip()[:60]}"]}})
+    try:
+        output, why, _ = _agent_loop(
+            state, child, mode=want, actions=taken, mode_log=[],
+            max_iterations=MAX_DELEGATE_ITERATIONS, may_delegate=False,
+        )
+    except NeedsUserInput:
+        # The child cannot pause the run -- it does not own the conversation
+        # with the person. Hand the question up as its result and let the
+        # parent decide whether to ask it.
+        raise
+    except ProviderError as exc:
+        return ToolResult(stdout="", stderr=f"delegate: the subtask failed: {exc}", returncode=1)
+
+    # The child's actions join the parent's record; its conversation does not.
+    actions.extend(f"{want}(delegated): {line}" for line in taken)
+    if not output.strip():
+        return ToolResult(
+            stdout="", stderr=f"delegate: {want} finished without an answer ({why})", returncode=1,
+        )
+    return ToolResult(stdout=output, stderr="", returncode=0)
 
 
 def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
