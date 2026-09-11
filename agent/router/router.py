@@ -246,7 +246,7 @@ class Router:
         # vendor: Inception silently resets anything under 0.5 to 1.0, and
         # OpenAI's reasoning models reject any value at all. See
         # agent/router/llm_provider/temperature.py.
-        params = apply_to_params(d.provider, d.model.id, {**d.params, **overrides})
+        params = apply_to_params(d.provider, d.model.id, {**d.params, **overrides}, d.model)
         llm = provider.chat_model(d.model.id, **params)
         # Stamped so a failure downstream can name the vendor this came from:
         # agent/pipeline/nodes.py's _call needs it to record a retirement

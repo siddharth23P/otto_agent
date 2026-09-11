@@ -68,24 +68,59 @@ _BY_PROVIDER: dict[str, TemperaturePolicy] = {
 _BY_MODEL: dict[tuple[str, str], TemperaturePolicy] = {}
 
 
-def policy_for(provider: str, model_id: str) -> TemperaturePolicy | None:
-    """The policy for one model, or None if this provider is unmeasured."""
+#: Field names a vendor may use to publish a model's own ceiling. Gemini
+#: reports `max_temperature` per model and it is NOT uniform -- most cap at 2,
+#: but several cap at 1, which a per-provider guess of 0-2 would overshoot.
+_MAX_TEMPERATURE_FIELDS = ("max_temperature", "maxTemperature")
+
+
+def published_maximum(model) -> float | None:
+    """The model's own temperature ceiling, if its vendor publishes one.
+
+    Preferred over anything in this file's tables: it comes from the vendor,
+    per model, and updates itself when they change it. `ModelInfo.raw` is
+    whatever the SDK returned, so it may be a dict or an object.
+    """
+    raw = getattr(model, "raw", None)
+    if raw is None:
+        return None
+    for field in _MAX_TEMPERATURE_FIELDS:
+        value = raw.get(field) if isinstance(raw, dict) else getattr(raw, field, None)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
+    return None
+
+
+def policy_for(provider: str, model_id: str, model=None) -> TemperaturePolicy | None:
+    """The policy for one model, or None if nothing here knows this provider.
+
+    Order of authority: an explicit per-model entry, then a model that admits
+    no choice at all, then the vendor's OWN published ceiling for this model,
+    and only then a per-provider default. The published figure beats the
+    table because it is per model and maintains itself.
+    """
     if (provider, model_id) in _BY_MODEL:
         return _BY_MODEL[(provider, model_id)]
     for pattern in _FIXED_TEMPERATURE_PATTERNS.get(provider, ()):
         if pattern.match(model_id):
             return TemperaturePolicy(fixed=True)
-    return _BY_PROVIDER.get(provider)
+    default = _BY_PROVIDER.get(provider)
+    ceiling = published_maximum(model)
+    if ceiling is not None:
+        return TemperaturePolicy(low=default.low if default else 0.0, high=ceiling)
+    return default
 
 
-def apply_to_params(provider: str, model_id: str, params: dict) -> dict:
+def apply_to_params(provider: str, model_id: str, params: dict, model=None) -> dict:
     """`params` with `temperature` adjusted to what this model honours.
 
     Returns a new dict; drops the key entirely for a fixed-temperature model.
+    Pass `model` (a ModelInfo) so the vendor's own published ceiling can be
+    used in preference to this file's per-provider defaults.
     """
     if "temperature" not in params:
         return params
-    policy = policy_for(provider, model_id)
+    policy = policy_for(provider, model_id, model)
     if policy is None:
         return params
     adjusted = policy.apply(params["temperature"])
