@@ -22,9 +22,12 @@ def test_summarize_for_memory_calls_call_with_a_system_and_human_message(monkeyp
     fake_llm = _FakeLLM()
 
     class _FakeRouter:
-        def chat_model(self, task, *, temperature):
+        def chat_model(self, task, **overrides):
+            # No temperature is passed any more -- it lives in the routing
+            # table per candidate, because only a candidate knows which vendor
+            # it is talking to (nodes.py, where MOST_DETERMINISTIC used to be).
             captured["task"] = task
-            captured["temperature"] = temperature
+            captured["overrides"] = overrides
             return fake_llm
 
     def _fake_call(llm, messages):
@@ -39,7 +42,7 @@ def test_summarize_for_memory_calls_call_with_a_system_and_human_message(monkeyp
 
     assert result == "the summary"
     assert captured["llm"] is fake_llm
-    assert captured["temperature"] == 0.2
+    assert captured["overrides"] == {}
     assert [type(m).__name__ for m in captured["messages"]] == ["SystemMessage", "HumanMessage"]
     assert captured["messages"][1].content == "summarize this"
 

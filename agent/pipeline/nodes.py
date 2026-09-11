@@ -451,17 +451,13 @@ MAX_CONSECUTIVE_DEAD_REPLIES = 3
 #: reached through five node functions and a LangGraph call, none of which
 #: take agent-level configuration today, and threading one through all of
 #: them to serve the harness would be a worse trade than this.
-#: The lowest temperature Inception's chat endpoint actually honours.
-#:
-#: Their documented range is 0.5-1.0, and an out-of-range value is not clamped
-#: -- it is reset to the model default, which is 1.0 for mercury-2.5. So every
-#: node here that asked for 0.0-0.4 was being served the most random setting
-#: available, which is the exact opposite of what it asked for and had been
-#: since these were written. agent/router/llm_provider/inception_provider.py
-#: clamps as a backstop; these call sites now say what they can actually get,
-#: so nobody reads 0.0 here and believes it.
-MOST_DETERMINISTIC = 0.5
-
+#: Temperature now lives in the routing table, per candidate, because only a
+#: candidate knows which vendor it is talking to: Anthropic, OpenAI and Gemini
+#: honour 0.0, while Inception resets anything below 0.5 to the model default
+#: of 1.0 (agent/router/llm_provider/inception_provider.py clamps as a
+#: backstop). A single constant here could not be right for both ends of a
+#: chain, and passing one at the call site actively overrode the table --
+#: Router.model_for merges {**route_params, **overrides}.
 MAX_TOOL_ITERATIONS = int(os.environ.get("OTTO_MAX_TOOL_ITERATIONS", "5"))
 
 #: The ACTION: enumeration every role/evaluator prompt shows, built FROM the
@@ -1169,7 +1165,7 @@ def _decide(system_prompt: str, human_body: str, *, targets: tuple[str, ...]) ->
     decision and the narrower per-step assignment) -- identical retry
     logic either way, just different prompts/targets.
     """
-    llm = ROUTER.chat_model(Task.CHAT_FAST, temperature=MOST_DETERMINISTIC)
+    llm = ROUTER.chat_model(Task.CHAT_FAST)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     text = _call(llm, messages)
     node, why = _extract_node(text, targets)
@@ -1512,7 +1508,10 @@ def _run_role(
     *,
     role: str,
     task: Task,
-    temperature: float,
+    #: Accepted and ignored. Kept so existing callers and tests still type-check
+    #: while temperature lives in the routing table -- see the chat_model call
+    #: below. Remove once nothing passes it.
+    temperature: float | None = None,
     prompt: str,
     context_op: Literal["append", "replace"] | None = None,
 ) -> Command[Literal["router", "ask_user"]]:
@@ -1527,7 +1526,13 @@ def _run_role(
     # see _role_body's revising=False branch for that case).
     revising = bool(feedback) and state.get("node") == role
 
-    llm = ROUTER.chat_model(task, temperature=temperature)
+    # No temperature here on purpose. Router.model_for merges
+    # {**route_params, **overrides}, so a call-site temperature CLOBBERS the
+    # routing table's own -- Task.CHAT_FAST asked for 0.2 and got 0.5 that way
+    # for as long as this line passed one. It is also wrong by construction in
+    # a multi-vendor chain: Claude honours 0.0 while Mercury clamps to 0.5, and
+    # only the candidate knows which vendor it is. Temperature is route data.
+    llm = ROUTER.chat_model(task)
     system_prompt = (
         ROLE_REVISE_PROMPT.format(role_upper=role.upper(), max_iter=MAX_TOOL_ITERATIONS)
         if revising else prompt.format(max_iter=MAX_TOOL_ITERATIONS)
@@ -1610,16 +1615,16 @@ def _run_role(
 
 
 def planner(state: AgentState) -> Command[Literal["router", "ask_user"]]:
-    return _run_role(state, role="planner", task=Task.PLAN, temperature=MOST_DETERMINISTIC, prompt=PLANNER_PROMPT)
+    return _run_role(state, role="planner", task=Task.PLAN, prompt=PLANNER_PROMPT)
 
 
 def solver(state: AgentState) -> Command[Literal["router", "ask_user"]]:
-    return _run_role(state, role="solver", task=Task.REASON, temperature=0.5, prompt=SOLVER_PROMPT)
+    return _run_role(state, role="solver", task=Task.REASON, prompt=SOLVER_PROMPT)
 
 
 def summarizer(state: AgentState) -> Command[Literal["router", "ask_user"]]:
     return _run_role(
-        state, role="summarizer", task=Task.SUMMARIZE, temperature=MOST_DETERMINISTIC,
+        state, role="summarizer", task=Task.SUMMARIZE,
         prompt=SUMMARIZER_PROMPT, context_op="replace",
     )
 
@@ -1630,7 +1635,7 @@ def finder(state: AgentState) -> Command[Literal["router", "ask_user"]]:
     # supposed to be the tool call, not deliberation. Revisit if/when
     # web_search/rag stop being stubs and finder's actual job gets harder.
     return _run_role(
-        state, role="finder", task=Task.CHAT_FAST, temperature=MOST_DETERMINISTIC,
+        state, role="finder", task=Task.CHAT_FAST,
         prompt=FINDER_PROMPT, context_op="append",
     )
 
@@ -1651,7 +1656,7 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__", "ask_us
     output = state.get("output") or ""
     judging_plan = node == "planner"
 
-    llm = ROUTER.chat_model(Task.REASON, temperature=MOST_DETERMINISTIC)
+    llm = ROUTER.chat_model(Task.EVALUATE)
     if judging_plan:
         target, target_note = "PLAN", (
             "a properly ordered, complete JSON list of executable steps "

@@ -75,7 +75,7 @@ def run_single_agent(
     one line per tool call) -- the same action summaries the graph records, so
     the two can be compared on identical terms.
     """
-    llm = ROUTER.chat_model(Task.REASON, temperature=0.5)
+    llm = ROUTER.chat_model(Task.REASON)
     messages = [
         SystemMessage(SINGLE_AGENT_PROMPT.format(max_steps=max_steps)),
         HumanMessage(f"TASK:\n{task}"),
