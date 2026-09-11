@@ -38,7 +38,7 @@ from agent.pipeline.nodes import (
     _strip_code_fence,
     _summarise_action,
 )
-from agent.pipeline.tools import TOOL_DISPATCH
+from agent.pipeline.toolkit import dispatch_table, render_note
 from agent.router.mapping import Task
 
 logger = logging.getLogger(__name__)
@@ -76,8 +76,13 @@ def run_single_agent(
     the two can be compared on identical terms.
     """
     llm = ROUTER.chat_model(Task.REASON)
+    # Same run-scoped toolkit the graph gets (agent/pipeline/toolkit.py), so a
+    # benchmark comparing the two architectures gives both the same tools.
+    dispatch = dispatch_table()
+    note = render_note()
     messages = [
         SystemMessage(SINGLE_AGENT_PROMPT.format(max_steps=max_steps)),
+        *([SystemMessage(note)] if note else []),
         HumanMessage(f"TASK:\n{task}"),
     ]
     taken: list[str] = []
@@ -94,10 +99,10 @@ def run_single_agent(
             messages.append(AIMessage(text))
             messages.append(HumanMessage(UNPARSEABLE_FEEDBACK))
             continue
-        if tool_name not in TOOL_DISPATCH:
-            evidence = f"tool {tool_name!r} is not available (allowed: {sorted(TOOL_DISPATCH)})"
+        if tool_name not in dispatch:
+            evidence = f"tool {tool_name!r} is not available (allowed: {sorted(dispatch)})"
         else:
-            result = TOOL_DISPATCH[tool_name](body)
+            result = dispatch[tool_name](body)
             line = _summarise_action(tool_name, body, result)
             taken.append(line)
             if on_action is not None:
