@@ -282,58 +282,42 @@ def test_a_failing_call_records_the_error_not_the_success():
     assert "E0433" in line
 
 
-def test_a_role_is_shown_what_has_already_been_done():
-    """The loop this fixes: a role's tool conversation dies with the node, so
-    a re-invoked solver used to have no idea it had already written the file.
+def test_the_action_record_survives_into_the_judgment():
+    """The loop this fixes: a role's tool conversation used to die with the
+    node, so a re-invoked solver had no idea it had already written the file --
+    measured at 166 writes to one path across five rounds, none ever compiled.
+
+    The loop keeps the real conversation now, so the lossy record is no longer
+    the only memory. It is still what the EVALUATOR reads, which is the half
+    that could never see it at all.
     """
     state = {
         "messages": [HumanMessage("build it")],
-        "actions": ["solver: write_file main.c.rs -> ok: wrote main.c.rs (56 lines)"],
+        "actions": ["solve: write_file main.rs -> ok: wrote main.rs (56 lines)"],
     }
 
-    body = pn._role_body(
-        state, "build it", role="solver", revising=False,
-        executing_step=False, active_step=None,
-    )
+    block = pn._actions_block(state)
 
-    assert "WHAT HAS ALREADY BEEN DONE" in body
-    assert "write_file main.c.rs" in body
-
-
-def test_the_overseer_is_shown_it_too():
-    """It is the half that kept re-dispatching solver, so it needs to see what
-    solver had already tried."""
-    state = {"messages": [HumanMessage("build it")], "actions": ["solver: execute_bash rustc -> FAILED (exit 1): boom"]}
-
-    assert "WHAT HAS ALREADY BEEN DONE" in pn._router_body(state, "build it")
+    assert "WHAT HAS ALREADY BEEN DONE" in block
+    assert "write_file main.rs" in block
 
 
 def test_nothing_is_shown_before_anything_has_been_done():
-    state = {"messages": [HumanMessage("build it")], "actions": []}
-
-    assert _actions_absent(pn._router_body(state, "build it"))
-    assert _actions_absent(pn._role_body(
-        state, "build it", role="solver", revising=False,
-        executing_step=False, active_step=None,
-    ))
-
-
-def _actions_absent(body):
-    return "WHAT HAS ALREADY BEEN DONE" not in body
+    assert pn._actions_block({"messages": [HumanMessage("build it")], "actions": []}) == ""
 
 
 def test_only_the_most_recent_actions_are_shown():
-    """Bounded: this goes into every prompt and a long run accumulates
-    hundreds."""
+    """Bounded: a long run accumulates hundreds and this goes into the
+    judgment prompt."""
     state = {
         "messages": [HumanMessage("go")],
-        "actions": [f"solver: execute_bash step{i} -> ok" for i in range(pn._ACTIONS_SHOWN + 10)],
+        "actions": [f"solve: execute_bash step{i} -> ok" for i in range(pn._ACTIONS_SHOWN + 10)],
     }
 
-    body = pn._router_body(state, "go")
+    block = pn._actions_block(state)
 
-    assert "step0 " not in body
-    assert f"step{pn._ACTIONS_SHOWN + 9} " in body
+    assert "step0 " not in block
+    assert f"step{pn._ACTIONS_SHOWN + 9} " in block
 
 
 def test_repeated_writes_to_one_file_are_named_in_the_result(monkeypatch):

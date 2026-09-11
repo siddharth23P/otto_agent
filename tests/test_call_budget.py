@@ -1,0 +1,151 @@
+"""How many model calls one run costs, asserted exactly.
+
+This is the number the loop rewrite exists to move, so it gets a test of its own
+rather than being inferred from a benchmark afterwards.
+
+The old graph was router -> role -> router -> evaluator -> router. One round of
+real work -- the overseer decides, a specialist makes a tool call and answers,
+the overseer decides again, the evaluator judges -- cost five model calls, three
+of them overhead. Measured on Claw-Eval traces, the boundaries between those
+nodes were 45 to 69% of a run's wall time, against 0.1 to 0.4 seconds of actual
+tool execution per task.
+
+These tests drive the REAL compiled graph with a scripted model and count the
+requests, so a future change that quietly reintroduces a round-trip fails here
+with a number rather than showing up as a slow benchmark weeks later.
+"""
+import uuid
+
+from langchain_core.messages import AIMessageChunk, HumanMessage
+
+from agent.pipeline import nodes as pn
+from agent.pipeline.budget import Budget, bind_budget
+from agent.pipeline.run import _initial
+
+
+class _Counting:
+    """One scripted reply per request, and a count of the requests."""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.calls = 0
+
+    def stream(self, messages):
+        self.calls += 1
+        reply = self._replies.pop(0) if self._replies else "FINAL:\nAPPROVE: yes\nWHY: ok"
+        yield AIMessageChunk(content=reply)
+
+
+def _run(monkeypatch, replies, budget=None):
+    model = _Counting(replies)
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: model)
+    config = {
+        "configurable": {"thread_id": f"test:{uuid.uuid4().hex}"},
+        "recursion_limit": pn._RECURSION_SAFETY_NET,
+    }
+    with bind_budget(budget):
+        final = pn.app.invoke(_initial("do the thing"), config)
+    return model, final
+
+
+def test_one_tool_call_and_an_answer_costs_three_model_calls(monkeypatch):
+    """Was five: two router decisions plus the evaluator, for two calls of real
+    work. The router is gone, so the only overhead left is the one judgment."""
+    model, final = _run(monkeypatch, [
+        "ACTION: execute_python\nCODE:\nprint(2 + 2)",   # 1, work
+        "FINAL:\nthe answer is 4",                        # 2, work
+        "FINAL:\nAPPROVE: yes\nWHY: checked it",          # 3, judgment
+    ])
+
+    assert model.calls == 3
+    assert final["final_output"] == "the answer is 4"
+
+
+def test_overhead_stays_flat_as_the_work_grows(monkeypatch):
+    """The property that matters. Ten tool calls used to mean roughly three
+    node boundaries and their router decisions; now the judgment is still one
+    call, however long the work runs."""
+    model, final = _run(monkeypatch, [
+        *["ACTION: execute_python\nCODE:\nprint(1)"] * 10,
+        "FINAL:\ndone",
+        "FINAL:\nAPPROVE: yes\nWHY: ok",
+    ])
+
+    assert model.calls == 12
+    assert final["final_output"] == "done"
+
+
+def test_a_rejection_costs_one_round_trip_not_a_router_decision(monkeypatch):
+    """A rejection used to return to the overseer, which spent a call deciding
+    who should retry. The evaluator hands straight back to the loop."""
+    model, final = _run(monkeypatch, [
+        "FINAL:\nfirst attempt",                          # 1
+        "FINAL:\nAPPROVE: no\nWHY: not verified",         # 2
+        "FINAL:\nsecond attempt",                         # 3
+        "FINAL:\nAPPROVE: yes\nWHY: now it checks out",   # 4
+    ])
+
+    assert model.calls == 4
+    assert final["final_output"] == "second attempt"
+
+
+def test_a_mode_swap_costs_one_call_rather_than_a_node_boundary(monkeypatch):
+    """Changing role used to mean a boundary: a router decision, a rebuilt
+    prompt, and the tool conversation thrown away. It is one appended message
+    now, and the swap request itself is the only call it costs."""
+    model, final = _run(monkeypatch, [
+        "ACTION: execute_python\nCODE:\nprint(1)",        # 1
+        "ACTION: switch_mode\nCODE:\nplan",                # 2, the swap
+        "FINAL:\nplanned and done",                        # 3
+        "FINAL:\nAPPROVE: yes\nWHY: ok",                   # 4
+    ])
+
+    assert model.calls == 4
+    assert final["mode"] == "plan"
+
+
+def test_the_budget_stops_a_run_that_will_not_finish(monkeypatch):
+    """Before this there was no ceiling at all except LangGraph's super-step
+    limit, which counts node transitions rather than money."""
+    model, final = _run(
+        monkeypatch,
+        ["ACTION: execute_python\nCODE:\nprint(1)"] * 50,
+        budget=Budget(max_model_calls=6),
+    )
+
+    assert model.calls <= 8, "the budget did not stop the loop"
+    assert final["model_calls"] >= 6
+
+
+def test_a_stopped_run_still_produces_an_answer(monkeypatch):
+    """A run killed mid-command reports nothing; one that stops and hands over
+    its best candidate is still gradable. That difference is why exhaustion
+    returns rather than raising."""
+    _, final = _run(
+        monkeypatch,
+        ["ACTION: execute_python\nCODE:\nprint(1)"] * 3
+        + ["FINAL:\npartial but real"]
+        + ["FINAL:\nAPPROVE: yes\nWHY: ok"],
+        budget=Budget(max_model_calls=20),
+    )
+
+    assert final["final_output"] == "partial but real"
+
+
+def test_model_calls_counts_the_judgment_too(monkeypatch):
+    """It reported only what the loop spent until this. Measured live at 4
+    against an actual 9, because the evaluator checks the answer with tools and
+    those are model calls like any other."""
+    model, final = _run(
+        monkeypatch,
+        [
+            "ACTION: execute_python\nCODE:\nprint(1)",      # 1
+            "FINAL:\ndone",                                  # 2
+            "ACTION: execute_python\nCODE:\nprint(1)",      # 3, the judge checks
+            "FINAL:\nAPPROVE: yes\nWHY: verified",           # 4
+        ],
+        budget=Budget(max_model_calls=40),
+    )
+
+    assert model.calls == 4
+    assert final["model_calls"] == 4

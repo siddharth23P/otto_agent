@@ -138,6 +138,47 @@ def _config(graph_thread_id: str, handler) -> dict:
     }
 
 
+def _salvage(final: dict | None, exc: Exception | None = None) -> dict:
+    """Make sure a run hands back the best answer it actually reached.
+
+    Three ways a run used to return nothing despite having done the work:
+
+    * an unhandled exception anywhere unwound the whole graph. Seen live on
+      Claw-Eval task C01 -- the agent had computed and verified a mortgage
+      comparison, then put prose where a file path goes, `Path.exists()` raised
+      OSError(ENAMETOOLONG), and 1096 seconds of correct work was thrown away.
+      The grader saw a conversation with no assistant messages at all.
+    * `app.invoke` returns NORMALLY on an interrupt, with `__interrupt__`
+      spliced into the state and `final_output` still None. Every caller reads
+      `final_output` and records an empty answer, and none of them checks.
+    * the evaluator never approved, so `output` held a real candidate that
+      `final_output` never received.
+
+    All three have the same fix and it belongs in one place: `output` is the
+    agent's own best attempt, and reporting it -- labelled as unverified -- beats
+    reporting nothing.
+    """
+    state = dict(final or {})
+    if exc is not None:
+        state.setdefault("board", [])
+        state["board"] = [*state.get("board", []), f"the run failed: {type(exc).__name__}: {exc}"]
+    if not (state.get("final_output") or "").strip():
+        candidate = (state.get("output") or "").strip()
+        if candidate:
+            state["final_output"] = candidate
+    return state
+
+
+def _paused(final: dict | None) -> bool:
+    """Whether `app.invoke` came back on an interrupt rather than a finish.
+
+    It does not raise and it does not say so anywhere a caller looks -- the
+    only signals are the `__interrupt__` key it splices in and the
+    `pending_question` the paused node never got to clear.
+    """
+    return bool(final) and ("__interrupt__" in final or final.get("pending_question"))
+
+
 def _score(run_span, final: AgentState) -> None:
     """The facts worth filtering a Langfuse trace by, scored on it.
 
@@ -256,7 +297,24 @@ def run_pipeline(
             with client.start_as_current_observation(
                 name="otto:pipeline", as_type="agent", input=text
             ) as run_span:
-                final = app.invoke(initial, config)
+                try:
+                    final = _salvage(app.invoke(initial, config))
+                except Exception as exc:
+                    # One salvage point, deliberately, rather than a catch
+                    # inside the loop: a real bug should still surface loudly
+                    # here and in the logs, but it must not cost the caller the
+                    # work that was already done. See _salvage.
+                    logger.exception("pipeline run failed; salvaging what it reached")
+                    final = _salvage(app.get_state(config).values, exc)
+                if _paused(final):
+                    # run_pipeline has no resume path -- resume is the streaming
+                    # API. A caller here would otherwise record an empty answer
+                    # and never learn that a question was asked.
+                    logger.warning(
+                        "run_pipeline: the graph paused to ask %r and cannot be "
+                        "resumed from here; answering with what it had",
+                        final.get("pending_question"),
+                    )
                 _score(run_span, final)
 
     return final

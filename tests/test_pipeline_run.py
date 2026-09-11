@@ -197,3 +197,52 @@ def test_live_events_arrive_before_the_node_returns():
     ]
     boards = [e["agent"]["board"][0] for e, _ in _stream_events(stream, "t1")]
     assert boards == ["step 1", "step 2", "done"]
+
+
+# --------------------------------------------------------------------------
+# _salvage / _paused -- a run must not lose work it already did
+# --------------------------------------------------------------------------
+#
+# Claw-Eval task C01 is why these exist. The agent had computed and verified a
+# mortgage comparison; then the model put prose where a file path goes,
+# Path.exists() raised OSError(ENAMETOOLONG), and 1096 seconds of correct work
+# was thrown away. The grader saw a conversation with no assistant messages at
+# all and scored completion 0.00.
+
+from agent.pipeline.run import _paused, _salvage
+
+
+def test_an_approved_answer_is_left_alone():
+    assert _salvage({"final_output": "the real answer", "output": "draft"})["final_output"] == "the real answer"
+
+
+def test_an_unapproved_candidate_is_promoted_rather_than_lost():
+    """`output` is the agent's own best attempt. Reporting it beats reporting
+    nothing, which is what a run that never reached approval used to do."""
+    assert _salvage({"final_output": None, "output": "best effort"})["final_output"] == "best effort"
+
+
+def test_a_blank_candidate_is_not_promoted_over_nothing():
+    assert not _salvage({"final_output": None, "output": "   "}).get("final_output")
+
+
+def test_a_crash_keeps_the_work_and_says_what_happened():
+    state = _salvage({"output": "verified numbers"}, OSError("File name too long"))
+    assert state["final_output"] == "verified numbers"
+    assert any("File name too long" in line for line in state["board"])
+
+
+def test_a_crash_with_nothing_reached_still_reports_the_failure():
+    state = _salvage({}, RuntimeError("boom"))
+    assert any("boom" in line for line in state["board"])
+
+
+def test_an_interrupt_is_detected_rather_than_read_as_a_finished_run():
+    """app.invoke returns NORMALLY on an interrupt, with final_output still
+    None, and says so nowhere a caller looks."""
+    assert _paused({"__interrupt__": [object()]})
+    assert _paused({"pending_question": "which one?"})
+
+
+def test_an_ordinary_finished_run_is_not_mistaken_for_a_pause():
+    assert not _paused({"final_output": "done", "pending_question": None})
