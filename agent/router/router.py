@@ -118,28 +118,36 @@ def _observe(name: str, *, model: str, input: Any,
 
 
 class Router:
-    """Otto is Inception-only in `TASK_ROUTES` (2026-09-09) -- every chat/plan/
-    reason/summarize chain now pins Mercury 2.5, and there is no second vendor
-    left to fail over to. `OPTIONAL` stays declared, just empty: Phase 8's
-    plain hive (`agent/graph/nodes.py`, `agent/graph/run.py` -- untouched by
-    this change) reads `ROUTER.secondary`/`ROUTER.REQUIRED` to give a
-    `secondary_seats` worth of clones a different vendor for diversity. With
-    `OPTIONAL` empty, `secondary` is always `None` and `run(..., 
-    secondary_seats=N)` for `N > 0` correctly raises its own clear
-    "No secondary model available" error instead of an AttributeError --
-    exactly the behavior it already had for "key not configured", now
-    permanent rather than incidental.
+    """Every configured provider is usable (2026-09-11).
+
+    This was a two-vendor router until now: `_usable()` admitted `REQUIRED` and
+    exactly one `secondary`, the first configured member of `OPTIONAL`, and
+    anything else with a valid key was skipped as "not the selected secondary".
+    That single-secondary rule existed to give Phase 8's plain hive
+    (`agent/graph/nodes.py`, `agent/graph/run.py`) one alternate vendor for
+    seat diversity -- and `agent/graph/` is now an empty package. The only
+    readers left were two display rows in `agent/cli/doctor.py`.
+
+    It has to go, because the routing table now names four vendors at once:
+    Anthropic judges and plans, OpenAI solves, Gemini summarises and reads
+    images, Inception keeps chat-fast plus the FIM/edit endpoints no other
+    vendor here serves. Under the old rule three of those four would silently
+    never be reached.
+
+    `REQUIRED` stays. Inception is still the one provider Otto cannot start
+    without -- it alone serves `Endpoint.FIM`/`Endpoint.EDIT`
+    (`mapping.py`'s `INCEPTION_ONLY_ENDPOINTS`), and a missing key there is a
+    broken install rather than a degraded one. Every other vendor is optional
+    in the real sense: configure it and its routes resolve, leave it out and
+    its routes are skipped with a legible reason.
     """
 
     REQUIRED = "inception"
-    OPTIONAL: tuple[str, ...] = ()
 
     def _snapshot(self) -> None:
         self._configured = tuple(p for p in provider_names() if self.catalogue.is_configured(p))
         if self.REQUIRED not in self._configured:
             raise AuthError("Otto requires Inception. Set INCEPTION_API_KEY in .env")
-        self.secondary = next((p for p in self.OPTIONAL if p in self._configured), None)
-        self.ignored = tuple(p for p in self.OPTIONAL if p in self._configured and p != self.secondary)
 
     def __init__(self, catalogue: Catalogue | None = None, *, strict: bool = False):
         self.catalogue = catalogue or RegistryCatalogue()
@@ -151,7 +159,7 @@ class Router:
         self._snapshot()
 
     def _usable(self, provider: str) -> bool:
-        return provider == self.REQUIRED or provider == self.secondary
+        return provider in self._configured
 
     def usable(self) -> tuple[str, ...]:
         return tuple(p for p in self._configured if self._usable(p))
