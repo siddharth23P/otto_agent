@@ -103,6 +103,7 @@ from typing import Callable, Iterator
 
 from agent.memory.retrieval import recall
 from agent.memory.session import current_store
+from agent.pipeline import browsing
 from agent.pipeline.execution import current_command_runner
 from agent.pipeline.vision import describe_image, sniff_media_type
 from langchain_core.messages import HumanMessage
@@ -931,6 +932,80 @@ def view_image(body: str) -> ToolResult:
 WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
 
 
+def _browse(body: str, allowed: tuple[str, ...], tool: str) -> ToolResult:
+    """One browser operation, in the container Otto is already working in.
+
+    Split into a reading half and an acting half so the mutation gate covers
+    the acting one for free: clicking a button or submitting a form on a live
+    site is the irreversible kind of action, and a benchmark of interrupted web
+    tasks found that persistent state changes are exactly where agents break.
+    Reading a page is not, and gating it would tax every step.
+    """
+    remote = current_command_runner()
+    if remote is None:
+        # Same refusal shape as the file tools with no workspace: the browser
+        # lives in a container, and an ordinary chat turn has not opened one.
+        return _workspace_failure(
+            tool, "no container is bound for this run, so there is no browser to drive",
+        )
+    parsed = browsing.parse_op(body, allowed)
+    if isinstance(parsed, str):
+        return _workspace_failure(tool, parsed)
+    op, argument = parsed
+    if op in ("open", "click", "type", "find") and not argument:
+        return _workspace_failure(tool, f"{op} needs something to act on")
+
+    limits = json.dumps({
+        "chars": browsing.MAX_DIGEST_CHARS, "links": browsing.MAX_LINKS,
+        "fields": browsing.MAX_FIELDS, "headings": browsing.MAX_HEADINGS,
+    })
+    stdout, stderr, code = remote(
+        f"python3 -c {shlex.quote(browsing.DRIVER)} {shlex.quote(op)} "
+        f"{shlex.quote(argument)} {shlex.quote(limits)}",
+        90.0,
+    )
+    if code != 0:
+        return _workspace_failure(tool, stderr.strip() or f"{op} failed")
+    return ToolResult(stdout=_clip(stdout), stderr="", returncode=0)
+
+
+def browse(body: str) -> ToolResult:
+    """Look at a web page. CODE: body is one operation:
+
+        open https://example.com/search?q=widgets
+        read
+        find the pricing table
+        back
+
+    What comes back is a DIGEST -- url, title, headings, links, form fields and
+    clipped text -- not the page. That is the lever rather than a nicety:
+    refining only the observation and action space, with no planner or critic
+    or tree search, beat every scaffolding trick tried against it by +9.8
+    points.
+
+    Reach for this only when code cannot do the job. An agent that prefers
+    calling an API or a script over driving a UI takes 32% fewer steps, and on
+    the web an API-plus-browser agent beats browsing alone by 24 absolute
+    points. If the site has an endpoint, use execute_bash.
+    """
+    return _browse(body, browsing.READ_OPS, "browse")
+
+
+def browse_act(body: str) -> ToolResult:
+    """Act on the page you are looking at. CODE: body is one operation:
+
+        click Add to basket
+        type Email = someone@example.com
+        submit
+
+    Separate from `browse` because these change something on a live site and
+    reading does not -- which is what puts this behind the same hold that
+    covers sending a message. Persistent state changes are where web agents
+    measurably break.
+    """
+    return _browse(body, browsing.ACT_OPS, "browse_act")
+
+
 def web_search(query: str) -> ToolResult:
     """Search the live web and return what the search found, with sources.
 
@@ -1132,6 +1207,8 @@ TOOL_TIERS: dict[str, str] = {
     "list_files": READ_ONLY,
     "write_file": WORKSPACE,
     "edit_file": WORKSPACE,
+    "browse": READ_ONLY,
+    "browse_act": MUTATING,
     "web_search": READ_ONLY,
     "rag": READ_ONLY,
     "complete_code": READ_ONLY,
@@ -1152,6 +1229,8 @@ TOOL_DISPATCH: dict[str, Callable[[str], ToolResult]] = {
     "list_files": list_files,
     "write_file": write_file,
     "edit_file": edit_file,
+    "browse": browse,
+    "browse_act": browse_act,
     "web_search": web_search,
     "rag": rag,
     "complete_code": complete_code,

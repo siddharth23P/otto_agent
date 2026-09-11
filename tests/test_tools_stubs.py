@@ -77,18 +77,44 @@ def test_every_tool_is_registered_with_a_tier_and_dispatchable():
         "execute_python", "execute_bash", "web_search", "rag",
         "complete_code", "predict_edit", "recall_memory",
         "read_file", "list_files", "write_file", "edit_file", "view_image",
+        "browse", "browse_act",
     }
     assert set(TOOL_DISPATCH) == set(TOOL_TIERS)
 
 
-def test_no_dispatchable_tool_is_mutating():
-    """The invariant the tier system exists for (module docstring): a role node
-    or the evaluator is still iterating and has not been judged, so nothing it
-    can reach may be irreversible. WORKSPACE writes are reachable but confined
-    to a directory the caller opened and can throw away -- see the tier's own
-    note -- which is why they are not MUTATING."""
-    assert all(tier in {pt.READ_ONLY, pt.WORKSPACE} for tier in TOOL_TIERS.values())
-    assert pt.MUTATING not in TOOL_TIERS.values()
+def test_every_mutating_tool_is_held_before_it_runs():
+    """The invariant the tier system exists for, restated now that it has teeth.
+
+    It used to be "nothing reachable may be irreversible", enforced by asserting
+    the MUTATING tier was EMPTY -- which made the tier a naming convention with
+    a tripwire rather than a mechanism. Then `browse_act` arrived: clicking a
+    button on a live site genuinely is irreversible, and refusing to have such
+    a tool would have meant refusing to drive a browser at all.
+
+    So the invariant is now the stronger one it was always standing in for:
+    anything irreversible is HELD for a check before it runs
+    (nodes.py's `_mutates` and MUTATION_GATE_NOTE). A tier that no longer
+    matches the gate is the bug this catches.
+    """
+    from agent.pipeline import nodes as pn
+
+    for name, tier in TOOL_TIERS.items():
+        assert pn._mutates(name) == (tier == pt.MUTATING), (
+            f"{name} is tiered {tier} but the gate disagrees"
+        )
+    assert any(tier == pt.MUTATING for tier in TOOL_TIERS.values()), (
+        "no tool is MUTATING, so the gate is untested by this invariant"
+    )
+
+
+def test_a_workspace_write_is_not_treated_as_irreversible():
+    """Writing into a directory the caller opened and can throw away is
+    recoverable -- write it again. Gating it measurably cost a model call per
+    file and bought nothing."""
+    from agent.pipeline import nodes as pn
+
+    assert not pn._mutates("write_file")
+    assert not pn._mutates("edit_file")
 
 
 def test_every_workspace_tool_refuses_when_no_workspace_is_bound():
