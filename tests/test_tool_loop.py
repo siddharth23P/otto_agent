@@ -423,3 +423,115 @@ def test_a_failure_after_a_success_is_not_escalated(monkeypatch):
     pn._tool_loop(llm, [HumanMessage("go")])
 
     assert all("has already failed" not in call[-1] for call in llm.calls)
+
+
+# --------------------------------------------------------------------------
+# The emit-path contract
+# --------------------------------------------------------------------------
+#
+# A text protocol has nothing structurally enforcing its action schema, which
+# is the dominant production failure class: plausible reasoning decoupled from
+# the action contract. The counter-evidence is that it closes in code -- one
+# harness eliminated every illegal move across 145 environments by validating
+# on the emit path. These are the shapes real models produced against THIS
+# protocol, each of which used to cost a wasted model call.
+
+ALLOWED = pt.TOOL_DISPATCH
+
+
+def _resolved(reply: str) -> str:
+    _, tool_name, _ = pn._parse_worker_reply(reply, allowed=ALLOWED)
+    return tool_name
+
+
+def test_prose_after_the_tool_name_still_names_the_tool():
+    """`ACTION: execute_bash to list the files` reached the dispatch table
+    verbatim, missed, and came back as "not available"."""
+    assert _resolved("ACTION: execute_bash to list the files\nCODE:\nls") == "execute_bash"
+
+
+def test_a_tool_name_in_backticks_or_bold_is_still_a_tool_name():
+    """Models format. The protocol should not care."""
+    assert _resolved("ACTION: `execute_bash`\nCODE:\nls") == "execute_bash"
+    assert _resolved("ACTION: **execute_bash**\nCODE:\nls") == "execute_bash"
+
+
+def test_a_full_stop_does_not_invent_a_new_tool():
+    assert _resolved("ACTION: execute_bash.\nCODE:\nls") == "execute_bash"
+
+
+def test_a_typo_resolves_to_what_it_obviously_meant():
+    assert _resolved("ACTION: execute_pyton\nCODE:\nprint(1)") == "execute_python"
+
+
+def test_a_genuinely_different_name_is_not_guessed_at():
+    """`read_file` and `edit_file` differ by more than a typo, and guessing
+    wrong runs the WRONG TOOL rather than wasting a round trip. The cutoff is
+    set so this stays a miss."""
+    assert _resolved("ACTION: frobnicate_thing\nCODE:\nx") == "frobnicate_thing"
+
+
+def test_a_fuzzy_match_is_only_tried_on_the_first_word():
+    """Otherwise a parser starts inventing tool calls out of prose. An exact
+    match anywhere wins; a near miss only from the token in the tool slot."""
+    kind, tool_name, _ = pn._parse_worker_reply(
+        "ACTION: please go and reed the file for me\nCODE:\nx", allowed=ALLOWED,
+    )
+    assert kind == "action"
+    assert tool_name == "please"
+
+
+def test_whichever_marker_comes_first_wins():
+    """A reply that answered and then suggested a follow-up step used to have
+    the ANSWER silently discarded and the command run instead -- the loop then
+    had nothing to return and paid for another exchange to be told again."""
+    kind, _, body = pn._parse_worker_reply(
+        "FINAL:\nthe report is written\nACTION: execute_bash\nCODE:\ncat report.md",
+        allowed=ALLOWED,
+    )
+    assert kind == "final"
+    assert body.startswith("the report is written")
+
+
+def test_an_action_before_an_answer_is_still_an_action():
+    kind, tool_name, body = pn._parse_worker_reply(
+        "ACTION: execute_bash\nCODE:\nls\nFINAL:\nand here is the answer",
+        allowed=ALLOWED,
+    )
+    assert (kind, tool_name, body) == ("action", "execute_bash", "ls")
+
+
+def test_an_action_with_no_body_is_refused_before_it_runs():
+    """It used to reach the shell as an empty command and come back as a
+    returncode the model then had to interpret."""
+    problem = pn._action_problem("execute_bash", "", ALLOWED)
+    assert "no CODE: body" in problem
+
+
+def test_an_unavailable_tool_is_still_refused_by_name():
+    problem = pn._action_problem("frobnicate", "x", ALLOWED)
+    assert "not available" in problem
+    assert "frobnicate" in problem
+
+
+def test_a_well_formed_action_has_no_problem():
+    assert pn._action_problem("execute_bash", "ls", ALLOWED) == ""
+
+
+def test_the_loops_own_pseudo_tools_survive_resolution():
+    """`switch_mode`, `delegate` and `ask_user` are not in TOOL_DISPATCH --
+    they change the loop's state rather than returning a result -- so name
+    resolution has to know them or it would fuzzy-match them into something
+    else. Whether a given loop HONOURS one is that loop's decision."""
+    for name in ("switch_mode", "delegate", "ask_user"):
+        assert _resolved(f"ACTION: **{name}**\nCODE:\nx") == name
+
+
+def test_a_run_with_extra_tools_bound_resolves_those_too(monkeypatch):
+    """A benchmark's task-specific tools are the names a model is MOST likely
+    to decorate or misspell, having seen them once in a prompt."""
+    allowed = {**pt.TOOL_DISPATCH, "gmail_send_message": lambda body: None}
+    _, tool_name, _ = pn._parse_worker_reply(
+        "ACTION: `gmail_send_message`\nCODE:\n{}", allowed=allowed,
+    )
+    assert tool_name == "gmail_send_message"
