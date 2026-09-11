@@ -1252,6 +1252,68 @@ def _evidence_tail(state: AgentState) -> str:
     return _clip_evidence("\n".join(lines))
 
 
+#: When the loop starts compacting itself, in characters of conversation.
+#: Roughly 40k tokens at four characters a token -- comfortably inside every
+#: routed model's window, and chosen so compaction is rare and chunky rather
+#: than incremental. That matters for cost as well as noise: every vendor
+#: caches its own prefix, and rewriting history invalidates the cache from the
+#: rewrite point, so many small compactions would cost more than they save.
+LOOP_COMPACT_AT = 160_000
+
+#: How many recent messages stay verbatim. The tail is what the model is
+#: actually reasoning over; the head is what it has already acted on.
+KEEP_VERBATIM = 8
+
+#: What a compacted tool result is cut down to. Enough to remember the shape
+#: of what came back -- an error class, a count, the first line of output --
+#: without carrying the whole thing for the rest of the run.
+COMPACTED_RESULT_CHARS = 240
+
+
+def _compact(messages: list) -> int:
+    """Shrink the oldest tool results in place. Returns how many it rewrote.
+
+    Costs NOTHING -- no model call -- which is why it is the first tier and why
+    it runs before anything cleverer. On a tool-heavy run the transcript is
+    mostly tool output by volume, so cutting the old ones down reclaims most of
+    it, and `actions` still carries the one-line record of everything.
+
+    Deliberately lossy in the same way `_summarise_action` is: "you already
+    tried this, here is roughly what came back". What it must never touch is
+    the seed (the task, the opening prompts) or the recent tail, so the run
+    keeps both what it was asked and what it is in the middle of.
+
+    This BOUNDS the transcript on its own -- after compaction a run at the
+    default 120-call ceiling holds roughly 8 verbatim results plus a hundred
+    240-character stubs, some 15k tokens, well inside every routed window. What
+    it does not do is make the dropped bytes retrievable, which is the second
+    tier: feeding evicted exchanges through a `kind="context"` TieredQueue
+    (agent/memory/) so `recall_memory` can search them. That is worth building
+    and is deliberately NOT half-built here -- until it exists the honest thing
+    to tell the model is that the result can be produced again, which is true,
+    rather than that it can be searched for, which is not.
+    """
+    rewritten = 0
+    protected = len(messages) - KEEP_VERBATIM
+    for i, message in enumerate(messages):
+        if i >= protected or not isinstance(message, HumanMessage):
+            continue
+        text = _content_text(message.content)
+        if not text.startswith("TOOL RESULT:") or len(text) <= COMPACTED_RESULT_CHARS:
+            continue
+        messages[i] = HumanMessage(
+            text[:COMPACTED_RESULT_CHARS]
+            + f"\n... [{len(text) - COMPACTED_RESULT_CHARS} characters of this "
+            "result dropped to make room. Run it again if you need the rest.]"
+        )
+        rewritten += 1
+    return rewritten
+
+
+def _transcript_size(messages: list) -> int:
+    return sum(len(_content_text(m.content)) for m in messages)
+
+
 def _agent_loop(state: AgentState, messages: list, *, mode: str,
                 actions: list[str], mode_log: list[str]) -> tuple[str, str, str]:
     """Run one conversation until it answers, pauses, or runs out of budget.
@@ -1276,6 +1338,12 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     llm = ROUTER.chat_model(MODES[mode].task)
 
     while True:
+        if _transcript_size(messages) > LOOP_COMPACT_AT:
+            dropped = _compact(messages)
+            if dropped:
+                logger.info("agent loop: compacted %d old tool result(s)", dropped)
+                _emit({"agent": {"board": [f"compacted {dropped} older tool result(s)"]}})
+
         if budget is not None:
             if budget.spent():
                 return output, "budget", mode

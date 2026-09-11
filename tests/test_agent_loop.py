@@ -433,3 +433,65 @@ def test_the_mode_survives_a_rejection(monkeypatch):
                              feedback="not good enough"))
 
     assert result.update["mode"] == "plan"
+
+
+# --------------------------------------------------------------------------
+# Compaction -- what one never-resetting conversation needs
+# --------------------------------------------------------------------------
+
+def test_a_long_run_compacts_its_old_tool_results(monkeypatch):
+    """Costs no model call, which is why it is the first thing tried. On a
+    tool-heavy run the transcript is mostly tool output by volume."""
+    monkeypatch.setattr(pn, "LOOP_COMPACT_AT", 2000)
+    monkeypatch.setattr(pn, "KEEP_VERBATIM", 2)
+    monkeypatch.setitem(
+        pn.dispatch_table.__globals__["TOOL_DISPATCH"], "execute_python",
+        lambda body: type("R", (), {"stdout": "y" * 3000, "stderr": "", "returncode": 0})(),
+    )
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 6 + ["FINAL:\ndone"])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state())
+
+    sent = [m.content for m in fake.seen[-1]]
+    assert any("dropped to make room" in m for m in sent), "nothing was compacted"
+
+
+def test_compaction_never_touches_the_task(monkeypatch):
+    monkeypatch.setattr(pn, "LOOP_COMPACT_AT", 2000)
+    monkeypatch.setattr(pn, "KEEP_VERBATIM", 2)
+    monkeypatch.setitem(
+        pn.dispatch_table.__globals__["TOOL_DISPATCH"], "execute_python",
+        lambda body: type("R", (), {"stdout": "y" * 3000, "stderr": "", "returncode": 0})(),
+    )
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 6 + ["FINAL:\ndone"])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state())
+
+    assert any("fix the failing test" in m.content for m in fake.seen[-1])
+
+
+def test_compaction_bounds_the_transcript(monkeypatch):
+    """The property that makes one loop survivable: size stops growing with
+    the number of tool calls."""
+    monkeypatch.setattr(pn, "LOOP_COMPACT_AT", 2000)
+    monkeypatch.setattr(pn, "KEEP_VERBATIM", 2)
+    monkeypatch.setitem(
+        pn.dispatch_table.__globals__["TOOL_DISPATCH"], "execute_python",
+        lambda body: type("R", (), {"stdout": "y" * 3000, "stderr": "", "returncode": 0})(),
+    )
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 12 + ["FINAL:\ndone"])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state())
+
+    sizes = [sum(len(m.content) for m in sent) for sent in fake.seen]
+    assert sizes[-1] < sizes[len(sizes) // 2] * 2, f"transcript still growing: {sizes}"
+
+
+def test_a_short_run_is_left_alone(monkeypatch):
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)", "FINAL:\ndone"])
+    _install(monkeypatch, fake)
+    pn.agent(_state())
+    assert not any("dropped to make room" in m.content for m in fake.seen[-1])
