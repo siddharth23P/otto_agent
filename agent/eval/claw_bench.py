@@ -449,6 +449,7 @@ def run_one(
     max_rounds = ua_cfg.max_rounds if ua_enabled else 0
     rounds_used = 0
     ua_done = False
+    answer_recorded = False
 
     history: list = []
     turn_text = prompt
@@ -470,6 +471,7 @@ def run_one(
                         turns += len(state.get("actions") or ()) if state else 0
                     if answer:
                         recorder.text("assistant", answer)
+                        answer_recorded = True
 
                     if not ua_enabled or rounds_used >= max_rounds:
                         break
@@ -484,6 +486,7 @@ def run_one(
                     rounds_used += 1
                     history = [*history, HumanMessage(turn_text), AIMessage(answer)]
                     turn_text = reply
+                    answer_recorded = False
                     recorder.text("user", f"[user_agent]\n{reply}")
         except Exception as exc:
             # A harness run reports; it does not crash out. LangGraph wraps
@@ -493,7 +496,10 @@ def run_one(
             if "DeadlineExceeded" in error:
                 error = f"timeout after {task.environment.timeout_seconds}s"
             logger.warning("claw task %s: %s", task.task_id, error)
-            if answer:
+            # Whatever this round had produced before it died is still the
+            # agent's answer; recording it twice would let a grader count the
+            # same text as two turns.
+            if answer and not answer_recorded:
                 recorder.text("assistant", answer)
         finally:
             dispatcher.close()
@@ -601,6 +607,21 @@ def grade(claw: Claw, task, task_yaml: Path, trace_path: Path, *, judge,
 # --------------------------------------------------------------------------
 # Container, services, snapshot -- the lifecycle around one task
 # --------------------------------------------------------------------------
+
+#: Services that reach the real internet through a paid API rather than
+#: serving fixtures. Without their key they start, answer every call with an
+#: empty result set, and the task scores near zero for a reason nothing in the
+#: output names -- which reads as an agent failure and is not one.
+_EXTERNAL_KEY_SERVICES = {"web_real": "SERP_DEV_KEY", "web_real_injection": "SERP_DEV_KEY"}
+
+
+def missing_service_keys(task) -> list[str]:
+    """Environment variables this task's services need and do not have."""
+    return sorted({
+        var for svc in task.services
+        if (var := _EXTERNAL_KEY_SERVICES.get(svc.name)) and not os.environ.get(var)
+    })
+
 
 def needs_container(task) -> bool:
     """Whether this task's files live in a container rather than on the host.

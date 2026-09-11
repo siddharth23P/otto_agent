@@ -26,7 +26,7 @@ from agent.eval.claw_bench import (
     ClawEvalUnavailable,
     claw_root,
     load_claw,
-    needs_container,
+    missing_service_keys,
     run_task_file,
     select_tasks,
 )
@@ -105,6 +105,13 @@ def eval_claw_cmd(
     for i, task_yaml in enumerate(tasks, 1):
         name = task_yaml.parent.name
         err.print(f"[{i}/{len(tasks)}] {name}")
+        missing = missing_service_keys(claw.TaskDefinition.from_yaml(task_yaml))
+        if missing:
+            err.print(
+                f"  [warn]{', '.join(missing)} not set[/] -- this task's service "
+                "reaches the real internet and will return nothing, so the score "
+                "below measures the environment, not the agent"
+            )
         try:
             outcome = run_task_file(
                 claw, task_yaml,
