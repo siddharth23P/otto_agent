@@ -48,16 +48,23 @@ def _run(monkeypatch, replies, budget=None):
     return model, final
 
 
-def test_one_tool_call_and_an_answer_costs_three_model_calls(monkeypatch):
-    """Was five: two router decisions plus the evaluator, for two calls of real
-    work. The router is gone, so the only overhead left is the one judgment."""
+def test_one_tool_call_and_an_answer_costs_four_model_calls(monkeypatch):
+    """Was five under the old graph: two router decisions plus a judgment, for
+    two calls of real work. The router is gone. The judgment now costs two --
+    one to write the rubric from the task before the answer is visible, one to
+    score against it -- because a judge that only re-reads the actor's own
+    output measures at approximately zero (RefineBench: -2.5% to 0% over five
+    turns, against 90-98% with an external checklist).
+
+    So: same total as the old graph, spent on checking instead of routing."""
     model, final = _run(monkeypatch, [
         "ACTION: execute_python\nCODE:\nprint(2 + 2)",   # 1, work
         "FINAL:\nthe answer is 4",                        # 2, work
-        "FINAL:\nAPPROVE: yes\nWHY: checked it",          # 3, judgment
+        "- the sum is correct",                            # 3, the rubric
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked it",
     ])
 
-    assert model.calls == 3
+    assert model.calls == 4
     assert final["final_output"] == "the answer is 4"
 
 
@@ -68,10 +75,11 @@ def test_overhead_stays_flat_as_the_work_grows(monkeypatch):
     model, final = _run(monkeypatch, [
         *["ACTION: execute_python\nCODE:\nprint(1)"] * 10,
         "FINAL:\ndone",
-        "FINAL:\nAPPROVE: yes\nWHY: ok",
+        "- the work is done",
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: ok",
     ])
 
-    assert model.calls == 12
+    assert model.calls == 13
     assert final["final_output"] == "done"
 
 
@@ -79,13 +87,15 @@ def test_a_rejection_costs_one_round_trip_not_a_router_decision(monkeypatch):
     """A rejection used to return to the overseer, which spent a call deciding
     who should retry. The evaluator hands straight back to the loop."""
     model, final = _run(monkeypatch, [
-        "FINAL:\nfirst attempt",                          # 1
-        "FINAL:\nAPPROVE: no\nWHY: not verified",         # 2
-        "FINAL:\nsecond attempt",                         # 3
-        "FINAL:\nAPPROVE: yes\nWHY: now it checks out",   # 4
+        "FINAL:\nfirst attempt",                           # 1, work
+        "- it is verified",                                 # 2, rubric
+        "FINAL:\nMET: 0/1\nBLOCKED: no\nAPPROVE: no\nWHY: not verified",
+        "FINAL:\nsecond attempt",                           # 4, work
+        "- it is verified",                                  # 5, rubric again
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: now it checks out",
     ])
 
-    assert model.calls == 4
+    assert model.calls == 6
     assert final["final_output"] == "second attempt"
 
 
@@ -97,10 +107,11 @@ def test_a_mode_swap_costs_one_call_rather_than_a_node_boundary(monkeypatch):
         "ACTION: execute_python\nCODE:\nprint(1)",        # 1
         "ACTION: switch_mode\nCODE:\nplan",                # 2, the swap
         "FINAL:\nplanned and done",                        # 3
-        "FINAL:\nAPPROVE: yes\nWHY: ok",                   # 4
+        "- the work is done",                               # 4, rubric
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: ok",
     ])
 
-    assert model.calls == 4
+    assert model.calls == 5
     assert final["mode"] == "plan"
 
 
@@ -171,4 +182,5 @@ def test_the_judgment_does_not_go_on_a_checking_expedition(monkeypatch):
         "context": "", "rejections": 0,
     })
 
-    assert judge.calls <= pn.MAX_EVALUATOR_ITERATIONS
+    # One rubric call plus the capped judging exchanges.
+    assert judge.calls <= 1 + pn.MAX_EVALUATOR_ITERATIONS

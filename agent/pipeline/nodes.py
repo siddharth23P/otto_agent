@@ -296,6 +296,7 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 
 import json
 import logging
@@ -584,9 +585,48 @@ logger = logging.getLogger(__name__)
 # Prompts
 # --------------------------------------------------------------------------
 
+#: Phase one of judging: work out what a good answer would have to contain,
+#: from the TASK ALONE, before the attempt is visible.
+#:
+#: This is the whole reason the evaluator is worth its calls. RefineBench
+#: measured self-refinement over five turns at 31.3% for the best model and
+#: -2.5% to 0% for most; the SAME models reach 90-98% when given an external
+#: checklist. An evaluator that only re-reads the actor's own output is
+#: measured at approximately nothing, and that is what this one was: it saw the
+#: answer, the action record, the transcript tail and the gathered context --
+#: all of it produced by the actor it was judging.
+#:
+#: A rubric derived from the task is the cheapest thing the actor does not have.
+#: Generating it in a SEPARATE phase is load-bearing rather than tidy: writing
+#: criteria while looking at an answer produces criteria that the answer
+#: happens to meet. The verifier paper reports this structure taking agreement
+#: with humans from 0.26-0.31 to 0.64 -- inside the human inter-annotator band
+#: of 0.53-0.57 -- and false positives from 0.40-0.45 to 0.01, and shows the
+#: gain survives giving the baselines the same model, so it is architectural
+#: rather than a better judge.
+RUBRIC_PROMPT = (
+    "You are about to judge someone else's attempt at the task below. First, "
+    "before you see any attempt, write down what a correct answer would have "
+    "to contain.\n\n"
+    "Reply with 2 to 5 criteria, one per line, each starting with `- `. Each "
+    "must be something you could CHECK rather than an opinion: a value that "
+    "must be right, a file that must exist, a command that must succeed, a "
+    "question that must be answered. Make them independent -- overlapping "
+    "criteria double-count one mistake.\n\n"
+    "Do not write criteria about style, effort or presentation. Nothing else "
+    "in your reply, no preamble."
+)
+
 EVALUATOR_PROMPT = (
     "Judge whether the {target} below actually satisfies the original "
     "request -- {target_note}.\n\n"
+    "CRITERIA, written before this attempt was visible. Judge against these "
+    "and nothing else:\n{rubric}\n\n"
+    "Take each in turn. A criterion is met, not met, or blocked by something "
+    "outside the agent's control -- a missing file it could not create, a "
+    "service that was down, a credential it was never given. That last case "
+    "is NOT the agent being wrong, and saying so is how a real obstacle stops "
+    "being counted as a failure.\n\n"
     "CHECK IT, DO NOT TAKE ITS WORD. If the request asked for something to "
     "be changed, fixed, built or made to work, run a command that would fail "
     "if it had not been -- and judge what that command actually reports, not "
@@ -599,10 +639,16 @@ EVALUATOR_PROMPT = (
     "check passes, consider whether it would still pass a minute from now, "
     "and if you have reason to doubt it, look for what would change it "
     "back.\n\n"
-    "You check with a tool: "
+    "You may check ONE thing with a tool if a criterion genuinely cannot be "
+    "settled from what you were shown: "
     + _ACTION_BLOCK +
-    "When you are done, "
-    "reply with exactly\nFINAL:\nAPPROVE: yes or no\nWHY: one sentence\n"
+    "When you are done, reply with exactly\nFINAL:\n"
+    "MET: the number of criteria met, then / then the number of criteria\n"
+    "BLOCKED: yes or no -- whether anything unmet was outside the agent's "
+    "control\n"
+    "APPROVE: yes or no\n"
+    "WHY: one sentence naming the first criterion that failed, or why it "
+    "passed\n"
     "You have at most {max_iter} exchanges before your last reply is used "
     "as-is."
 )
@@ -758,6 +804,56 @@ def _call(llm, messages: list) -> str:
         )
         current = current.model_copy(update={"max_tokens": bumped})
     return ""  # unreachable -- the loop always returns or raises
+
+
+def _parse_rubric(text: str) -> list[str]:
+    """The criteria out of a rubric reply. Bullet lines only.
+
+    Bounded at RUBRIC_MAX because criteria are scored one by one: an
+    unbounded list turns one judgment into an unbounded number of them, and
+    the verifier paper's own guidance is a small set of NON-OVERLAPPING
+    criteria, since overlapping ones double-count a single mistake.
+    """
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        for marker in ("- ", "* ", "\u2022 "):
+            if line.startswith(marker):
+                line = line[len(marker):].strip()
+                break
+        else:
+            continue
+        if line:
+            lines.append(line)
+    return lines[:RUBRIC_MAX]
+
+
+def _parse_verdict(text: str) -> "Verdict":
+    """The four things a judgment has to say, out of one FINAL body.
+
+    Separated because one number cannot carry them. An attempt can take every
+    right step and be stopped by a missing credential, or reach the right
+    answer by accident -- and a single approve/reject collapses those into the
+    same signal, which is how a judge ends up training the agent on noise.
+    """
+    approve, reason = _parse_approval(text)
+    met = total = 0
+    if "MET:" in text:
+        fragment = text.split("MET:")[1].split("\n")[0]
+        numbers = [int(n) for n in re.findall(r"\d+", fragment)[:2]]
+        if len(numbers) == 2:
+            met, total = numbers
+    blocked_line = text.split("BLOCKED:")[1].split("\n")[0].lower() if "BLOCKED:" in text else ""
+    return Verdict(
+        approved=approve,
+        reason=reason,
+        # The continuous score. Kept apart from `approved` on purpose: "three
+        # of four criteria met" and "nothing worked" are both rejections and
+        # should not look alike to anything reading this back.
+        process=round(met / total, 3) if total else (1.0 if approve else 0.0),
+        criteria=(met, total),
+        blocked="yes" in blocked_line,
+    )
 
 
 def _parse_approval(text: str) -> tuple[bool, str]:
@@ -1229,6 +1325,27 @@ def _actions_block(state: AgentState) -> str:
 #: cannot be taken on trust.
 MAX_EVALUATOR_ITERATIONS = 2
 
+#: Criteria per judgment. Small and non-overlapping is the point -- each is
+#: scored in turn, and overlapping criteria double-count one mistake.
+RUBRIC_MAX = 5
+
+
+@dataclass(frozen=True, slots=True)
+class Verdict:
+    """What one judgment concluded, kept as four separate facts."""
+
+    approved: bool
+    reason: str
+    #: 0.0-1.0, the share of criteria met. The continuous half.
+    process: float
+    #: (met, total), so a caller can say "3 of 4" rather than "0.75".
+    criteria: tuple[int, int]
+    #: Whether what went unmet was outside the agent's control. An environment
+    #: blocker is not the agent being wrong, and counting it as one teaches
+    #: the wrong lesson to anything downstream.
+    blocked: bool
+
+
 #: How many rejections a run may collect before the answer stands anyway.
 #: Judgment is worth paying for; judgment without a bound is a way to spend a
 #: whole budget re-reading the same answer.
@@ -1594,6 +1711,28 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
     )
 
 
+def _criteria(llm, task_text: str) -> list[str]:
+    """Phase one: the rubric, from the task alone.
+
+    A separate call on purpose. Criteria written while looking at an answer
+    are criteria the answer happens to meet, which is the failure mode that
+    makes a self-judging loop measure zero.
+
+    Fails soft: a provider hiccup here must not cost the judgment. An empty
+    rubric degrades the evaluator to what it was before this change, which is
+    worse but not broken.
+    """
+    try:
+        reply = _call(llm, [
+            SystemMessage(RUBRIC_PROMPT),
+            HumanMessage(f"TASK:\n{task_text}"),
+        ])
+    except ProviderError as exc:
+        logger.warning("rubric generation failed, judging without one: %s", exc)
+        return []
+    return _parse_rubric(reply)
+
+
 def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_user"]]:
     task_text = state["messages"][-1].content
     node = state.get("node") or "agent"
@@ -1607,8 +1746,15 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # MAX_TOOL_ITERATIONS, so the prompt promised five exchanges and the loop
     # allowed two -- a model told it has budget it does not have will plan to
     # use it.
+    # PHASE ONE: what would a correct answer have to contain? Asked from the
+    # task alone, before the attempt is visible. This is the only information
+    # in the whole judgment that the actor did not produce, and it is why the
+    # judgment is worth its calls at all -- see RUBRIC_PROMPT.
+    rubric = _criteria(llm, task_text)
+
     system_prompt = EVALUATOR_PROMPT.format(
         target=target, target_note=target_note, max_iter=MAX_EVALUATOR_ITERATIONS,
+        rubric="\n".join(f"- {c}" for c in rubric) or "- the request is satisfied",
     )
     # It used to judge blind: conversation, request, output, nothing else. So
     # "I cannot verify this" came back as a rejection, and a rejection cost a
@@ -1669,7 +1815,15 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # found in `reply` at all (e.g. _tool_loop exhausted on unparseable
     # replies) -- fails CLOSED by construction: an evaluator that never
     # rendered a real verdict is not evidence the answer is fine.
-    approve, reason = _parse_approval(reply)
+    verdict = _parse_verdict(reply)
+    approve, reason = verdict.approved, verdict.reason
+    if verdict.criteria[1]:
+        reason = f"{verdict.criteria[0]}/{verdict.criteria[1]} criteria met -- {reason}"
+    if verdict.blocked and not approve:
+        # An environment blocker is not the agent being wrong. Saying so keeps
+        # a real obstacle from being counted as a failure -- and from being
+        # retried identically, which is what a plain rejection invites.
+        reason = f"blocked by the environment, not by the attempt: {reason}"
     # The judgment's own calls count too. Left out, `model_calls` reports what
     # the loop spent rather than what the run spent -- measured live at 4
     # against an actual 9, because the evaluator checks the answer with tools
