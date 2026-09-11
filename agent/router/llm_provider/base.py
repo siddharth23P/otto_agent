@@ -190,6 +190,52 @@ class CapabilityNotSupported(ProviderError):
 # --------------------------------------------------------------------------
 
 
+#: Vendor SDK root modules whose exceptions can reach Otto unwrapped.
+#:
+#: A provider subclass translates its own SDK's errors (the invariant a few
+#: lines above), but the CHAT path does not go through the subclass at all --
+#: it goes through a LangChain class Otto does not own. `ChatOpenAI`,
+#: `ChatAnthropic` and `ChatGoogleGenerativeAI` raise raw `openai.RateLimitError`,
+#: `anthropic.APIStatusError`, google-genai errors and bare `httpx` errors
+#: straight out of `.stream()`.
+#:
+#: That is load-bearing because agent/pipeline/nodes.py's `_run_role` and
+#: `evaluator` catch only ProviderError around their tool loop. Before this,
+#: every chat model was Inception's own `ChatInception`, which translates; the
+#: moment a route points at another vendor, a 429 mid-solver stops being a
+#: clean edge back to the overseer and unwinds the entire graph instead.
+_VENDOR_SDK_ROOTS = frozenset({"openai", "anthropic", "google", "httpx", "httpx2"})
+
+#: Exception class-name fragments that mean "the vendor was unreachable", as
+#: opposed to "the vendor said no". Matched on the class name because the four
+#: SDKs above share no base class to check against.
+_UNAVAILABLE_MARKERS = ("Connection", "Timeout", "APIStatus", "ServiceUnavailable")
+
+
+def translate_unknown(exc: Exception) -> ProviderError:
+    """Last-resort translation for an exception raised by a chat model Otto
+    does not own.
+
+    Deliberately duck-typed rather than importing the vendor SDKs: this module
+    is imported by agent/router/mapping.py's validation path, which a test runs
+    in a subprocess with every API key stripped, and which must stay free of
+    heavy vendor imports.
+    """
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    name = type(exc).__name__
+    detail = f"{name}: {exc}"
+
+    if status in (401, 403):
+        return AuthError(detail)
+    if status == 404:
+        return ModelNotFound(detail)
+    if status == 429 or (isinstance(status, int) and status >= 500):
+        return ProviderUnavailable(detail)
+    if any(marker in name for marker in _UNAVAILABLE_MARKERS):
+        return ProviderUnavailable(detail)
+    return ProviderError(detail)
+
+
 class BaseProvider(ABC):
     """A single LLM vendor.
 
