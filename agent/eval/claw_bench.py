@@ -293,7 +293,16 @@ def task_tools(claw, task, dispatcher, recorder: TraceRecorder, deadline: Deadli
     The description handed to the model is the task's own, verbatim -- the
     same text their system prompt shows -- so the agent is not being helped or
     hindered by a rewrite.
+
+    A declared tool with no `tool_endpoint` is deliberately NOT wrapped. All
+    38 of them across the benchmark are `Bash`, which Claw-Eval dispatches
+    through its sandbox rather than over HTTP; wrapping one would give Otto a
+    tool that answers every call with 404, next to its own execute_bash that
+    works. Otto's standing toolbox is what covers those, which is the point of
+    the merge in nodes.py's _tool_loop.
     """
+    endpoints = task.get_endpoint_map()
+
     def make(spec) -> ExtraTool:
         def call(body: str) -> ToolResult:
             wrap_up = deadline.check()
@@ -324,7 +333,14 @@ def task_tools(claw, task, dispatcher, recorder: TraceRecorder, deadline: Deadli
             schema=spec.input_schema or {},
         )
 
-    return [make(spec) for spec in task.tools]
+    served = [spec for spec in task.tools if spec.name in endpoints]
+    skipped = [spec.name for spec in task.tools if spec.name not in endpoints]
+    if skipped:
+        logger.info(
+            "%s: %s declared with no endpoint -- Otto's own tools cover these",
+            task.task_id, ", ".join(skipped),
+        )
+    return [make(spec) for spec in served]
 
 
 # --------------------------------------------------------------------------
