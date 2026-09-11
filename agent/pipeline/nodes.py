@@ -308,6 +308,7 @@ from langgraph.types import Command, interrupt
 
 from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.tools import TOOL_DISPATCH
+from agent.pipeline.toolkit import dispatch_table, render_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router.mapping import Task
 from agent.router.router import Router
@@ -1023,6 +1024,17 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None) -> str:
     FINAL body, or, failing that, the last unparseable reply. An ACTION
     reply never touches it: a tool call is not a candidate answer.
     """
+    # TOOL_DISPATCH plus whatever agent/pipeline/toolkit.py has bound for this
+    # run -- empty in every ordinary turn, so this is a dict copy of nothing.
+    # A benchmark that hands the agent task-specific tools (agent/eval/
+    # claw_bench.py) binds them there rather than mutating the registry, and
+    # the note is how the prompt finds out they exist: the menu in
+    # _ACTION_BLOCK is derived at import and cannot know about them.
+    dispatch = dispatch_table()
+    note = render_note()
+    if note:
+        messages.insert(1, SystemMessage(note))
+
     output = ""
     dead_replies = 0
     last_target: str | None = None
@@ -1058,13 +1070,13 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None) -> str:
             # just another TOOL_DISPATCH entry.
             question, choices = _parse_ask_user_body(body)
             raise NeedsUserInput(question or "(no question given)", choices)
-        if tool_name not in TOOL_DISPATCH:
+        if tool_name not in dispatch:
             evidence = (
                 f"tool {tool_name!r} is not available "
-                f"(allowed: {sorted(TOOL_DISPATCH)})"
+                f"(allowed: {sorted(dispatch)})"
             )
         else:
-            result = TOOL_DISPATCH[tool_name](body)
+            result = dispatch[tool_name](body)
             if actions is not None:
                 actions.append(_summarise_action(tool_name, body, result))
             evidence = (
