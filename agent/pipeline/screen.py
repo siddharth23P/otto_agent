@@ -3,7 +3,7 @@
 Same seam as the browser, and for a stronger reason. A screen-control tool
 pointed at a real machine can click anything its owner happens to have open;
 pointed at a container it can click the things somebody deliberately put in the
-container. That difference is why this drives `docker/otto-desktop` through
+container. That difference is why this drives `containers/otto-desktop` through
 `agent/pipeline/execution.py`'s command runner rather than a host, and why Otto
 ships no screen-control dependency of its own.
 

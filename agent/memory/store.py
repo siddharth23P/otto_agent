@@ -263,6 +263,18 @@ class MemoryStore:
         ).fetchall()
         return dict(rows)
 
+    def chunk_hashes(self, kind: str) -> list[str]:
+        """Every stored hash of `kind`, oldest first.
+
+        For a store small enough to rank in full -- agent/memory/lessons.py's
+        bank, which is capped at three writes per run and deduplicated. The
+        conversation store is not small enough and does not use this.
+        """
+        rows = self._conn.execute(
+            "SELECT hash FROM chunks WHERE kind = ? ORDER BY seq", (kind,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
     def get_chunk_rows(self, kind: str, hashes: list[str]) -> list[Chunk]:
         """The full `Chunk` records for `hashes`, oldest first -- what
         retrieval.py ranks over once a bullet match has narrowed the store

@@ -4,7 +4,7 @@ Otto had no OS control, and the first question was what it should point at. Not
 a real machine: a screen-control tool aimed at somebody's actual desktop can
 click anything they happen to have open, where one aimed at a container can
 click the things somebody deliberately put in it. So it drives
-`docker/otto-desktop` through the same command-runner seam the file and shell
+`containers/otto-desktop` through the same command-runner seam the file and shell
 tools use, and Otto ships no screen-control dependency.
 
 That image is built on the one Otto already drives, deliberately: the measured

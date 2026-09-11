@@ -248,3 +248,83 @@ def test_a_task_tool_checks_its_call_before_spending_a_round_trip():
     source = inspect.getsource(cb.task_tools)
     assert "validate_against" in source
     assert "spec.input_schema" in source
+
+
+# --------------------------------------------------------------------------
+# Measurement discipline
+# --------------------------------------------------------------------------
+#
+# These guard the three rules that have to hold before any self-improvement
+# number means anything: repeats so a change can be told from judge variance,
+# a held-out set the loop never tunes against, and a grading fingerprint so
+# two numbers are known to have come from the same grader.
+
+def _paths(n):
+    from pathlib import Path
+    return [Path(f"tasks/T{i:03d}_thing/task.yaml") for i in range(n)]
+
+
+def test_the_held_out_split_does_not_move_between_runs():
+    """The failure this prevents: a split drawn fresh each run leaks every
+    task into development eventually, and then the held-out number is
+    measuring tasks the loop has already tuned against."""
+    _, first = cb.split_tasks(_paths(60))
+    _, second = cb.split_tasks(list(reversed(_paths(60))))
+    assert {p.parent.name for p in first} == {p.parent.name for p in second}
+
+
+def test_adding_tasks_does_not_reshuffle_the_ones_already_split():
+    """A hash of the task id, not an index into a list -- otherwise every new
+    task quietly moves an old one across the line."""
+    _, before = cb.split_tasks(_paths(40))
+    _, after = cb.split_tasks(_paths(80))
+    assert {p.parent.name for p in before} <= {p.parent.name for p in after}
+
+
+def test_the_two_sides_of_the_split_do_not_overlap():
+    development, reserved = cb.split_tasks(_paths(80))
+    assert not {p.parent.name for p in development} & {p.parent.name for p in reserved}
+    assert len(development) + len(reserved) == 80
+
+
+def test_roughly_the_asked_for_fraction_is_held_out():
+    _, reserved = cb.split_tasks(_paths(300), holdout=0.3)
+    assert 0.2 < len(reserved) / 300 < 0.4
+
+
+def test_the_fingerprint_records_what_decides_a_score():
+    claw = SimpleNamespace(root=cb.Path("/nonexistent"))
+    print_out = cb.grading_fingerprint(claw, None, SimpleNamespace(model="judge-x"))
+    assert print_out["judge"] == "judge-x"
+    assert print_out["otto_grading_path"] == cb.GRADING_PATH_VERSION
+    assert print_out["pass_threshold"] == 0.75
+    assert "completion" in print_out["formula"]
+
+
+def test_a_missing_checkout_does_not_break_the_fingerprint():
+    """It is recorded beside every run, so it must never be the thing that
+    ends one."""
+    claw = SimpleNamespace(root=cb.Path("/nonexistent"))
+    assert cb.grading_fingerprint(claw, None, None)["claw_eval_revision"] == ""
+
+
+def test_repeated_trials_report_a_real_run_not_an_average():
+    """An averaged outcome has a checklist and an action count that belong to
+    no run that happened. The middle trial is a real one."""
+    calls = []
+
+    def fake_once(claw, task_yaml, **kwargs):
+        calls.append(kwargs["port_offset"])
+        return SimpleNamespace(task_score=[0.9, 0.2, 0.5][len(calls) - 1], trials=[])
+
+    original = cb._run_task_once
+    cb._run_task_once = fake_once
+    try:
+        outcome = cb.run_task_file(None, cb.Path("t/task.yaml"), trace_dir=cb.Path("."),
+                                   cfg=None, trials=3, port_offset=10)
+    finally:
+        cb._run_task_once = original
+
+    assert outcome.task_score == 0.5, "reported a score no trial actually got"
+    assert outcome.trials == [0.9, 0.2, 0.5]
+    assert calls == [10, 11, 12], "trials reused each other's service ports"

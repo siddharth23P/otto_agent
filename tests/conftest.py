@@ -40,3 +40,24 @@ for _name in _PLACEHOLDER_KEYS:
 #: network with a fake key. An explicit empty value means "no hosted spec", which
 #: falls through to the local model.
 os.environ.setdefault("OTTO_EMBEDDING_MODEL", "")
+
+
+#: Never let a test read from or write to the developer's real lesson bank.
+#:
+#: agent/memory/lessons.py opens ~/.otto/memory/lessons.db on first use, so a
+#: test that runs the graph without binding one would create it -- and a test
+#: that finished a run would TEACH it. Both are wrong: a suite that writes into
+#: the thing the agent learns from is a suite that changes the agent's behaviour
+#: by being run. Tests about the bank bind their own with `bind_bank`.
+import pytest  # noqa: E402
+
+from agent.memory import lessons as _lessons  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_real_lesson_bank(request):
+    if "bank" in getattr(request, "fixturenames", ()):
+        yield  # that test binds its own
+        return
+    with _lessons.bind_bank(None):
+        yield
