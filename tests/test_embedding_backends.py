@@ -264,3 +264,26 @@ def test_reembedding_leaves_rows_that_never_had_a_vector_alone(store, backend):
     store.add_chunk("history", "h1", "no vector here", None)
 
     assert store.reembed(lambda texts: [], "model-b") == 0
+
+
+def test_the_hosted_default_applies_only_when_its_key_is_configured(monkeypatch):
+    """Gemini is the measured default, but local has to stay the floor: the
+    offline suite, agent/eval/'s no-network paths and any machine without a key
+    all depend on embeddings working with no credentials at all."""
+    monkeypatch.delenv("OTTO_EMBEDDING_MODEL", raising=False)
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    emb.reset_backend()
+    assert isinstance(emb.current_backend(), emb.LocalBGEBackend)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "a-key")
+    emb.reset_backend()
+    assert emb.current_model_name() == emb.DEFAULT_HOSTED_SPEC
+
+
+def test_an_explicit_setting_beats_the_default(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "a-key")
+    monkeypatch.setenv("OTTO_EMBEDDING_MODEL", "local")
+    emb.reset_backend()
+
+    assert isinstance(emb.current_backend(), emb.LocalBGEBackend)
