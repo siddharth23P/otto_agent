@@ -165,6 +165,22 @@ def _salvage(final: dict | None, exc: Exception | None = None) -> dict:
         state["board"] = [*state.get("board", []), f"the run failed: {type(exc).__name__}: {exc}"]
     if not (state.get("final_output") or "").strip():
         candidate = (state.get("output") or "").strip()
+        if not candidate and state.get("pending_question"):
+            # The run stopped to ask something and nothing here can answer --
+            # `run_pipeline` has no resume path, that is the streaming API.
+            # The question IS the answer in that case, and saying it is both
+            # honest and useful: a caller that wanted a decision learns which
+            # decision is missing, instead of receiving nothing.
+            #
+            # Seen live on Claw-Eval T026, where the mutation gate correctly
+            # stopped the agent guessing between three contacts named Zhang.
+            # It asked, exactly as the grader requires, and the task recorded
+            # no assistant output whatsoever.
+            question = state["pending_question"]
+            choices = state.get("pending_choices") or []
+            candidate = question if not choices else (
+                f"{question}\n\n" + "\n".join(f"- {c}" for c in choices)
+            )
         if candidate:
             state["final_output"] = candidate
     return state
