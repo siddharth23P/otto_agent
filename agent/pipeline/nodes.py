@@ -310,7 +310,7 @@ from langgraph.types import Command, interrupt
 from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
-from agent.pipeline.tools import READ_ONLY, TOOL_DISPATCH, TOOL_TIERS
+from agent.pipeline.tools import MUTATING, READ_ONLY, TOOL_DISPATCH, TOOL_TIERS
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router.mapping import Task
@@ -608,11 +608,15 @@ RUBRIC_PROMPT = (
     "You are about to judge someone else's attempt at the task below. First, "
     "before you see any attempt, write down what a correct answer would have "
     "to contain.\n\n"
-    "Reply with 2 to 5 criteria, one per line, each starting with `- `. Each "
+    "Write criteria about the ANSWER and what it claims, not about how the "
+    "work was done. \"The reported value is what the code actually prints\" is "
+    "a criterion; \"a file named fib.py exists\" is a step, and steps are not "
+    "what the person asked for.\n\n"
+    "Reply with 2 to 4 criteria, one per line, each starting with `- `. Each "
     "must be something you could CHECK rather than an opinion: a value that "
     "must be right, a file that must exist, a command that must succeed, a "
     "question that must be answered. Make them independent -- overlapping "
-    "criteria double-count one mistake.\n\n"
+    "criteria double-count one mistake. Fewer is better.\n\n"
     "Do not write criteria about style, effort or presentation. Nothing else "
     "in your reply, no preamble."
 )
@@ -622,11 +626,14 @@ EVALUATOR_PROMPT = (
     "request -- {target_note}.\n\n"
     "CRITERIA, written before this attempt was visible. Judge against these "
     "and nothing else:\n{rubric}\n\n"
-    "Take each in turn. A criterion is met, not met, or blocked by something "
-    "outside the agent's control -- a missing file it could not create, a "
-    "service that was down, a credential it was never given. That last case "
-    "is NOT the agent being wrong, and saying so is how a real obstacle stops "
-    "being counted as a failure.\n\n"
+    "Take each in turn. A criterion is met, not met, or blocked -- blocked "
+    "meaning something outside the agent's control stopped it, or you could "
+    "not check it from what you were shown and had no budget left to look. "
+    "BLOCKED IS NOT FAILED. A criterion you could not verify is not evidence "
+    "the work is wrong, and rejecting on one sends the agent back to redo "
+    "something that may already be right.\n\n"
+    "Judge what the answer CLAIMS against what you can see. If the answer "
+    "states a result and nothing you were shown contradicts it, that is met.\n\n"
     "CHECK IT, DO NOT TAKE ITS WORD. If the request asked for something to "
     "be changed, fixed, built or made to work, run a command that would fail "
     "if it had not been -- and judge what that command actually reports, not "
@@ -1203,7 +1210,17 @@ def _mutates(tool_name: str) -> bool:
     extra = current_extra_tools().get(tool_name)
     if extra is not None:
         return extra.mutates
-    return TOOL_TIERS.get(tool_name, READ_ONLY) != READ_ONLY
+    # MUTATING only, not WORKSPACE. Writing a file into a throwaway workspace
+    # or a task container is recoverable -- write it again. The measured case
+    # for gating is about actions that change something OUTSIDE: a refund, a
+    # cancellation, a sent message. Gating workspace writes cost a model call
+    # per new file and bought nothing; measured live, a two-file task went from
+    # 6 calls to 9.
+    #
+    # No standing tool is MUTATING today, which tools.py's own invariant
+    # asserts, so in practice this gate applies to run-scoped tools -- which is
+    # exactly where T026's `gmail_send_message` lived.
+    return TOOL_TIERS.get(tool_name, MUTATING) == MUTATING
 
 
 def _emit(payload: dict) -> None:
@@ -1245,7 +1262,7 @@ def _mode_message(name: str) -> HumanMessage:
     )
 
 
-def _seed_transcript(state: AgentState, task_text: str) -> list:
+def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
     """The conversation a run starts from. Built once per run, never rebuilt.
 
     The two system messages are adjacent at indices 0 and 1 on purpose: a run of
@@ -1259,6 +1276,7 @@ def _seed_transcript(state: AgentState, task_text: str) -> list:
         f"CONVERSATION SO FAR:\n{history}" if history else "",
         f"CONTEXT GATHERED SO FAR:\n{context}" if context else "",
         f"TASK:\n{task_text}",
+        _render_checklist(checklist),
     ) if part)
 
     note = render_note()
@@ -1688,6 +1706,15 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
     stored = _revive(state.get("transcript"))
     resuming = bool(stored)
 
+    # The run's working state, written once from the task alone before any
+    # attempt exists. Nothing here can be shaped by an attempt trying to
+    # satisfy it -- which is stronger than generating it after the fact, and
+    # the same call now serves both the loop and the judgment instead of one
+    # each. See AgentState.checklist.
+    checklist = state.get("checklist")
+    if checklist is None:
+        checklist = _new_checklist(_criteria(ROUTER.chat_model(Task.EVALUATE), task_text))
+
     if resuming:
         messages = [SystemMessage(AGENT_PROMPT), *(
             [SystemMessage(render_note())] if render_note() else []
@@ -1696,10 +1723,11 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
         if feedback:
             messages.append(HumanMessage(
                 f"EVALUATOR REJECTED THAT:\n{feedback}\n"
-                "Fix it. You still have everything above."
+                + (_render_checklist(checklist) + "\n" if checklist else "")
+                + "Fix what is still open. You have everything above."
             ))
     else:
-        messages = _seed_transcript(state, task_text)
+        messages = _seed_transcript(state, task_text, checklist)
 
     actions: list[str] = []
     mode_log: list[str] = []
@@ -1709,6 +1737,7 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
         """Every return path persists the same four things."""
         update = {
             "transcript": _plain(messages),
+            "checklist": checklist,
             "mode": mode,
             "model_calls": budget.calls if budget else state.get("model_calls") or 0,
         }
@@ -1775,6 +1804,51 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
     )
 
 
+def _new_checklist(criteria: list[str]) -> list[dict]:
+    return [{"text": c, "status": "pending", "evidence": ""} for c in criteria]
+
+
+def _render_checklist(checklist: list[dict] | None) -> str:
+    """The working state as the loop sees it: what is settled and what is not.
+
+    Status first on every line, because the question the loop is answering is
+    "what is left", and a list that reads as prose makes that the reader's job.
+    """
+    if not checklist:
+        return ""
+    mark = {"met": "[done]", "blocked": "[blocked]", "pending": "[  ]"}
+    lines = []
+    for item in checklist:
+        line = f"{mark.get(item.get('status'), '[  ]')} {item.get('text', '')}"
+        if item.get("evidence"):
+            line += f"  <- {item['evidence']}"
+        lines.append(line)
+    return "THIS IS WHAT HAS TO BE TRUE WHEN YOU ARE DONE:\n" + "\n".join(lines)
+
+
+def _settle(checklist: list[dict], verdict: "Verdict") -> list[dict]:
+    """Apply one judgment to the run's records.
+
+    Coarse on purpose. The verdict says how many criteria were met, not which,
+    so this marks all of them or none rather than guessing an assignment --
+    a wrong `met` is worse than an honest `pending`, because the next attempt
+    would skip the thing that is actually missing.
+
+    What it does carry is the distinction that matters: `blocked` is not the
+    same as `pending`. An obstacle outside the agent's control should not be
+    retried identically, and a plain rejection invites exactly that.
+    """
+    if not checklist:
+        return checklist or []
+    if verdict.approved:
+        status, evidence = "met", verdict.reason
+    elif verdict.blocked:
+        status, evidence = "blocked", verdict.reason
+    else:
+        status, evidence = "pending", ""
+    return [{**item, "status": status, "evidence": evidence} for item in checklist]
+
+
 def _criteria(llm, task_text: str) -> list[str]:
     """Phase one: the rubric, from the task alone.
 
@@ -1810,11 +1884,19 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # MAX_TOOL_ITERATIONS, so the prompt promised five exchanges and the loop
     # allowed two -- a model told it has budget it does not have will plan to
     # use it.
-    # PHASE ONE: what would a correct answer have to contain? Asked from the
-    # task alone, before the attempt is visible. This is the only information
-    # in the whole judgment that the actor did not produce, and it is why the
-    # judgment is worth its calls at all -- see RUBRIC_PROMPT.
-    rubric = _criteria(llm, task_text)
+    # The criteria the run has been working against, written from the task
+    # alone before any attempt existed (AgentState.checklist). They are the
+    # only information in the whole judgment that the actor did not produce,
+    # and the reason it is worth its calls -- see RUBRIC_PROMPT.
+    #
+    # Read from state rather than regenerated: it is the same list the loop
+    # has been carrying, so judge and actor cannot be working to different
+    # bars, and a re-judgment after a rejection costs nothing to set up.
+    # Generated here only for a caller that drove the evaluator directly.
+    checklist = state.get("checklist")
+    if checklist is None:
+        checklist = _new_checklist(_criteria(llm, task_text))
+    rubric = [item["text"] for item in checklist]
 
     system_prompt = EVALUATOR_PROMPT.format(
         target=target, target_note=target_note, max_iter=MAX_EVALUATOR_ITERATIONS,
@@ -1881,6 +1963,10 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # rendered a real verdict is not evidence the answer is fine.
     verdict = _parse_verdict(reply)
     approve, reason = verdict.approved, verdict.reason
+    # The audit is the ONLY thing that may move a record's status. An
+    # executor's claim about its own work is not evidence, which is the whole
+    # separation the state layer exists for.
+    judged = _settle(checklist, verdict)
     if verdict.criteria[1]:
         reason = f"{verdict.criteria[0]}/{verdict.criteria[1]} criteria met -- {reason}"
     if verdict.blocked and not approve:
@@ -1898,6 +1984,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
         return Command(
             update={
                 **spent,
+                "checklist": judged,
                 "final_output": output,
                 "rejections": 0,
                 "board": ["evaluator approved the answer"],
@@ -1912,6 +1999,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
         return Command(
             update={
                 **spent,
+                "checklist": judged,
                 "final_output": output,
                 "rejections": rejections,
                 "board": [
@@ -1924,6 +2012,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     return Command(
         update={
             **spent,
+            "checklist": judged,
             "feedback": reason,
             "rejections": rejections,
             "board": [f"evaluator rejected {node}: {reason}"],

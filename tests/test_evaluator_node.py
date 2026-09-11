@@ -70,6 +70,9 @@ class _FailingModel:
 
 
 def _install(monkeypatch, fake):
+    """The evaluator reads its criteria from state when the loop put them
+    there; a test driving it directly leaves state empty, so it generates
+    them -- which is the first scripted reply."""
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
 
 

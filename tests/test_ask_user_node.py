@@ -263,6 +263,7 @@ def test_a_real_graph_run_pauses_on_ask_user_and_resumes_via_command(monkeypatch
     # router: the loop asks, and after the answer it carries on in the SAME
     # conversation rather than being re-dispatched into a fresh one.
     queue = [
+        "- an 8-queens solution is produced",           # the run's checklist
         "ACTION: ask_user\nCODE:\nhow many queens?",   # the loop pauses
         "FINAL:\n8-queens solution here",              # it carries on after the answer
         "FINAL:\nAPPROVE: yes\nWHY: looks right",      # evaluator
