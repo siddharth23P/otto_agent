@@ -174,4 +174,46 @@ class AgentState(TypedDict):
     #: from it: `board` is a human-readable narration of which node ran,
     #: this is the agent's own record of what it did and what came back.
     actions: Annotated[list[str], operator.add]
+    #: The agent loop's OWN conversation -- system prompt, every model reply,
+    #: every tool result -- carried across node returns instead of discarded.
+    #:
+    #: This is the field the loop rewrite exists for. Before it, every node
+    #: rebuilt `[SystemMessage, HumanMessage]` from scratch and the tool
+    #: conversation died with the node, so a re-invoked role paid to re-derive
+    #: what the last one had just learned. `actions` above was the patch for
+    #: that: a lossy one line per call, which is what you can afford to carry
+    #: when the real thing is gone. Both survive, and they are complementary --
+    #: this one is verbatim and recent, `actions` is lossy and whole-run.
+    #:
+    #: NO REDUCER, deliberately. `board` and `actions` accumulate because many
+    #: nodes append to them; a transcript is last-write-wins, like `context`
+    #: and `output`, because the loop owns the whole list and hands back the
+    #: version it finished with.
+    #:
+    #: Two shapes that must never enter it, both silent failures rather than
+    #: loud ones. A SystemMessage anywhere after the opening run: langchain's
+    #: Anthropic adapter raises on non-consecutive system messages and its
+    #: Gemini adapter hoists a mid-list one out of position or drops it. And an
+    #: empty AIMessage: `_call` returns "" on an empty stream, Anthropic
+    #: rejects empty text blocks, and in a list that never resets one of those
+    #: breaks every later Anthropic call for the rest of the run.
+    transcript: list[AnyMessage] | None
+    #: Which mode the loop is working in -- a key of agent/pipeline/modes.py's
+    #: MODES, naming both the model answering and the guidance it is under.
+    #: Survives an evaluator rejection, so a run that switched to `plan` and
+    #: got rejected resumes planning rather than silently reverting.
+    mode: str | None
+    #: One line per accepted or refused mode swap, for the board and for
+    #: telemetry -- "call 7: solve -> plan (needs ordering first)". Accumulating
+    #: like `board`, because it is a narration of what happened rather than a
+    #: current value. Read by `_score` so "did the model park on one model?" is
+    #: a number rather than an argument.
+    mode_log: Annotated[list[str], operator.add]
+    #: How many model requests this run has spent. Replaces `round` as the
+    #: number worth tracing: with one loop there are no overseer rounds to
+    #: count, and calls are the thing that maps to both latency and spend.
+    model_calls: int
+    #: How many times the evaluator has rejected an answer in this run. Bounded
+    #: so judgment cannot eat the whole budget -- see nodes.py's MAX_REJECTIONS.
+    rejections: int
     final_output: str | None

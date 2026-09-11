@@ -113,6 +113,14 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = (), memory_context: 
         "pending_question": None,
         "pending_choices": None,
         "asking_role": None,
+        # The agent loop's own conversation, carried across node returns
+        # (agent/pipeline/state.py). None means "not started" -- the loop seeds
+        # it on its first entry and hands back the version it finished with.
+        "transcript": None,
+        "mode": None,
+        "mode_log": [],
+        "model_calls": 0,
+        "rejections": 0,
         "final_output": None,
     }
 
@@ -131,8 +139,25 @@ def _config(graph_thread_id: str, handler) -> dict:
 
 
 def _score(run_span, final: AgentState) -> None:
-    run_span.update(output=final["final_output"])
-    run_span.score_trace(name="dispatch_rounds", value=final["round"], data_type="NUMERIC")
+    """The facts worth filtering a Langfuse trace by, scored on it.
+
+    `model_calls` replaces the old `dispatch_rounds`: with one agent loop there
+    are no overseer rounds left to count, and model requests are the number that
+    maps to both latency and spend -- measured on Claw-Eval, tool execution was
+    0.1 to 0.4 seconds of runs lasting 119 to 946, so everything else was this.
+
+    `mode_swaps` is here so that "did the model park on one model, or thrash
+    between them?" is a query across a batch rather than an opinion. Nothing in
+    the loop can settle that with a rule; only the numbers can.
+    """
+    run_span.update(output=final.get("final_output"))
+    run_span.score_trace(
+        name="model_calls", value=final.get("model_calls") or 0, data_type="NUMERIC",
+    )
+    swaps = [line for line in (final.get("mode_log") or []) if "->" in line]
+    run_span.score_trace(name="mode_swaps", value=len(swaps), data_type="NUMERIC")
+    if final.get("mode"):
+        run_span.score_trace(name="final_mode", value=final["mode"], data_type="CATEGORICAL")
     if final.get("node"):
         run_span.score_trace(name="last_node", value=final["node"], data_type="CATEGORICAL")
 
@@ -156,6 +181,33 @@ def _as_ask_event(update: dict, graph_thread_id: str) -> dict | None:
             "thread_id": graph_thread_id,
         }
     }
+
+
+#: What app.stream() is asked for. "updates" is what it always yielded -- one
+#: dict per node RETURN. That was enough when a node returned every few seconds;
+#: with one long-running agent loop it means nothing reaches the screen until
+#: the whole loop finishes, so `otto chat` would sit silent for minutes and then
+#: print one panel. "custom" is the loop's own per-iteration events
+#: (langgraph.config.get_stream_writer), emitted in the same node-shaped form so
+#: agent/cli/chat.py and agent/cli/tui.py need no changes at all.
+_STREAM_MODES = ["updates", "custom"]
+
+
+def _stream_events(app_stream, graph_thread_id: str):
+    """Unwrap app.stream()'s `(mode, payload)` tuples into the flat updates
+    callers have always seen, turning an interrupt into an `__ask__` event.
+
+    Asking for more than one stream mode changes the yield shape from a bare
+    payload to a tuple, so this is the one place that knows about it. Custom
+    payloads pass straight through: the loop already emits them node-shaped.
+    Yields `(event, is_ask)`.
+    """
+    for mode, payload in app_stream:
+        if mode == "custom":
+            yield payload, False
+            continue
+        ask = _as_ask_event(payload, graph_thread_id)
+        yield (ask, True) if ask is not None else (payload, False)
 
 
 def _graph_thread_id(session_id: str) -> str:
@@ -252,13 +304,13 @@ def run_pipeline_stream(
             with client.start_as_current_observation(
                 name="otto:pipeline", as_type="agent", input=text
             ) as run_span:
-                for update in app.stream(initial, config, stream_mode="updates"):
-                    ask = _as_ask_event(update, graph_thread_id)
-                    if ask is not None:
+                stream = app.stream(initial, config, stream_mode=_STREAM_MODES)
+                for event, is_ask in _stream_events(stream, graph_thread_id):
+                    if is_ask:
                         run_span.update(output="(paused -- awaiting your answer)")
-                        yield ask
+                        yield event
                         return
-                    yield update
+                    yield event
                 final = app.get_state(config).values
                 _score(run_span, final)
                 trace_id = run_span.trace_id
@@ -299,13 +351,13 @@ def resume_pipeline_stream(answer, *, thread_id: str, session_id: str):
             with client.start_as_current_observation(
                 name="otto:pipeline:resume", as_type="agent", input=str(answer)
             ) as run_span:
-                for update in app.stream(Command(resume=answer), config, stream_mode="updates"):
-                    ask = _as_ask_event(update, thread_id)
-                    if ask is not None:
+                stream = app.stream(Command(resume=answer), config, stream_mode=_STREAM_MODES)
+                for event, is_ask in _stream_events(stream, thread_id):
+                    if is_ask:
                         run_span.update(output="(paused -- awaiting your answer)")
-                        yield ask
+                        yield event
                         return
-                    yield update
+                    yield event
                 final = app.get_state(config).values
                 _score(run_span, final)
                 trace_id = run_span.trace_id
