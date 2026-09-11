@@ -49,6 +49,7 @@ from terminal_bench.agents.base_agent import AgentResult, BaseAgent
 from terminal_bench.agents.failure_mode import FailureMode
 from terminal_bench.terminal.tmux_session import TmuxSession
 
+from agent.pipeline.budget import Budget, bind_budget
 from agent.pipeline.execution import bind_command_runner
 from agent.pipeline.run import run_pipeline
 
@@ -238,7 +239,11 @@ class OttoTerminalAgent(BaseAgent):
         state = None
         try:
             transcript = (logging_dir / "otto-transcript.txt") if logging_dir else None
-            with bind_command_runner(self._runner(session, transcript)):
+            # See agent/pipeline/budget.py: the runner's own checks below
+            # cover a single long command, but only a budget checked before
+            # every model call can see where a run's time actually goes.
+            budget = Budget.until(self._deadline) if self._deadline else None
+            with bind_command_runner(self._runner(session, transcript)), bind_budget(budget):
                 state = run_pipeline(prompt, session_id=session_id)
         except Exception as exc:  # a harness run must report, never crash out
             # LangGraph wraps whatever a node raised, so match on the text

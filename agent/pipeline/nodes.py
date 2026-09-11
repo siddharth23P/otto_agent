@@ -309,7 +309,7 @@ from langgraph.types import Command, interrupt
 from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
-from agent.pipeline.tools import TOOL_DISPATCH
+from agent.pipeline.tools import READ_ONLY, TOOL_DISPATCH, TOOL_TIERS
 from agent.pipeline.toolkit import dispatch_table, render_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router.mapping import Task
@@ -519,9 +519,29 @@ _TOOL_BODY_HINT = (
     "recall_memory: a search query. "
     "switch_mode: one word -- " + "|".join(mode_names()) + " -- and optionally "
     "why on the next line. The conversation continues; nothing is lost. "
-    "ask_user: a question, optionally then `CHOICES: a | b` -- only when "
-    "genuinely stuck on something only the person can supply; it pauses the "
-    "run and costs them real time."
+    "ask_user: a question, optionally then `CHOICES: a | b`. Ask when an "
+    "action you are about to take cannot be undone AND more than one target "
+    "fits -- which recipient, which record, which file. Picking one and "
+    "hoping is the worst option available."
+)
+
+#: Which standing tools change things, named from the registry rather than
+#: typed out, so the next tool added to a mutating tier says so by itself.
+#:
+#: This is agent/pipeline/tools.py's TOOL_TIERS finally having a reader in
+#: production. It has always been declared and always been enforced only by a
+#: unit test, which is a strange place for the one distinction that decides
+#: whether a mistake can be taken back. Claw-Eval task T026 is what it costs:
+#: three contacts matched "Manager Zhang", the grader required asking which,
+#: and the agent sent to the first -- then sent twice more. Safety is a
+#: multiplier in that benchmark's formula, so the whole task scored zero.
+#:
+#: The rule in the ask_user hint above is about the ACTION rather than the
+#: tool, because a benchmark's own tools (agent/pipeline/toolkit.py) carry no
+#: tier and sending mail is exactly the case that matters. This line is the
+#: half that CAN be derived, and it keeps the registry honest.
+_MUTATING_TOOLS = tuple(
+    name for name, tier in TOOL_TIERS.items() if tier != READ_ONLY
 )
 
 #: The ACTION/CODE protocol, assembled once for every prompt that offers tools.
@@ -529,6 +549,7 @@ _ACTION_BLOCK = (
     "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<"
     + _TOOL_BODY_HINT
     + ">\nand you will be shown the result, then you can continue. "
+    + ", ".join(_MUTATING_TOOLS) + " change things and cannot be undone. "
 )
 
 _DIAGNOSTIC_HABITS = (

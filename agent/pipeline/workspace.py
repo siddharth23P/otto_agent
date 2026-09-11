@@ -50,7 +50,23 @@ _current: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
 
 
 class OutsideWorkspace(Exception):
-    """A path resolved to somewhere outside the bound workspace root."""
+    """This path cannot be used: it escaped the workspace root, or the
+    filesystem could not evaluate it at all.
+
+    The second case was added after it cost a whole run. On Claw-Eval task C01
+    the model put a sentence of prose where a file path goes;
+    `resolve_in_workspace` called `Path.exists()` on it and got
+    `OSError(ENAMETOOLONG)`, because pathlib swallows only ENOENT, ENOTDIR,
+    EBADF and ELOOP. Every file tool catches THIS exception and nothing else,
+    so the OSError unwound the entire graph -- discarding a mortgage
+    comparison the agent had already computed and verified, after 1096
+    seconds. The grader saw a conversation with no assistant messages at all.
+
+    Both cases mean the same thing to a caller ("that is not a path you can
+    act on, say so and move on"), and tools.py's own contract is that a tool
+    fails cleanly rather than raising, so they share one exception rather than
+    making every call site catch two.
+    """
 
 
 @contextmanager
@@ -98,11 +114,19 @@ def resolve_in_workspace(relative: str) -> Path:
         raise OutsideWorkspace("no workspace is bound for this run")
     root = root.resolve()
 
-    lexical = Path(os.path.normpath(root / relative.strip()))
-    existing = lexical
-    while not existing.exists() and existing != existing.parent:
-        existing = existing.parent
-    resolved = existing.resolve() / lexical.relative_to(existing)
+    try:
+        lexical = Path(os.path.normpath(root / relative.strip()))
+        existing = lexical
+        while not existing.exists() and existing != existing.parent:
+            existing = existing.parent
+        resolved = existing.resolve() / lexical.relative_to(existing)
+    except (OSError, ValueError) as exc:
+        # A model that wrote prose, a NUL byte, or 4000 characters into a path
+        # field. Not an escape attempt and not worth crashing a run over --
+        # see this module's OutsideWorkspace docstring for what that cost once.
+        raise OutsideWorkspace(
+            f"{relative.strip()[:80]!r} is not a usable path: {exc}"
+        ) from None
 
     try:
         resolved.relative_to(root)

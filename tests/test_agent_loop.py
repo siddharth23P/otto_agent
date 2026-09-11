@@ -282,3 +282,154 @@ def test_an_unbound_budget_changes_nothing(monkeypatch):
     fake = _Scripted(["FINAL:\ndone"])
     _install(monkeypatch, fake)
     assert pn.agent(_state()).update["output"] == "done"
+
+
+# --------------------------------------------------------------------------
+# switch_mode, and the guards against thrashing
+# --------------------------------------------------------------------------
+#
+# A model choosing its own model is a new failure mode. The guards are ordered
+# cheapest first, and the first one is free: a swap costs a model call and
+# yields no tool result, so it already competes for budget against real work.
+
+def test_a_swap_changes_which_task_the_next_call_routes_to(monkeypatch):
+    asked: list = []
+
+    def chat_model(task, *a, **kw):
+        asked.append(task)
+        return fake
+
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nplan",
+        "FINAL:\ndone",
+    ])
+    monkeypatch.setattr(pn.ROUTER, "chat_model", chat_model)
+
+    result = pn.agent(_state())
+
+    assert result.update["mode"] == "plan"
+    assert asked[-1] is pn.MODES["plan"].task
+    assert asked[0] is pn.MODES[pn.DEFAULT_MODE].task
+
+
+def test_a_swap_keeps_everything_that_came_before_it(monkeypatch):
+    """The whole point. Changing role used to mean a node boundary and a
+    discarded conversation."""
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint('the earlier finding')",
+        "ACTION: switch_mode\nCODE:\nplan",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+    pn.agent(_state())
+
+    after_swap = "\n".join(m.content for m in fake.seen[-1])
+    assert "the earlier finding" in after_swap
+
+
+def test_the_swap_is_recorded_for_the_board_and_the_trace(monkeypatch):
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nplan\nneeds ordering first",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+    result = pn.agent(_state())
+
+    [line] = result.update["mode_log"]
+    assert "solve -> plan" in line
+    assert "needs ordering first" in line
+
+
+def test_an_unknown_mode_is_refused_and_the_run_carries_on(monkeypatch):
+    """A refusal is a message the model reads and acts on, exactly like a
+    failed tool result -- never an exception."""
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nrefactor",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+    result = pn.agent(_state())
+
+    assert result.update["mode"] == pn.DEFAULT_MODE
+    assert "not a mode" in "\n".join(m.content for m in fake.seen[-1])
+
+
+def test_switching_to_the_mode_you_are_in_does_not_repeat_the_guidance(monkeypatch):
+    """Repeating it would grow the prompt every time the model asked for what
+    it already has."""
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        f"ACTION: switch_mode\nCODE:\n{pn.DEFAULT_MODE}",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+    pn.agent(_state())
+
+    sent = [m.content for m in fake.seen[-1]]
+    assert sum(1 for m in sent if m.startswith(f"MODE: {pn.DEFAULT_MODE}")) == 1
+    assert any("already in" in m for m in sent)
+
+
+def test_a_swap_straight_after_a_swap_is_refused(monkeypatch):
+    """Switching is not progress. This is the guard that catches ping-ponging,
+    and it is deliberately shaped like REPEATED_CALL_NOTE, which measurement
+    already showed this model acts on."""
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nplan",
+        "ACTION: switch_mode\nCODE:\nfind",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+    result = pn.agent(_state())
+
+    assert result.update["mode"] == "plan", "the second swap should not have taken"
+    assert "nothing done in between" in "\n".join(m.content for m in fake.seen[-1])
+
+
+def test_doing_work_between_swaps_makes_the_next_one_allowed(monkeypatch):
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nplan",
+        "ACTION: execute_python\nCODE:\nprint(2)",
+        "ACTION: switch_mode\nCODE:\nfind",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+    assert pn.agent(_state()).update["mode"] == "find"
+
+
+def test_a_run_that_will_not_stop_switching_is_capped(monkeypatch, ):
+    """The backstop, not the main guard -- the work-between-swaps rule catches
+    ping-ponging much earlier."""
+    monkeypatch.setattr(pn, "MAX_MODE_SWAPS", 2)
+    swap_then_work = [
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nplan",
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nfind",
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nsummarize",
+        "FINAL:\ndone",
+    ]
+    fake = _Scripted(swap_then_work)
+    _install(monkeypatch, fake)
+    result = pn.agent(_state())
+
+    assert result.update["mode"] == "find", "the third swap should have been capped"
+    assert "Finish in the mode" in "\n".join(m.content for m in fake.seen[-1])
+
+
+def test_the_mode_survives_a_rejection(monkeypatch):
+    """A run that switched to plan and got rejected should resume planning,
+    not silently revert to the default."""
+    fake = _Scripted(["FINAL:\nsecond attempt"])
+    _install(monkeypatch, fake)
+
+    result = pn.agent(_state(mode="plan", transcript=[{"kind": "human", "content": "earlier"}],
+                             feedback="not good enough"))
+
+    assert result.update["mode"] == "plan"
