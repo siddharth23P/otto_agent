@@ -1199,6 +1199,48 @@ MUTATION_GATE_NOTE = (
 )
 
 
+#: How often the loop is reminded of things it was told once.
+#:
+#: Long runs suffer instruction fade-out: what was said in the system prompt
+#: stops steering behaviour as the conversation grows past it. The answer that
+#: works is event-driven reminders delivered in the CONVERSATION rather than by
+#: rewriting the system prompt -- rewriting it would invalidate every vendor's
+#: prefix cache, and the model has stopped attending to that region anyway.
+#:
+#: These ride on a tool result that was being sent regardless, so they cost no
+#: model call at all.
+REMINDER_EVERY = 6
+
+#: The reflection from the strongest cheap result in the survey. Its ablation
+#: is the point: an agent that COULD write itself tools scored 62% -> 64%;
+#: adding this question after each step took it to 76%, and the system to 77.4%
+#: on SWE-bench Verified -- beating offline self-improvers that cost 1231 GPU
+#: hours. Deciding WHEN to build a tool is the mechanism; being able to is not.
+TOOL_BUILDING_NOTE = (
+    "You have been at this a while. Is there a small script you could write "
+    "once and run repeatedly that would make the rest of this faster or more "
+    "reliable than doing it by hand each time? Write it if so; if not, carry "
+    "on."
+)
+
+
+def _reminders(iteration: int, checklist: list[dict] | None) -> str:
+    """What to re-say at this point in the loop, if anything.
+
+    Deliberately periodic rather than every turn. Said constantly these become
+    part of the wallpaper, which is the failure mode they exist to fix.
+    """
+    if iteration == 0 or iteration % REMINDER_EVERY:
+        return ""
+    parts = [TOOL_BUILDING_NOTE]
+    open_items = [i for i in (checklist or []) if i.get("status") == "pending"]
+    if open_items:
+        parts.append(
+            "Still open:\n" + "\n".join(f"- {i['text']}" for i in open_items)
+        )
+    return "\n\n".join(parts)
+
+
 def _mutates(tool_name: str) -> bool:
     """Whether this tool changes something that cannot be taken back.
 
@@ -1558,7 +1600,8 @@ def _transcript_size(messages: list) -> int:
 
 def _agent_loop(state: AgentState, messages: list, *, mode: str,
                 actions: list[str], mode_log: list[str],
-                seed: list | None = None) -> tuple[str, str, str]:
+                seed: list | None = None,
+                checklist: list[dict] | None = None) -> tuple[str, str, str]:
     """Run one conversation until it answers, pauses, or runs out of budget.
 
     Returns `(output, why_it_stopped, mode)`. `output` is only ever set from an
@@ -1581,6 +1624,7 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     #: (tool, target) pairs already held once. A gate that fired every time
     #: would either loop forever or teach the model to ignore it.
     confirmed: set[str] = set()
+    iteration = 0
     llm = ROUTER.chat_model(MODES[mode].task)
 
     while True:
@@ -1679,6 +1723,13 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
                 evidence += "\n\n" + REPEATED_CALL_NOTE.format(
                     n=repeats, tool=tool_name, target=target,
                 )
+        iteration += 1
+        # The LIVE checklist, not state's. On a first run the loop builds it
+        # and state still holds None, so reading state here silently reminded
+        # the model of nothing -- caught by a test, not by reading.
+        reminder = _reminders(iteration, checklist)
+        if reminder:
+            evidence += "\n\n" + reminder
         messages.append(AIMessage(text))
         messages.append(HumanMessage(f"TOOL RESULT:\n{evidence}"))
 
@@ -1821,6 +1872,7 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
             # What an escalation restarts from: the prompts, the task and the
             # checklist, with none of the working conversation.
             seed=list(messages[:3]),
+            checklist=checklist,
         )
     except NeedsUserInput as exc:
         return Command(
