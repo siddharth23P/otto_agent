@@ -834,6 +834,12 @@ def needs_container(task) -> bool:
                 or task.env_snapshot_commands)
 
 
+#: How far apart repeated trials' mock-service ports sit. Wide enough that a
+#: trial never reuses the previous one's range -- tasks declare at most a
+#: handful of services in a contiguous block.
+TRIAL_PORT_STRIDE = 20
+
+
 def run_task_file(
     claw: Claw,
     task_yaml: Path,
@@ -864,9 +870,13 @@ def run_task_file(
             claw, task_yaml,
             trace_dir=trace_dir, cfg=cfg, judge=judge,
             architecture=architecture,
-            # Each trial needs its own ports: the previous container's
-            # services are stopped but a re-bind can still race the kernel.
-            port_offset=port_offset + trial,
+            # Each trial gets its own port range. The previous trial's
+            # services are stopped, but a socket in TIME_WAIT can still refuse
+            # the rebind, and a task that fails to start scores zero in a way
+            # that looks like the agent's fault. TRIAL_PORT_STRIDE, not 1,
+            # because a shift of one lands a trial on the range the one before
+            # it was just using.
+            port_offset=port_offset + trial * TRIAL_PORT_STRIDE,
             sandbox_image=sandbox_image,
             max_seconds=max_seconds,
         )
