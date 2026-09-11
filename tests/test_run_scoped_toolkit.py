@@ -19,6 +19,7 @@ from agent.pipeline.toolkit import (
     dispatch_table,
     json_body,
     render_note,
+    validate_against,
 )
 
 
@@ -205,3 +206,73 @@ def test_an_unbound_tool_is_still_refused_by_name():
     ])
     pn._tool_loop(llm, [SystemMessage("role"), HumanMessage("go")])
     assert "is not available" in llm.calls[1][-1]
+
+
+# --------------------------------------------------------------------------
+# Checking a call against its own contract, in code
+# --------------------------------------------------------------------------
+#
+# The failure class named dominant in production is execution-alignment:
+# plausible reasoning decoupled from the output contract -- an action that
+# reads perfectly and cannot possibly work. A text protocol widens that gap,
+# because nothing structurally enforces the shape of a call. Closing it in code
+# works: one system eliminated every illegal move across 145 environments by
+# validating rather than instructing.
+
+_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string"},
+        "limit": {"type": "integer"},
+        "order": {"type": "string", "enum": ["asc", "desc"]},
+    },
+    "required": ["query"],
+}
+
+
+def test_a_well_formed_call_passes():
+    assert validate_against(_SCHEMA, {"query": "invoices", "limit": 5}) == ""
+
+
+def test_a_missing_required_field_is_named(monkeypatch):
+    problem = validate_against(_SCHEMA, {"limit": 5})
+    assert "query" in problem
+    assert "missing required" in problem
+
+
+def test_the_shape_is_repeated_back_so_the_next_try_is_right():
+    """Told in the terms of its own call rather than as a 400 from someone
+    else's service several seconds later."""
+    problem = validate_against(_SCHEMA, {})
+    assert "query: string" in problem
+
+
+def test_a_wrong_type_is_caught():
+    assert "integer" in validate_against(_SCHEMA, {"query": "a", "limit": "five"})
+
+
+def test_a_boolean_is_not_a_number():
+    """bool is an int in Python, and a schema asking for a number does not
+    mean True."""
+    assert validate_against(_SCHEMA, {"query": "a", "limit": True}) != ""
+
+
+def test_an_unknown_field_is_caught():
+    assert "nonsense" in validate_against(_SCHEMA, {"query": "a", "nonsense": 1})
+
+
+def test_a_value_outside_an_enum_is_caught():
+    assert "asc" in validate_against(_SCHEMA, {"query": "a", "order": "sideways"})
+
+
+def test_no_schema_means_no_opinion():
+    """A tool that declares nothing is not second-guessed."""
+    assert validate_against({}, {"anything": "goes"}) == ""
+
+
+def test_it_never_rejects_what_it_does_not_understand():
+    """Shallow on purpose -- this catches calls that cannot work, it does not
+    reimplement JSON Schema."""
+    exotic = {"type": "object", "properties": {"x": {"type": "null"},
+                                               "y": {"oneOf": [{"type": "string"}]}}}
+    assert validate_against(exotic, {"x": None, "y": "whatever"}) == ""

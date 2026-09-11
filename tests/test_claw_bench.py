@@ -237,3 +237,14 @@ def test_an_unrecognised_tool_is_gated():
 def test_a_write_verb_wins_over_a_read_verb_in_the_same_name():
     """`get_or_create` creates."""
     assert cb.tool_mutates("get_or_create_record")
+
+
+def test_a_task_tool_checks_its_call_before_spending_a_round_trip():
+    """The benchmark's tools carry real JSON Schemas, and a 400 from the far
+    end says the same thing in someone else's vocabulary several seconds
+    later."""
+    import inspect
+
+    source = inspect.getsource(cb.task_tools)
+    assert "validate_against" in source
+    assert "spec.input_schema" in source
