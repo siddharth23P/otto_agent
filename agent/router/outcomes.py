@@ -27,6 +27,7 @@ exercised all behave the way they read.
 from __future__ import annotations
 
 import logging
+import random
 import sqlite3
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -44,6 +45,22 @@ DB_DIR = Path.home() / ".otto"
 #: between identical runs are noise, and acting on noise is how a router
 #: convinces itself a coin is weighted.
 MIN_SAMPLES = 12
+
+#: How often the chain is handed to the candidate we know LEAST about instead
+#: of the one the evidence prefers.
+#:
+#: Without this the ordering freezes permanently, and the first version of
+#: this file had exactly that bug. Once a candidate is demoted it stops being
+#: resolved, so it stops accruing runs, so its record stays frozen at the
+#: twelve samples that demoted it -- measured: 200 further runs left the
+#: loser on 12. Twelve runs then decide a seat forever, and a model that
+#: later improves (a newer pin, a provider that fixed something, or simply
+#: twelve unlucky draws) never gets a second chance.
+#:
+#: One in ten, and only while the log is writable: exploring without
+#: recording what happened costs a worse answer and learns nothing, which is
+#: also what keeps a held-out measurement reproducible.
+EXPLORATION_RATE = 0.10
 
 #: How much better one candidate's approval rate has to be before it overtakes
 #: a candidate declared above it. A margin, not a strict comparison, because at
@@ -233,6 +250,10 @@ def reorder(task: str, candidates, model_id_of=spec_id) -> list:
         return list(candidates)
 
     ordered = list(candidates)
+    if explorer := _explore(ordered, known, model_id_of):
+        ordered.remove(explorer)
+        return [explorer, *ordered]
+
     for _ in range(len(ordered)):
         settled = True
         for i in range(len(ordered) - 1):
@@ -244,6 +265,24 @@ def reorder(task: str, candidates, model_id_of=spec_id) -> list:
         if settled:
             break
     return ordered
+
+
+def _explore(candidates, known, model_id_of):
+    """Occasionally, the trusted candidate with the fewest runs behind it.
+
+    Exploitation alone is a ratchet: the winner keeps winning because only
+    the winner is ever asked. This is the one in ten that keeps every
+    measured candidate's record alive. It returns None the rest of the time,
+    and always when the log cannot be written to -- an exploration nobody
+    records is a worse answer bought for nothing.
+    """
+    if not _WRITES.get() or random.random() >= EXPLORATION_RATE:
+        return None
+    measured = [(known[mid], c) for c in candidates
+                if (mid := model_id_of(c) or "") in known]
+    if len(measured) < 2:
+        return None  # nothing to explore between
+    return min(measured, key=lambda pair: pair[0].runs)[1]
 
 
 def _overtakes(challenger: SeatRecord | None, incumbent: SeatRecord | None) -> bool:
