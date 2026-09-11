@@ -513,6 +513,105 @@ def write_file(body: str) -> ToolResult:
     )
 
 
+#: How `edit_file` locates the text to replace, in order. The first pass that
+#: finds the snippet EXACTLY ONCE wins.
+#:
+#: Exact match alone was the whole implementation, and it is the single
+#: cheapest thing to fix in a coding agent: models quote `old_text` with
+#: whitespace drift -- a tab that became spaces, a trailing space that did not
+#: survive the read, an indentation level lost when the snippet was echoed back.
+#: The answer the field converged on is a cascade of progressively looser
+#: matches rather than a smarter model.
+#:
+#: Every pass still requires a UNIQUE hit. A looser match that finds two
+#: candidates is not a licence to pick one -- which of them was meant is
+#: genuinely unknown, and guessing writes the edit into the wrong place, which
+#: is worse than refusing. Looseness buys tolerance of how the text was quoted,
+#: never tolerance of ambiguity about where it goes.
+def _match_exact(haystack: str, needle: str) -> list[int]:
+    out, i = [], haystack.find(needle)
+    while i != -1:
+        out.append(i)
+        i = haystack.find(needle, i + 1)
+    return out
+
+
+def _trailing_space_insensitive(haystack: str, needle: str) -> list[tuple[int, int]]:
+    """Match ignoring trailing whitespace on every line -- the most common
+    drift, and invisible in a diff."""
+    pattern = r"[ \t]*\n".join(
+        re.escape(line.rstrip()) for line in needle.split("\n")
+    )
+    return [(m.start(), m.end()) for m in re.finditer(pattern, haystack)]
+
+
+def _indent_insensitive(haystack: str, needle: str) -> list[tuple[int, int]]:
+    """Match ignoring how much each line is indented, but not the text itself.
+    Catches a snippet re-quoted at a different nesting level."""
+    lines = [line.strip() for line in needle.split("\n")]
+    if not any(lines):
+        return []
+    pattern = r"\n[ \t]*".join(re.escape(line) for line in lines)
+    pattern = r"[ \t]*" + pattern
+    return [(m.start(), m.end()) for m in re.finditer(pattern, haystack)]
+
+
+def _anchored(haystack: str, needle: str) -> list[tuple[int, int]]:
+    """Match on the first and last lines only, taking everything between them.
+
+    For a snippet whose middle was elided or misremembered. Deliberately last
+    and deliberately narrow: it needs at least three lines, both anchors must
+    be unique on their own, and the span it takes is whatever lies between --
+    so a wrong anchor pair is a visibly wrong edit rather than a subtle one.
+    """
+    lines = [line for line in needle.split("\n") if line.strip()]
+    if len(lines) < 3:
+        return []
+    head, tail = lines[0].strip(), lines[-1].strip()
+    heads = _match_exact(haystack, head)
+    tails = _match_exact(haystack, tail)
+    if len(heads) != 1 or len(tails) != 1 or tails[0] < heads[0]:
+        return []
+    return [(heads[0], tails[0] + len(tail))]
+
+
+#: (name shown to the model, finder). Order is the cascade.
+_EDIT_PASSES = (
+    ("exact", lambda h, n: [(i, i + len(n)) for i in _match_exact(h, n)]),
+    ("ignoring trailing whitespace", _trailing_space_insensitive),
+    ("ignoring indentation", _indent_insensitive),
+    ("anchored on its first and last lines", _anchored),
+)
+
+
+def _locate(original: str, old_text: str) -> tuple[int, int, str] | str:
+    """Where `old_text` sits in `original`, or why it could not be placed.
+
+    Returns `(start, end, how)` or an explanatory string for the caller to
+    hand back as a failed ToolResult.
+    """
+    for how, find in _EDIT_PASSES:
+        spans = find(original, old_text)
+        if len(spans) == 1:
+            return spans[0][0], spans[0][1], how
+        if len(spans) > 1:
+            return (
+                f"the ---OLD--- text appears {len(spans)} times ({how}) -- "
+                "it must appear exactly once; quote more surrounding lines to "
+                "make it unique"
+            )
+    return (
+        "the ---OLD--- text never appears, even ignoring whitespace and "
+        "indentation -- read the file and quote the lines you actually see"
+    )
+
+
+#: Ceiling on a file edited inside a container, since editing it means moving
+#: it out and back. Generous for source; a refusal names the size, so a caller
+#: that meant to edit a 50MB log learns why rather than waiting.
+MAX_EDIT_BYTES = 4 * 1024 * 1024
+
+
 def edit_file(body: str) -> ToolResult:
     """Replace an exact snippet in a workspace file. CODE: body is
 
@@ -556,16 +655,15 @@ def edit_file(body: str) -> ToolResult:
         return _workspace_failure("edit_file", f"{head.strip()!r} is not a file in the workspace")
 
     original = path.read_text(errors="replace")
-    occurrences = original.count(old_text)
-    if occurrences != 1:
-        found = "never appears" if occurrences == 0 else f"appears {occurrences} times"
-        return _workspace_failure(
-            "edit_file",
-            f"the ---OLD--- text {found} in {head.strip()} -- it must appear exactly once; "
-            "read the file and quote more surrounding lines to make it unique",
-        )
-    path.write_text(original.replace(old_text, new_text, 1))
-    return ToolResult(stdout=f"edited {head.strip()}", stderr="", returncode=0)
+    located = _locate(original, old_text)
+    if isinstance(located, str):
+        return _workspace_failure("edit_file", f"{located} (in {head.strip()})")
+    start, end, how = located
+    path.write_text(original[:start] + new_text + original[end:])
+    # Naming the pass that matched is not decoration: it tells the model its
+    # quote was off, and how, so the next one is closer.
+    note = "" if how == "exact" else f" (matched {how})"
+    return ToolResult(stdout=f"edited {head.strip()}{note}", stderr="", returncode=0)
 
 
 #: The exact-once replacement edit_file performs, as a script to run inside a
@@ -573,24 +671,29 @@ def edit_file(body: str) -> ToolResult:
 #: refuse at several, rather than guessing -- expressed once here so the two
 #: modes can't drift into disagreeing about what an edit means. Both texts
 #: arrive base64-encoded, so no quoting of the model's content is involved.
-_REMOTE_EDIT_SCRIPT = """
+#: Read a file out of the container, and write one back. Two halves of the
+#: same trip, because the MATCHING happens here rather than in there.
+#:
+#: It used to happen in there, as a second copy of the exact-match logic. That
+#: copy would now have to grow its own cascade and stay in step with this one
+#: forever -- which is exactly how `_tool_loop` and `_agent_loop` came to
+#: differ on the single line that mattered. One implementation, reached twice.
+_REMOTE_READ_SCRIPT = """
 import base64, sys
-path, old_b64, new_b64 = sys.argv[1], sys.argv[2], sys.argv[3]
-old = base64.b64decode(old_b64).decode()
-new = base64.b64decode(new_b64).decode()
 try:
-    original = open(path, errors="replace").read()
+    data = open(sys.argv[1], 'rb').read()
 except OSError as exc:
-    print(f"cannot read {path}: {exc}", file=sys.stderr); sys.exit(2)
-count = original.count(old)
-if count != 1:
-    found = "never appears" if count == 0 else f"appears {count} times"
-    print(f"the ---OLD--- text {found} in {path} -- it must appear exactly once; "
-          "read the file and quote more surrounding lines to make it unique",
-          file=sys.stderr)
-    sys.exit(3)
-open(path, "w").write(original.replace(old, new, 1))
-print(f"edited {path}")
+    print(f"cannot read {sys.argv[1]}: {exc}", file=sys.stderr); sys.exit(2)
+if len(data) > {cap}:
+    print(f"{sys.argv[1]} is {len(data)} bytes, too large to edit this way",
+          file=sys.stderr); sys.exit(4)
+print(base64.b64encode(data).decode())
+"""
+
+_REMOTE_WRITE_SCRIPT = """
+import base64, sys
+open(sys.argv[1], 'wb').write(base64.b64decode(sys.argv[2]))
+print(f"edited {sys.argv[1]}")
 """
 
 
@@ -605,14 +708,33 @@ def _remote_edit(remote, head: str, rest: str) -> ToolResult:
     old_part, _, new_part = rest.partition("---NEW---")
     old_text = old_part.split("---OLD---", 1)[1].strip("\n")
     new_text = new_part.strip("\n")
+    path = head.strip()
+
+    script = _REMOTE_READ_SCRIPT.replace("{cap}", str(MAX_EDIT_BYTES))
     stdout, stderr, code = remote(
-        f"python3 -c {shlex.quote(_REMOTE_EDIT_SCRIPT)} "
-        f"{shlex.quote(head.strip())} {_b64(old_text)} {_b64(new_text)}",
-        30.0,
+        f"python3 -c {shlex.quote(script)} {shlex.quote(path)}", 30.0,
     )
     if code != 0:
-        return _workspace_failure("edit_file", stderr.strip() or "edit failed")
-    return ToolResult(stdout=stdout.strip(), stderr="", returncode=0)
+        return _workspace_failure("edit_file", stderr.strip() or f"cannot read {path!r}")
+    try:
+        original = base64.b64decode(stdout.strip(), validate=True).decode(errors="replace")
+    except (ValueError, binascii.Error) as exc:
+        return _workspace_failure("edit_file", f"{path!r} did not transfer cleanly: {exc}")
+
+    located = _locate(original, old_text)
+    if isinstance(located, str):
+        return _workspace_failure("edit_file", f"{located} (in {path})")
+    start, end, how = located
+    edited = original[:start] + new_text + original[end:]
+
+    stdout, stderr, code = remote(
+        f"python3 -c {shlex.quote(_REMOTE_WRITE_SCRIPT)} "
+        f"{shlex.quote(path)} {_b64(edited)}", 30.0,
+    )
+    if code != 0:
+        return _workspace_failure("edit_file", stderr.strip() or "the edit could not be written back")
+    note = "" if how == "exact" else f" (matched {how})"
+    return ToolResult(stdout=f"edited {path}{note}", stderr="", returncode=0)
 
 
 def list_files(body: str) -> ToolResult:
