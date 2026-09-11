@@ -193,18 +193,43 @@ _BACKENDS = {"openai": OpenAIEmbeddingBackend, "gemini": GeminiEmbeddingBackend}
 _backend: EmbeddingBackend | None = None
 
 
+#: The measured default (2026-09-11). Chosen on evidence, not preference:
+#: scored against the local model on three LoCoMo conversations, 221 questions,
+#: with `otto eval-memory`'s own recall-coverage metric.
+#:
+#:     model                            conv 1   conv 2-3 (held out)   all
+#:     BAAI/bge-small-en-v1.5           96.0%    92.5%                 93.7%
+#:     openai:text-embedding-3-small    96.0%    --                    --
+#:     gemini:gemini-embedding-001      98.0%    96.7%                 97.3%
+#:
+#: Gemini recovers 8 more questions of 221, and the gain is LARGER on the two
+#: conversations never used for tuning (+4.2) than on the one that was (+2.0),
+#: which is the direction a real result moves in. OpenAI gained nothing over
+#: local at the worst latency of the three.
+#:
+#: The cost is latency, in two places that matter differently: a recall() query
+#: pays ~520ms against the local model's ~17ms, on the user's turn, every time;
+#: compaction pays ~820ms per 16 chunks but only when the Y buffer fills. The
+#: query path is the one to watch if this ever needs reversing.
+DEFAULT_HOSTED_SPEC = "gemini:gemini-embedding-001"
+
+
 def current_backend() -> EmbeddingBackend:
     """The backend this process embeds with.
 
-    Chosen once from OTTO_EMBEDDING_MODEL ("provider:model", e.g.
-    "openai:text-embedding-3-small"); anything unset or unrecognised means the
-    local model, which is the measured default.
+    OTTO_EMBEDDING_MODEL ("provider:model") wins if set. Otherwise the measured
+    default above -- but ONLY when its key is configured, because the local
+    model has to stay the floor: the offline test suite, `agent/eval/`'s
+    no-network paths and any machine without a Gemini key all depend on
+    embeddings working with no credentials at all.
     """
     global _backend
     if _backend is None:
         import os
 
         spec = os.environ.get("OTTO_EMBEDDING_MODEL", "").strip()
+        if not spec and os.environ.get("GEMINI_API_KEY"):
+            spec = DEFAULT_HOSTED_SPEC
         provider, _, model_id = spec.partition(":")
         factory = _BACKENDS.get(provider)
         _backend = factory(model_id) if factory and model_id else LocalBGEBackend()
