@@ -162,3 +162,46 @@ def test_vision_keeps_a_capability_fallback_so_a_withdrawal_is_survivable():
     assert chain[-1].is_query, "the tail should be a capability query"
     assert Capability.VISION in chain[-1].requires
     assert chain[-1].provider == "gemini"
+
+
+def test_a_vendors_own_published_ceiling_beats_the_provider_default():
+    """Gemini publishes max_temperature per model and it is NOT uniform: most
+    cap at 2, several at 1. A per-provider guess of 0-2 overshoots those."""
+    from agent.router.llm_provider.temperature import apply_to_params, published_maximum
+
+    class _Model:
+        id = "some-capped-model"
+        raw = {"max_temperature": 1.0}
+
+    assert published_maximum(_Model()) == 1.0
+    sent = apply_to_params("gemini", "some-capped-model", {"temperature": 1.8}, _Model())
+    assert sent["temperature"] == 1.0
+
+
+def test_the_published_ceiling_is_read_from_a_dict_or_an_object():
+    """ModelInfo.raw is whatever the SDK returned."""
+    from agent.router.llm_provider.temperature import published_maximum
+
+    class _Obj:
+        max_temperature = 2.0
+
+    class _WithObj:
+        raw = _Obj()
+
+    class _WithDict:
+        raw = {"maxTemperature": 2.0}
+
+    assert published_maximum(_WithObj()) == 2.0
+    assert published_maximum(_WithDict()) == 2.0
+    assert published_maximum(object()) is None
+
+
+def test_a_model_that_admits_no_choice_still_wins_over_a_published_ceiling():
+    """o4-mini rejects every value but its default, so a range would be wrong
+    even if OpenAI published one."""
+    from agent.router.llm_provider.temperature import policy_for
+
+    class _Model:
+        raw = {"max_temperature": 2.0}
+
+    assert policy_for("openai", "o4-mini", _Model()).fixed
