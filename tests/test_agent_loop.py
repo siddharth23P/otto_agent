@@ -855,3 +855,69 @@ def test_the_restart_is_recorded(monkeypatch):
     result = pn.agent(_state(mode="find"))
 
     assert any("restarted" in line for line in result.update["mode_log"])
+
+
+# --------------------------------------------------------------------------
+# Reminders: what gets re-said, and what it costs
+# --------------------------------------------------------------------------
+#
+# Long runs suffer instruction fade-out. The reflection here comes from the
+# strongest cheap result in the survey, whose ablation is the whole point: an
+# agent that COULD write itself tools scored 62% -> 64%; adding the question
+# after each step took it to 76%. Deciding WHEN is the mechanism.
+
+def test_reminders_cost_no_model_call(monkeypatch):
+    """They ride on a tool result that was being sent regardless."""
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 12 + ["FINAL:\ndone"])
+    _install(monkeypatch, fake)
+    monkeypatch.setattr(pn, "REMINDER_EVERY", 2)
+
+    pn.agent(_state())
+
+    # One call per scripted reply and nothing extra.
+    assert len(fake.seen) == 13
+
+
+def test_the_tool_building_question_is_asked_on_a_long_run(monkeypatch):
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 8 + ["FINAL:\ndone"])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state())
+
+    assert any(pn.TOOL_BUILDING_NOTE in str(m.content)
+               for sent in fake.seen for m in sent)
+
+
+def test_a_short_run_is_not_nagged(monkeypatch):
+    """Said constantly these become wallpaper, which is the failure mode they
+    exist to fix."""
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)", "FINAL:\ndone"])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state())
+
+    assert not any(pn.TOOL_BUILDING_NOTE in str(m.content)
+                   for sent in fake.seen for m in sent)
+
+
+def test_the_reminder_restates_what_is_still_open(monkeypatch):
+    """Counters fade-out on the thing that matters most: what the run is for."""
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 8 + ["FINAL:\ndone"])
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
+    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["the suite passes"])
+
+    pn.agent(_state())
+
+    assert any("Still open" in str(m.content) and "the suite passes" in str(m.content)
+               for sent in fake.seen for m in sent)
+
+
+def test_a_settled_checklist_is_not_restated():
+    assert "Still open" not in pn._reminders(
+        pn.REMINDER_EVERY, [{"text": "done thing", "status": "met", "evidence": "saw it"}])
+
+
+def test_reminders_are_periodic_not_constant():
+    assert pn._reminders(1, None) == ""
+    assert pn._reminders(pn.REMINDER_EVERY, None) != ""
+    assert pn._reminders(pn.REMINDER_EVERY + 1, None) == ""
