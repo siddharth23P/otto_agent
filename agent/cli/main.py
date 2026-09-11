@@ -19,6 +19,7 @@ from agent.cli.errors import friendly
 from agent.cli import doctor as doctor_cmd
 from agent.cli import eval as eval_cmd
 from agent.cli import eval_claw as eval_claw_cmd
+from agent.cli import eval_compaction as eval_compaction_cmd
 from agent.cli import eval_hle as eval_hle_cmd
 from agent.cli import eval_memory as eval_memory_cmd
 from agent.cli import lessons as lessons_cmd
@@ -46,6 +47,7 @@ for _name, _fn in (
     ("eval-memory", eval_memory_cmd.eval_memory_cmd),
     ("eval-hle", eval_hle_cmd.eval_hle_cmd),
     ("eval-claw", eval_claw_cmd.eval_claw_cmd),
+    ("eval-compaction", eval_compaction_cmd.eval_compaction_cmd),
     ("lessons", lessons_cmd.lessons_cmd),
 ):
     app.command(_name)(friendly(_fn))

@@ -159,3 +159,63 @@ def test_the_stub_promises_nothing_when_nothing_was_stored(fake_embeddings):
     pn._compact(messages)
 
     assert not any(pn.EVICTED_HINT.strip() in pn._content_text(m.content) for m in messages)
+
+
+# --------------------------------------------------------------------------
+# Type-aware compaction, in the conversation queue
+# --------------------------------------------------------------------------
+
+def test_what_the_person_said_is_never_handed_to_the_summariser(tmp_path):
+    """Type-blind compaction is destructive in a specific way: it is the
+    CONSTRAINTS that go. Constraint recall falls to 53% at 50% compression and
+    24% at 10%, where a type-aware policy holds 100/95/80.
+
+    In a conversation the type is visible from the speaker. What the person
+    said is the requirement; what Otto said is a report of work, and a report
+    can be summarised without losing anything the next turn has to honour.
+    """
+    from agent.memory.queue import TieredQueue
+    from agent.memory.store import MemoryStore
+
+    seen: list[str] = []
+
+    def summarize(prompt: str) -> str:
+        seen.append(prompt)
+        return "- something happened [1]"
+
+    store = MemoryStore(tmp_path / "q.db")
+    queue = TieredQueue(kind="history", store=store, summarize=summarize,
+                        x_budget=40, y_budget=120)
+    for i in range(60):
+        queue.append(f"otto: did some work, step {i}, nothing notable about it")
+        if i == 5:
+            queue.append("you: never write the deployment key to a log")
+
+    assert seen, "nothing was compacted, so the test proved nothing"
+    assert not any("deployment key" in prompt for prompt in seen), (
+        "the constraint was handed to the summariser"
+    )
+    assert "deployment key" in queue.current_view(), (
+        "the constraint is not in what a prompt would be built from"
+    )
+    store.close()
+
+
+def test_turning_the_protection_off_puts_it_back_in_the_blender(tmp_path):
+    """The knob exists so the bench can measure the difference. If this stops
+    working, `otto eval-compaction`'s type-blind arms are measuring nothing."""
+    from agent.memory.queue import TieredQueue
+    from agent.memory.store import MemoryStore
+
+    seen: list[str] = []
+    store = MemoryStore(tmp_path / "q.db")
+    queue = TieredQueue(kind="history", store=store,
+                        summarize=lambda p: seen.append(p) or "- x [1]",
+                        x_budget=40, y_budget=120, protect="")
+    for i in range(60):
+        queue.append(f"otto: did some work, step {i}, nothing notable about it")
+        if i == 5:
+            queue.append("you: never write the deployment key to a log")
+
+    assert any("deployment key" in prompt for prompt in seen)
+    store.close()
