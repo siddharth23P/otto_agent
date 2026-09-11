@@ -246,3 +246,22 @@ def test_an_interrupt_is_detected_rather_than_read_as_a_finished_run():
 
 def test_an_ordinary_finished_run_is_not_mistaken_for_a_pause():
     assert not _paused({"final_output": "done", "pending_question": None})
+
+
+def test_a_question_nobody_can_answer_becomes_the_answer():
+    """`run_pipeline` has no resume path -- that is the streaming API. So a run
+    that stopped to ask something returns the question, which is both honest
+    and useful: the caller learns which decision is missing.
+
+    Live on Claw-Eval T026: the mutation gate correctly stopped the agent
+    guessing between three contacts named Zhang, it asked exactly as the grader
+    requires, and the task recorded no assistant output at all."""
+    state = _salvage({"pending_question": "which Zhang did you mean?",
+                      "pending_choices": ["Wei Zhang, Engineering", "Wei Zhang, Marketing"]})
+    assert "which Zhang did you mean?" in state["final_output"]
+    assert "Marketing" in state["final_output"]
+
+
+def test_a_real_answer_still_wins_over_a_pending_question():
+    state = _salvage({"output": "the real answer", "pending_question": "anything?"})
+    assert state["final_output"] == "the real answer"
