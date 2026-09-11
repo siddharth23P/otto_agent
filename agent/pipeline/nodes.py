@@ -315,6 +315,7 @@ from agent.memory.session import current_store
 from agent.memory.lessons import (
     Lesson, learning_enabled, parse_distilled, recall_lessons, record_lessons,
 )
+from agent.pipeline.evidence import Ledger, render_note as render_unproven
 from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
@@ -1883,6 +1884,11 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     #: (tool, target) pairs already held once. A gate that fired every time
     #: would either loop forever or teach the model to ignore it.
     confirmed: set[str] = set()
+    #: What this run has actually proved. See agent/pipeline/evidence.py; it
+    #: costs nothing until the moment a run tries to finish with code changed
+    #: and nothing run, and it is allowed to say that once.
+    ledger = Ledger()
+    asked_for_proof = False
     iteration = 0
     llm = ROUTER.chat_model(MODES[mode].task)
 
@@ -1909,6 +1915,20 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
         kind_of_reply, tool_name, body = _parse_worker_reply(text, allowed=dispatch)
 
         if kind_of_reply == "final":
+            # The one place this is worth an exchange: code changed, nothing
+            # ran. Asked ONCE -- a guard that keeps asking is a guard the model
+            # learns to answer rather than act on. It is also allowed to be
+            # told there is nothing to run, because enforcement with no way to
+            # say no gets routed around rather than obeyed.
+            if ledger.needs_check and not asked_for_proof:
+                asked_for_proof = True
+                _emit({"agent": {"board": [
+                    "holding the answer: " + ", ".join(ledger.unproven[:3])
+                    + " changed with nothing run"
+                ]}})
+                messages.append(AIMessage(text))
+                messages.append(HumanMessage(render_unproven(ledger)))
+                continue
             return _strip_code_fence(body), "final", mode
 
         if kind_of_reply == "unparseable":
@@ -1982,6 +2002,7 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
             evidence = problem
         else:
             result = dispatch[tool_name](body)
+            ledger.record(tool_name, body, result.returncode)
             line = _summarise_action(tool_name, body, result)
             actions.append(f"{mode}: {line}")
             _emit({"agent": {"board": [f"{mode}: {line}"]}})
