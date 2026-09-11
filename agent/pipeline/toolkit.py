@@ -162,6 +162,75 @@ def render_note(tools: Mapping[str, ExtraTool] | None = None) -> str:
     return "\n".join(lines)
 
 
+#: JSON Schema types Otto checks. Anything else in a schema is accepted
+#: without comment -- the point is catching a call that CANNOT work, not
+#: reimplementing a validator.
+_TYPE_CHECKS: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "integer": (int,),
+    "number": (int, float),
+    "boolean": (bool,),
+    "array": (list,),
+    "object": (dict,),
+}
+
+
+def validate_against(schema: dict[str, Any], parsed: dict[str, Any]) -> str:
+    """What is wrong with this call, or "" if nothing is.
+
+    Checked in code rather than described in a prompt, because the failure this
+    addresses is the one named as dominant in production: plausible reasoning
+    decoupled from the output contract -- an action that reads perfectly and
+    cannot possibly work. A text protocol like Otto's widens that gap, since
+    nothing structurally enforces the shape of a call. The counter-evidence is
+    that closing it in code works: one system eliminated every illegal move
+    across 145 environments by validating rather than instructing.
+
+    Catching it HERE rather than at the far end of an HTTP round trip means the
+    model is told what it got wrong in the terms of its own call -- "you left
+    out `query`" -- instead of reading a 400 back from someone else's service
+    and inferring.
+
+    Deliberately shallow: missing required fields, wrong primitive types,
+    unknown fields. Not a JSON Schema implementation, and it never rejects
+    something it merely does not understand.
+    """
+    if not schema:
+        return ""
+    properties = schema.get("properties") or {}
+    required = [k for k in (schema.get("required") or ()) if isinstance(k, str)]
+
+    missing = [k for k in required if k not in parsed]
+    if missing:
+        return (
+            f"missing required field(s): {', '.join(missing)}. "
+            f"This call takes {_one_line_schema(schema)}"
+        )
+
+    for key, value in parsed.items():
+        spec = properties.get(key)
+        if spec is None:
+            if properties:
+                return (
+                    f"unknown field {key!r}. This call takes "
+                    f"{_one_line_schema(schema)}"
+                )
+            continue
+        expected = _TYPE_CHECKS.get((spec or {}).get("type", ""))
+        # bool is an int in Python, and a schema asking for a number does not
+        # mean True.
+        if expected and (not isinstance(value, expected)
+                         or (expected != (bool,) and isinstance(value, bool))):
+            return (
+                f"field {key!r} should be {spec['type']}, got "
+                f"{type(value).__name__}"
+            )
+        allowed = (spec or {}).get("enum")
+        if allowed and value not in allowed:
+            return f"field {key!r} must be one of {allowed}, got {value!r}"
+    return ""
+
+
 def json_body(tool_name: str, body: str) -> dict[str, Any] | ToolResult:
     """Parse a CODE: body as the JSON object a schema-shaped tool expects.
 

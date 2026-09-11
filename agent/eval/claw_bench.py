@@ -69,7 +69,9 @@ from typing import Any, Callable
 
 from agent.pipeline.budget import Budget, bind_budget
 from agent.pipeline.execution import bind_command_runner
-from agent.pipeline.toolkit import ExtraTool, bind_extra_tools, json_body
+from agent.pipeline.toolkit import (
+    ExtraTool, bind_extra_tools, json_body, validate_against,
+)
 from agent.pipeline.tools import ToolResult
 from agent.pipeline.workspace import bind_workspace
 
@@ -371,6 +373,11 @@ def task_tools(claw, task, dispatcher, recorder: TraceRecorder, deadline: Deadli
             parsed = json_body(spec.name, body)
             if isinstance(parsed, ToolResult):
                 return parsed
+            # Check the call against its own schema before spending a round
+            # trip on it. A 400 from the far end says the same thing in
+            # someone else's vocabulary, several seconds later.
+            if problem := validate_against(spec.input_schema or {}, parsed):
+                return ToolResult(stdout="", stderr=f"{spec.name}: {problem}", returncode=1)
 
             use = claw.ToolUseBlock(id=f"toolu_{uuid.uuid4().hex[:12]}", name=spec.name, input=parsed)
             recorder.message("assistant", [use])
