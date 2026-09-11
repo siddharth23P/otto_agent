@@ -531,14 +531,16 @@ _TOOL_BODY_HINT = (
     "complete_code: code, optionally `---SUFFIX---` then trailing code. "
     "predict_edit: code only, no instruction. "
     "recall_memory: a search query. "
+    "code_map: `define <name>`, `uses <name>`, `imports <module>` or "
+    "`outline <path>` -- exact names, Python only. "
     "switch_mode: one word from " + "|".join(mode_names()) + ", optionally why "
     "after it -- the conversation carries on. "
     "delegate: that same word, then one bounded job. It runs on that mode's "
     "model with none of this conversation and reports back. "
-    "ask_user: a question, optionally then `CHOICES: a | b`. Ask when an "
-    "action you are about to take cannot be undone AND more than one target "
-    "fits -- which recipient, which record, which file. Picking one and "
-    "hoping is the worst option available."
+    # The WHEN of asking used to live here too, and it is said again by
+    # MUTATION_GATE_NOTE at the moment it applies -- which is where a model
+    # can act on it. This block's job is what goes in the body.
+    "ask_user: a question, optionally then `CHOICES: a | b`."
 )
 
 #: Which standing tools change things, named from the registry rather than
