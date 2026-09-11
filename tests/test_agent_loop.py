@@ -769,3 +769,89 @@ def test_the_summary_still_lines_up_after_some_are_compacted(monkeypatch):
     assert "first call" in messages[0].content
     assert messages[1].content == "TOOL RESULT:\nshort"
     assert "third call" in messages[2].content
+
+
+# --------------------------------------------------------------------------
+# The handoff is asymmetric
+# --------------------------------------------------------------------------
+#
+# Handing a stronger model the weaker one's trajectory recovers under half the
+# quality it should, at four to six times the cost; DISCARDING that trajectory
+# takes recovery from 47% to 64%. The reverse is not true -- removing a strong
+# model's trajectory before handing down hurts. Strong trajectories guide weak
+# receivers; weak trajectories burden strong ones.
+
+def test_escalating_drops_the_working_conversation(monkeypatch):
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint('a weaker model was here')",
+        "ACTION: switch_mode\nCODE:\nsolve",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="find"))
+
+    after = "\n".join(m.content for m in fake.seen[-1])
+    assert "a weaker model was here" not in after, "the weak trajectory was carried up"
+
+
+def test_escalating_keeps_what_the_run_established(monkeypatch):
+    """The restart is only affordable because the checklist survives it: what
+    is established is state, not conversation."""
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nsolve",
+        "FINAL:\ndone",
+    ])
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
+    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["the thing is true"])
+
+    pn.agent(_state(mode="find"))
+
+    after = "\n".join(m.content for m in fake.seen[-1])
+    assert "the thing is true" in after, "the checklist did not survive the restart"
+    assert "fix the failing test" in after, "the task did not survive the restart"
+
+
+def test_de_escalating_carries_everything(monkeypatch):
+    """Removing a strong model's trajectory before handing down measurably
+    hurts, so this direction keeps it."""
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint('a stronger model found this')",
+        "ACTION: switch_mode\nCODE:\nsummarize",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="solve"))
+
+    after = "\n".join(m.content for m in fake.seen[-1])
+    assert "a stronger model found this" in after, "the strong trajectory was dropped"
+
+
+def test_a_sideways_move_is_not_an_escalation(monkeypatch):
+    """Two modes at the same depth carry context; only moving UP restarts."""
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint('sideways evidence')",
+        "ACTION: switch_mode\nCODE:\nsummarize",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state(mode="find"))
+
+    after = "\n".join(m.content for m in fake.seen[-1])
+    assert "sideways evidence" in after
+
+
+def test_the_restart_is_recorded(monkeypatch):
+    fake = _Scripted([
+        "ACTION: execute_python\nCODE:\nprint(1)",
+        "ACTION: switch_mode\nCODE:\nsolve",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    result = pn.agent(_state(mode="find"))
+
+    assert any("restarted" in line for line in result.update["mode_log"])
