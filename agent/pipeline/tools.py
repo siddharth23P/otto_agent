@@ -105,6 +105,7 @@ from agent.memory.retrieval import (
     EVICTED_KIND, HISTORY_KIND, NOTHING_COMPACTED, recall, recall_chunks,
 )
 from agent.memory.session import current_store
+from agent.pipeline import codemap as _codemap
 from agent.pipeline import browsing
 from agent.pipeline import screen as screening
 from agent.pipeline.execution import current_command_runner
@@ -1330,10 +1331,76 @@ TOOL_TIERS: dict[str, str] = {
     "browse_act": MUTATING,
     "web_search": READ_ONLY,
     "rag": READ_ONLY,
+    "code_map": READ_ONLY,
     "complete_code": READ_ONLY,
     "predict_edit": READ_ONLY,
     "recall_memory": READ_ONLY,
 }
+
+#: One parsed index per workspace, keyed by path and by what the tree looked
+#: like when it was built. Rebuilt when a Python file's size or mtime changes,
+#: which is cheap to check and catches every edit the agent itself makes --
+#: an index that went stale mid-run would answer confidently about code that
+#: no longer exists, which is worse than being slow.
+_CODE_MAPS: dict[str, tuple[int, dict]] = {}
+
+
+def _tree_stamp(root) -> int:
+    stamp = 0
+    for path in root.rglob("*.py"):
+        if _codemap.SKIP_DIRS.intersection(path.parts):
+            continue
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        stamp ^= hash((str(path), int(info.st_mtime_ns), info.st_size))
+    return stamp
+
+
+def code_map(query: str) -> ToolResult:
+    """Where a Python name is DEFINED and what references it, read from the
+    syntax tree rather than searched for.
+
+    `query` is one of:
+
+        define <name>       every class/function/method with that exact name
+        uses <name>         every file and line that references it
+        imports <module>    every file importing that module or below it
+        outline <path>      every definition in one file, in order
+
+    Exact names, not substrings: `save` and `save_all` are different
+    functions, and conflating them is what makes grep a poor answer here. No
+    model call and nothing leaves the machine -- see agent/pipeline/codemap.py,
+    including why this covers Python and says so rather than half-covering
+    everything.
+    """
+    try:
+        root = resolve_in_workspace(".")
+    except (OutsideWorkspace, OSError, ValueError) as exc:
+        return ToolResult(stdout="", stderr=f"code_map: {exc}", returncode=1)
+
+    key = str(root)
+    stamp = _tree_stamp(root)
+    cached = _CODE_MAPS.get(key)
+    if cached is None or cached[0] != stamp:
+        files = _codemap.index_tree(root)
+        if not files:
+            return ToolResult(
+                stdout="",
+                stderr=("code_map: no Python files here. It reads Python only "
+                        "-- use execute_bash with grep for other languages."),
+                returncode=1,
+            )
+        _CODE_MAPS[key] = (stamp, files)
+        cached = _CODE_MAPS[key]
+
+    answer = _codemap.render(cached[1], query)
+    broken = [i.path for i in cached[1].values() if i.error]
+    if broken:
+        answer += f"\n({len(broken)} file(s) did not parse: {', '.join(broken[:3])})"
+    return ToolResult(stdout=answer, stderr="", returncode=0)
+
 
 #: What nodes.py's _tool_loop actually calls, keyed by the tool name an
 #: ACTION: line names. Every entry takes one positional string (the CODE:
@@ -1354,6 +1421,7 @@ TOOL_DISPATCH: dict[str, Callable[[str], ToolResult]] = {
     "browse_act": browse_act,
     "web_search": web_search,
     "rag": rag,
+    "code_map": code_map,
     "complete_code": complete_code,
     "predict_edit": predict_edit,
     "recall_memory": recall_memory,
