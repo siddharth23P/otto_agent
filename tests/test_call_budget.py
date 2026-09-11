@@ -14,10 +14,13 @@ These tests drive the REAL compiled graph with a scripted model and count the
 requests, so a future change that quietly reintroduces a round-trip fails here
 with a number rather than showing up as a slow benchmark weeks later.
 """
+import tempfile
 import uuid
+from pathlib import Path
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
+from agent.memory.lessons import bind_bank
 from agent.pipeline import nodes as pn
 from agent.pipeline.budget import Budget, bind_budget
 from agent.pipeline.run import _initial
@@ -36,16 +39,27 @@ class _Counting:
         yield AIMessageChunk(content=reply)
 
 
-def _run(monkeypatch, replies, budget=None):
+def _run(monkeypatch, replies, budget=None, learning=False):
     model = _Counting(replies)
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: model)
     config = {
         "configurable": {"thread_id": f"test:{uuid.uuid4().hex}"},
         "recursion_limit": pn._RECURSION_SAFETY_NET,
     }
-    with bind_budget(budget):
+    # The lesson bank is OFF unless a test is about it. Counting calls is the
+    # job here, and a learning step that writes into the real bank from a unit
+    # test would be both a side effect and an extra call in every number below.
+    with bind_budget(budget), bind_bank(None if not learning else _Bank()):
         final = pn.app.invoke(_initial("do the thing"), config)
     return model, final
+
+
+def _Bank():
+    """A real lesson bank in a throwaway file. Faking the store here would
+    only test the fake -- and the learning step's whole job is to write."""
+    from agent.memory.store import MemoryStore
+
+    return MemoryStore(Path(tempfile.mkdtemp()) / "lessons.db")
 
 
 def test_one_tool_call_and_an_answer_costs_four_model_calls(monkeypatch):
@@ -186,3 +200,59 @@ def test_the_judgment_does_not_go_on_a_checking_expedition(monkeypatch):
 
     # One rubric call plus the capped judging exchanges.
     assert judge.calls <= 1 + pn.MAX_EVALUATOR_ITERATIONS
+
+
+def test_learning_costs_exactly_one_call_at_the_end_of_a_run(monkeypatch):
+    """Self-evolution is not free, and the point of this number is that it
+    stays one. A distilling step that grew into its own tool loop would be the
+    same mistake the evaluator made -- 24 calls on a task the loop did in six.
+
+    Compare against the four in the first test above: same work, plus one.
+    """
+    model, _ = _run(
+        monkeypatch,
+        [
+            "ACTION: execute_python\nCODE:\nprint(2 + 2)",
+            "FINAL:\nthe answer is 4",
+            "- the sum is correct",
+            "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked it",
+            '[{"cue": "arithmetic is asked for", "action": "run it", "outcome": "worked"}]',
+        ],
+        learning=True,
+    )
+
+    assert model.calls == 5
+
+
+def test_a_run_with_nowhere_to_learn_does_not_pay_for_learning(monkeypatch):
+    """Checked before the call, not after. Distilling lessons and then
+    discarding them is the worst of both."""
+    model, _ = _run(monkeypatch, [
+        "ACTION: execute_python\nCODE:\nprint(2 + 2)",
+        "FINAL:\nthe answer is 4",
+        "- the sum is correct",
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked it",
+    ])
+
+    assert model.calls == 4
+
+
+def test_the_learning_call_lands_in_the_reported_cost(monkeypatch):
+    """It did not, at first: `model_calls` was read before the distilling
+    step, so the one call self-evolution costs was the one call the cost axis
+    could not see. That is precisely the blindness the measurement discipline
+    exists to remove."""
+    _, final = _run(
+        monkeypatch,
+        [
+            "ACTION: execute_python\nCODE:\nprint(2 + 2)",
+            "FINAL:\nthe answer is 4",
+            "- the sum is correct",
+            "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked it",
+            '[{"cue": "arithmetic is asked for", "action": "run it"}]',
+        ],
+        budget=Budget(max_model_calls=40),
+        learning=True,
+    )
+
+    assert final["model_calls"] == 5

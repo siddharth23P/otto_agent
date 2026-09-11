@@ -307,6 +307,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from agent.memory.lessons import (
+    Lesson, learning_enabled, parse_distilled, recall_lessons, record_lessons,
+)
 from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
@@ -668,6 +671,34 @@ EVALUATOR_PROMPT = (
     "You have at most {max_iter} exchanges before your last reply is used "
     "as-is."
 )
+#: What a finished run is asked to leave behind for the next one.
+#:
+#: Deliberately asked of BOTH outcomes. A bank built only from successes
+#: throws away the half of the signal that says what not to do, and in a
+#: failed run the sharpest lesson is usually the one nobody would have
+#: written down after a win.
+#:
+#: Asked for at most three, and each one short, because injecting a pile of
+#: skill-like items every turn and letting the model decide when they apply
+#: measured 16.4 points BELOW a variant that injected none. Retrieved text is
+#: not free: it competes with the task for attention.
+DISTIL_PROMPT = (
+    "A run just finished. Write down what a DIFFERENT task could reuse from "
+    "it.\n\n"
+    "A lesson is transferable or it is not a lesson. \"The config lives in "
+    "/etc/app.conf\" is a fact about one machine. \"When a tool reports a "
+    "path that does not exist, check the working directory before assuming "
+    "the file is missing\" is a lesson.\n\n"
+    "Write at most THREE, fewer is better, and zero is a perfectly good "
+    "answer for a run that went straightforwardly. Each has a `cue` -- the "
+    "SITUATION it applies in, not this task -- and an `action`, and an "
+    "`outcome` of \"worked\" or \"failed\". A lesson from something that "
+    "went wrong is worth more than one from something that went right; say "
+    "\"failed\" and describe what to do instead.\n\n"
+    "Reply with a JSON array and nothing else:\n"
+    '[{{"cue": "...", "action": "...", "outcome": "worked"}}]'
+)
+
 #: The whole agent, in one prompt.
 #:
 #: This replaces PLANNER_PROMPT, SOLVER_PROMPT, SUMMARIZER_PROMPT and
@@ -1327,6 +1358,7 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
         f"CONVERSATION SO FAR:\n{history}" if history else "",
         f"CONTEXT GATHERED SO FAR:\n{context}" if context else "",
         f"TASK:\n{task_text}",
+        _lessons_block(task_text),
         _render_checklist(checklist),
     ) if part)
 
@@ -1337,6 +1369,25 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
     messages.append(HumanMessage(body))
     messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
     return messages
+
+
+def _lessons_block(task_text: str) -> str:
+    """At most ONE lesson from an earlier run, and only if it is about this.
+
+    Three deliberate restraints, each measured. One, not several: task-time
+    procedural recall peaks at k=1 and loses about 7 points by k=5. Here at
+    the seed, not on every turn: always-on injection of skill-like items
+    scored 16.4 points below injecting none. And nothing at all when nothing
+    is relevant -- agent/memory/lessons.py returns an empty list rather than
+    the closest match, because an off-topic lesson is worse than silence.
+    """
+    lessons = recall_lessons(str(task_text or ""))
+    if not lessons:
+        return ""
+    return (
+        "FROM AN EARLIER RUN (might not apply -- ignore it if it does not):\n"
+        + "\n".join(f"- {lesson.rendered()}" for lesson in lessons)
+    )
 
 
 def _plain(messages: list) -> list[dict]:
@@ -2122,6 +2173,51 @@ def _criteria(llm, task_text: str) -> list[str]:
     return _parse_rubric(reply)
 
 
+def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
+    """One cheap call at the end of a run, turning the trajectory into at most
+    three lessons for the next one.
+
+    RUN ON A CHEAP MODEL, DELIBERATELY. Harness-UPDATING is flat in base
+    capability -- a 9B model's updates measure as good as a frontier model's,
+    and a 7B meta-agent trained in one GPU hour gave +2.9 to +24.6% designing
+    for stronger executors. Harness-BENEFIT is the part that is not flat. So
+    the capability belongs on the executor and the small change belongs here:
+    Task.SUMMARIZE, which is the cheapest seat in agent/router/mapping.py.
+
+    FROM THE RAW TRAJECTORY, NEVER FROM THE BANK. The bank is not shown to
+    this call. Consolidating a model's own distillations and feeding them back
+    made one model fail 54% of problems it had previously solved; raw-episode
+    retention doubled accuracy against forced consolidation. Abstract once.
+
+    Failure here is silent by design. A run that produced an answer has done
+    its job, and losing the lesson is not worth losing the answer.
+    """
+    if not learning_enabled():
+        return []
+    if not (evidence := _evidence_tail(state)) and not state.get("actions"):
+        return []
+    body = "\n\n".join(part for part in (
+        f"TASK:\n{state['messages'][-1].content}",
+        f"HOW IT WENT: {'the answer was accepted' if succeeded else 'it was NOT accepted'}",
+        _actions_block(state),
+        f"THE END OF THE WORKING:\n{evidence}" if evidence else "",
+    ) if part)
+    try:
+        # Through _call, not .invoke, so this shows up in `model_calls` like
+        # every other request. A learning step whose cost the cost axis cannot
+        # see is exactly the kind of thing milestone 7 exists to prevent.
+        # BudgetExhausted is caught below along with everything else: a run
+        # with nothing left to spend learns nothing, which is correct.
+        reply = _call(ROUTER.chat_model(Task.SUMMARIZE),
+                      [SystemMessage(DISTIL_PROMPT), HumanMessage(body)])
+    except Exception as exc:  # noqa: BLE001 -- never fail a finished run
+        logger.info("distilling lessons failed, learning nothing: %s", exc)
+        return []
+    return record_lessons(parse_distilled(
+        reply, outcome_default="worked" if succeeded else "failed",
+    ))
+
+
 def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_user"]]:
     task_text = state["messages"][-1].content
     node = state.get("node") or "agent"
@@ -2229,16 +2325,30 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # the loop spent rather than what the run spent -- measured live at 4
     # against an actual 9, because the evaluator checks the answer with tools
     # and those are model calls like any other.
-    spent = {"model_calls": budget.calls} if (budget := current_budget()) else {}
+    def calls_so_far() -> dict:
+        """Called at each return rather than computed once above, because the
+        learning step below is itself a model call. Reading this first left
+        the distilling call out of the very number it is meant to appear in --
+        which is the blindness milestone 7 exists to remove."""
+        return {"model_calls": budget.calls} if (budget := current_budget()) else {}
+
+    def learned_from(succeeded: bool) -> list[str]:
+        """Board lines for whatever the run leaves behind. The distilling call
+        happens HERE, at a terminal edge, so a run that is going back to the
+        agent for another attempt does not pay for a lesson about work that is
+        not finished."""
+        return [f"learned: {lesson.rendered()}"
+                for lesson in _distil(state, succeeded=succeeded)]
 
     if approve:
+        board = ["evaluator approved the answer"] + learned_from(True)
         return Command(
             update={
-                **spent,
                 "checklist": judged,
                 "final_output": output,
                 "rejections": 0,
-                "board": ["evaluator approved the answer"],
+                "board": board,
+                **calls_so_far(),
             },
             goto=END,
         )
@@ -2247,26 +2357,31 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
         # Judgment must not eat the whole budget. Past the cap the answer
         # stands, said plainly rather than silently -- an unverified answer the
         # reader is told about beats a run that spent everything re-judging.
+        #
+        # It still learns. A run the judge would not accept is the one most
+        # worth learning from -- distilling only from accepted runs throws away
+        # the half of the signal that says what NOT to do.
+        board = [
+            f"evaluator rejected {node} {rejections} times; answering "
+            "anyway, unverified: " + reason
+        ] + learned_from(False)
         return Command(
             update={
-                **spent,
                 "checklist": judged,
                 "final_output": output,
                 "rejections": rejections,
-                "board": [
-                    f"evaluator rejected {node} {rejections} times; answering "
-                    "anyway, unverified: " + reason
-                ],
+                "board": board,
+                **calls_so_far(),
             },
             goto=END,
         )
     return Command(
         update={
-            **spent,
             "checklist": judged,
             "feedback": reason,
             "rejections": rejections,
             "board": [f"evaluator rejected {node}: {reason}"],
+            **calls_so_far(),
         },
         goto="agent",
     )
