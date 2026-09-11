@@ -936,7 +936,10 @@ def recall_memory(query: str) -> ToolResult:
             returncode=1,
         )
     try:
-        text = recall(store, "history", query)
+        # purpose="acting": this is asked mid-task, while the agent is doing
+        # something, which is the read that measurably wants to be narrow --
+        # see agent/memory/retrieval.py's PROCEDURAL_TOP_K.
+        text = recall(store, "history", query, purpose="acting")
     except Exception as exc:  # a memory-layer bug must not crash the tool loop
         return ToolResult(stdout="", stderr=f"recall_memory failed: {exc}", returncode=1)
     return ToolResult(stdout=text, stderr="", returncode=0)

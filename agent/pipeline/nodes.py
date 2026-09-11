@@ -1476,7 +1476,29 @@ KEEP_VERBATIM = 8
 COMPACTED_RESULT_CHARS = 240
 
 
-def _compact(messages: list) -> int:
+#: Message prefixes that are never compacted, whatever their age.
+#:
+#: Type-blind compaction is measured as destructive: constraint recall falls to
+#: 53% at 50% compression and 24% at 10%, and 53% -> 10% over five successive
+#: rounds. Type-AWARE compaction holds 100/95/80 and stabilises at 96%, and the
+#: behavioural difference is real -- 37.7% against 29.2% on one benchmark,
+#: p=0.005 (The Compaction Cliff, 2608.22752).
+#:
+#: What must survive is anything that says what the run is FOR or what it may
+#: not do. Losing a tool result costs a re-run; losing a constraint means the
+#: agent does the wrong thing confidently for the rest of the session.
+_NEVER_COMPACT = (
+    "TASK:",
+    "THIS IS WHAT HAS TO BE TRUE",
+    "MODE:",
+    "CONVERSATION SO FAR:",
+    "CONTEXT GATHERED SO FAR:",
+    "EVALUATOR REJECTED",
+    "HOLD.",
+)
+
+
+def _compact(messages: list, actions: list[str] | None = None) -> int:
     """Shrink the oldest tool results in place. Returns how many it rewrote.
 
     Costs NOTHING -- no model call -- which is why it is the first tier and why
@@ -1501,16 +1523,30 @@ def _compact(messages: list) -> int:
     """
     rewritten = 0
     protected = len(messages) - KEEP_VERBATIM
+    summaries = list(actions or [])
+    seen_results = 0
     for i, message in enumerate(messages):
-        if i >= protected or not isinstance(message, HumanMessage):
+        if not isinstance(message, HumanMessage):
             continue
         text = _content_text(message.content)
-        if not text.startswith("TOOL RESULT:") or len(text) <= COMPACTED_RESULT_CHARS:
+        if not text.startswith("TOOL RESULT:"):
             continue
+        # Count every result, compacted or not, so the summary line still lines
+        # up with the call it describes once some have been rewritten.
+        index, seen_results = seen_results, seen_results + 1
+        if i >= protected or len(text) <= COMPACTED_RESULT_CHARS:
+            continue
+        if any(marker in text for marker in _NEVER_COMPACT):
+            continue
+        # A real summary rather than a truncation, at no cost: `actions` already
+        # holds one line per call from `_summarise_action`, written when the
+        # call ran. Truncating to the first 240 characters keeps whatever
+        # happened to come first, which for a failing command is usually the
+        # banner and not the error.
+        summary = summaries[index] if index < len(summaries) else ""
         messages[i] = HumanMessage(
-            text[:COMPACTED_RESULT_CHARS]
-            + f"\n... [{len(text) - COMPACTED_RESULT_CHARS} characters of this "
-            "result dropped to make room. Run it again if you need the rest.]"
+            f"TOOL RESULT (compacted): {summary}" if summary else
+            text[:COMPACTED_RESULT_CHARS] + "\n... [older result, compacted]"
         )
         rewritten += 1
     return rewritten
@@ -1548,7 +1584,7 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
 
     while True:
         if _transcript_size(messages) > LOOP_COMPACT_AT:
-            dropped = _compact(messages)
+            dropped = _compact(messages, actions)
             if dropped:
                 logger.info("agent loop: compacted %d old tool result(s)", dropped)
                 _emit({"agent": {"board": [f"compacted {dropped} older tool result(s)"]}})
