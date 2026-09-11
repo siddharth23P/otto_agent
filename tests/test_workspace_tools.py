@@ -328,3 +328,49 @@ def test_long_output_keeps_both_ends(workspace):
 
 def test_short_output_is_untouched():
     assert pt._clip("just a line") == "just a line"
+
+
+# --------------------------------------------------------------------------
+# A path field the model filled with something that is not a path
+# --------------------------------------------------------------------------
+#
+# Claw-Eval task C01. The model wrote a sentence of prose where a path goes;
+# `Path.exists()` raised OSError(ENAMETOOLONG), because pathlib swallows only
+# ENOENT, ENOTDIR, EBADF and ELOOP; every file tool catches OutsideWorkspace and
+# nothing else, so it unwound the whole graph. A mortgage comparison the agent
+# had already computed and verified was discarded after 1096 seconds, and the
+# grader saw a conversation with no assistant messages at all.
+
+def test_a_path_too_long_for_the_filesystem_fails_cleanly(tmp_path):
+    with bind_workspace(tmp_path):
+        with pytest.raises(OutsideWorkspace):
+            resolve_in_workspace("x" * 5000)
+
+
+def test_the_exact_shape_that_cost_a_run_is_a_failed_result_not_a_crash(tmp_path):
+    """Reproduces C01's own body: a path, then the model's prose after it."""
+    body = "/dev/stdin\n\nLet me verify the calculations manually" * 100
+    with bind_workspace(tmp_path):
+        result = pt.read_file(body)
+    assert result.returncode == 1
+    assert "not a usable path" in result.stderr
+
+
+def test_a_nul_byte_in_a_path_fails_cleanly_too(tmp_path):
+    with bind_workspace(tmp_path):
+        assert pt.read_file("we\x00ird.txt").returncode == 1
+
+
+def test_an_ordinary_missing_file_still_says_so_plainly(tmp_path):
+    """The new handler must not swallow the ordinary case into a confusing
+    message."""
+    with bind_workspace(tmp_path):
+        result = pt.read_file("nope.txt")
+    assert result.returncode == 1
+    assert "not a file in the workspace" in result.stderr
+
+
+def test_an_escape_is_still_reported_as_an_escape(tmp_path):
+    with bind_workspace(tmp_path):
+        with pytest.raises(OutsideWorkspace, match="outside"):
+            resolve_in_workspace("../../etc/passwd")

@@ -66,6 +66,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
+from agent.pipeline.budget import Budget, bind_budget
 from agent.pipeline.execution import bind_command_runner
 from agent.pipeline.toolkit import ExtraTool, bind_extra_tools, json_body
 from agent.pipeline.tools import ToolResult
@@ -491,7 +492,15 @@ def run_one(
         runner = sandbox_runner(sandbox_url, deadline) if sandbox_url else None
         tools = task_tools(claw, task, dispatcher, recorder, deadline)
         try:
-            with bind_workspace(scratch), bind_command_runner(runner), bind_extra_tools(tools):
+            # The tool-level Deadline above stays as the backstop for one
+            # long-running command. The Budget is the one that matters: it is
+            # checked before every MODEL call, which is where the time actually
+            # goes. Measured across four tasks, every tool call a task made
+            # totalled 0.1 to 0.4 seconds of runs lasting 119 to 946 -- so the
+            # deadline was watching the only part that costs nothing, and C01
+            # ran 1096 seconds against a 900-second budget without it firing.
+            with bind_workspace(scratch), bind_command_runner(runner), \
+                    bind_extra_tools(tools), bind_budget(Budget.until(deadline.hard_at)):
                 while True:
                     if architecture == "single":
                         answer, actions = run_single_agent(
