@@ -495,3 +495,118 @@ def test_a_short_run_is_left_alone(monkeypatch):
     _install(monkeypatch, fake)
     pn.agent(_state())
     assert not any("dropped to make room" in m.content for m in fake.seen[-1])
+
+
+# --------------------------------------------------------------------------
+# The gate before an irreversible action
+# --------------------------------------------------------------------------
+#
+# A single MUTATING deviation cuts a task's success odds 55-96%; a non-mutating
+# one costs 7-21%. Mutating actions are only 14-18% of steps, so the gate is
+# cheap and precisely aimed. Separately, 82.5% of analysed failures are the
+# agent failing to compare against evidence it already holds.
+#
+# Claw-Eval T026 is that failure exactly: three contacts matched "Manager
+# Zhang", all three were in the transcript, and the agent sent to the first.
+
+def test_a_read_only_tool_runs_without_a_hold(monkeypatch):
+    """The gate must not tax the 85% of steps that change nothing."""
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)", "FINAL:\ndone"])
+    _install(monkeypatch, fake)
+
+    pn.agent(_state())
+
+    assert len(fake.seen) == 2, "a read-only tool was held"
+
+
+def test_a_writing_tool_is_held_once_before_it_runs(monkeypatch, tmp_path):
+    from agent.pipeline.workspace import bind_workspace
+
+    fake = _Scripted([
+        "ACTION: write_file\nCODE:\nout.txt\nhello",
+        "ACTION: write_file\nCODE:\nout.txt\nhello",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    with bind_workspace(tmp_path):
+        pn.agent(_state())
+
+    held = "\n".join(m.content for m in fake.seen[1])
+    assert "HOLD" in held
+    assert (tmp_path / "out.txt").exists(), "the confirmed write never ran"
+
+
+def test_the_hold_names_the_ambiguity_rule(monkeypatch, tmp_path):
+    """The T026 case in one sentence: more than one candidate means you do not
+    know which is meant."""
+    assert "more than one candidate" in pn.MUTATION_GATE_NOTE
+    assert "ask_user" in pn.MUTATION_GATE_NOTE
+
+
+def test_the_hold_offers_a_way_forward_rather_than_a_refusal(monkeypatch):
+    """One enforcement study blocked 94% of non-compliant actions and still had
+    safe completion below 5%, because the agent fabricated credentials to route
+    around the block."""
+    assert "issue the same call again" in pn.MUTATION_GATE_NOTE
+
+
+def test_the_same_target_is_held_only_once(monkeypatch, tmp_path):
+    """A gate that fired every time would loop forever or teach the model to
+    ignore it."""
+    from agent.pipeline.workspace import bind_workspace
+
+    fake = _Scripted([
+        "ACTION: write_file\nCODE:\nout.txt\nfirst",
+        "ACTION: write_file\nCODE:\nout.txt\nfirst",
+        "ACTION: write_file\nCODE:\nout.txt\nsecond",
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+
+    with bind_workspace(tmp_path):
+        pn.agent(_state())
+
+    holds = sum(1 for sent in fake.seen for m in sent if "HOLD" in str(m.content))
+    assert holds >= 1
+    assert (tmp_path / "out.txt").read_text() == "second", "the second write was blocked"
+
+
+def test_a_run_scoped_tool_is_gated_unless_it_says_otherwise(monkeypatch):
+    """Safe direction: an unmarked benchmark tool is treated as irreversible.
+    `gmail_send_message` is exactly the case that matters."""
+    from agent.pipeline.toolkit import ExtraTool, bind_extra_tools
+    from agent.pipeline.tools import ToolResult
+
+    sent = []
+    send = ExtraTool(name="send_message", description="Send it.",
+                     call=lambda b: (sent.append(b), ToolResult("ok", "", 0))[1],
+                     schema={"type": "object", "properties": {"to": {"type": "string"}}})
+
+    fake = _Scripted([
+        'ACTION: send_message\nCODE:\n{"to": "a@b.c"}',
+        'ACTION: send_message\nCODE:\n{"to": "a@b.c"}',
+        "FINAL:\ndone",
+    ])
+    _install(monkeypatch, fake)
+    with bind_extra_tools([send]):
+        pn.agent(_state())
+
+    assert any("HOLD" in str(m.content) for sent_msgs in fake.seen for m in sent_msgs)
+    assert len(sent) == 1, "the send ran without being held, or ran twice"
+
+
+def test_a_run_scoped_tool_that_only_reads_is_not_gated(monkeypatch):
+    from agent.pipeline.toolkit import ExtraTool, bind_extra_tools
+    from agent.pipeline.tools import ToolResult
+
+    look = ExtraTool(name="list_messages", description="Read them.",
+                     call=lambda b: ToolResult("[]", "", 0), mutates=False,
+                     schema={"type": "object", "properties": {}})
+
+    fake = _Scripted(['ACTION: list_messages\nCODE:\n{}', "FINAL:\ndone"])
+    _install(monkeypatch, fake)
+    with bind_extra_tools([look]):
+        pn.agent(_state())
+
+    assert len(fake.seen) == 2, "a read-only run-scoped tool was held"

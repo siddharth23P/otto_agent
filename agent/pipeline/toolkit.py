@@ -57,6 +57,15 @@ class ExtraTool:
     name: str
     description: str
     call: Callable[[str], ToolResult]
+    #: Whether calling this changes something outside Otto -- sends a message,
+    #: writes a record, moves money. agent/pipeline/tools.py's TOOL_TIERS says
+    #: this for the standing tools; a run-scoped tool has to say it itself,
+    #: and a benchmark's `gmail_send_message` is exactly the case that matters.
+    #:
+    #: Defaults to True, which is the safe direction: an unmarked tool is
+    #: treated as irreversible and gated. A caller that knows a tool only
+    #: reads says so explicitly.
+    mutates: bool = True
     #: JSON Schema for the body, when the body is a JSON object. Empty means
     #: the body is free text and the description says what it should contain.
     schema: dict[str, Any] = field(default_factory=dict)

@@ -206,3 +206,34 @@ def test_a_cap_above_the_task_budget_does_not_raise_it():
     """A ceiling, never a floor -- a 120s task given --max-seconds 600 must
     still stop at 120, or the run stops matching the benchmark."""
     assert cb.task_budget(_task(timeout_seconds=120), 600) == 120.0
+
+
+# --------------------------------------------------------------------------
+# Which task tools change something
+# --------------------------------------------------------------------------
+#
+# Claw-Eval's specs do not say -- every endpoint is a POST -- so the name is
+# all there is. The bias is deliberate: over-gating a read costs one model
+# call, under-gating a send is T026.
+
+def test_sending_and_creating_are_treated_as_irreversible():
+    for name in ("gmail_send_message", "calendar_create_event", "crm_update_contact",
+                 "finance_transfer", "todo_delete_task", "ticket_assign"):
+        assert cb.tool_mutates(name), f"{name} was not gated"
+
+
+def test_reading_is_not_gated():
+    for name in ("gmail_list_messages", "gmail_get_message", "web_search",
+                 "finance_list_transactions", "contacts_search", "kb_get_article"):
+        assert not cb.tool_mutates(name), f"{name} was gated needlessly"
+
+
+def test_an_unrecognised_tool_is_gated():
+    """The safe direction. A benchmark tool nobody anticipated is treated as
+    irreversible until someone says otherwise."""
+    assert cb.tool_mutates("frobnicate_widget")
+
+
+def test_a_write_verb_wins_over_a_read_verb_in_the_same_name():
+    """`get_or_create` creates."""
+    assert cb.tool_mutates("get_or_create_record")

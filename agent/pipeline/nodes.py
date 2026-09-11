@@ -311,7 +311,7 @@ from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
 from agent.pipeline.tools import READ_ONLY, TOOL_DISPATCH, TOOL_TIERS
-from agent.pipeline.toolkit import dispatch_table, render_note
+from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router.mapping import Task
 from agent.router.router import Router
@@ -1158,6 +1158,54 @@ IDLE_SWAP_NOTE = (
 )
 
 
+#: Said once, immediately before a tool that changes something runs for the
+#: first time against a given target.
+#:
+#: Measured justification: a single MUTATING deviation cuts a task's success
+#: odds by 55-96%, where a non-mutating one costs 7-21% -- and mutating actions
+#: are only 14-18% of steps, so gating them is cheap and precisely aimed
+#: (SABER, 2512.07850). Separately, 82.5% of analysed agent failures are the
+#: agent failing to compare against evidence it already holds: "evidence
+#: contradicting the failure already exists in the agent's execution directory,
+#: yet comparison never occurs."
+#:
+#: Claw-Eval T026 is that failure exactly. Three contacts matched "Manager
+#: Zhang", all three were in the transcript, and the agent sent to the first.
+#: Rewriting the ask_user guidance took it from three sends to two. A prompt
+#: cannot fix this because the problem is not what the agent knows, it is that
+#: nothing makes it look.
+#:
+#: It must offer a way FORWARD, not a refusal. One enforcement study blocked
+#: 94% of non-compliant actions and still had safe task completion below 5%,
+#: because the agent fabricated credentials to route around the block.
+MUTATION_GATE_NOTE = (
+    "HOLD. `{tool}` changes something outside this conversation and cannot be "
+    "undone.\n\n"
+    "Before it runs, check it against what you already know -- not against "
+    "what you intended. Name the exact target you are about to act on, and the "
+    "specific thing you read that identifies it as the right one.\n\n"
+    "If more than one candidate fits what you were asked for -- more than one "
+    "recipient, record, file or account -- you do not know which is meant. "
+    "Use ask_user. Picking one and hoping is the worst option available.\n\n"
+    "If it is the right target and you have the evidence, say so in one line "
+    "and issue the same call again; it will run."
+)
+
+
+def _mutates(tool_name: str) -> bool:
+    """Whether this tool changes something that cannot be taken back.
+
+    TOOL_TIERS has recorded this since it was written and had no production
+    reader until the prompt started naming the mutating tools; this is the
+    second. Run-scoped tools carry their own flag and default to True, so an
+    unmarked benchmark tool is gated rather than waved through.
+    """
+    extra = current_extra_tools().get(tool_name)
+    if extra is not None:
+        return extra.mutates
+    return TOOL_TIERS.get(tool_name, READ_ONLY) != READ_ONLY
+
+
 def _emit(payload: dict) -> None:
     """Send one live event to whoever is streaming this run, or do nothing.
 
@@ -1475,6 +1523,9 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     failed_targets: set[str] = set()
     swaps = 0
     did_work_since_swap = True
+    #: (tool, target) pairs already held once. A gate that fired every time
+    #: would either loop forever or teach the model to ignore it.
+    confirmed: set[str] = set()
     llm = ROUTER.chat_model(MODES[mode].task)
 
     while True:
@@ -1534,6 +1585,19 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
 
         did_work_since_swap = True
         dispatch = dispatch_table()
+
+        # The gate. Before a tool that cannot be undone runs for the first time
+        # against a given target, make the model check it against what it
+        # already read -- see MUTATION_GATE_NOTE for why a prompt alone does
+        # not do this. Costs one call on the ~15% of steps that mutate.
+        gate_key = f"{tool_name}:{_action_target(tool_name, body)}"
+        if tool_name in dispatch and _mutates(tool_name) and gate_key not in confirmed:
+            confirmed.add(gate_key)
+            messages.append(AIMessage(text))
+            messages.append(HumanMessage(MUTATION_GATE_NOTE.format(tool=tool_name)))
+            _emit({"agent": {"board": [f"holding {tool_name} for a check"]}})
+            continue
+
         if tool_name not in dispatch:
             evidence = (
                 f"tool {tool_name!r} is not available "
