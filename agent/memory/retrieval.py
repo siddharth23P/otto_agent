@@ -54,9 +54,16 @@ something imperfectly ordered beats showing nothing at all.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
-from agent.memory.embeddings import EmbeddingUnavailable, cosine_similarity, embed_query
+from agent.memory.embeddings import (
+    EmbeddingUnavailable,
+    cosine_similarity,
+    current_model_name,
+    embed_query,
+)
 from agent.memory.store import Bullet, Chunk, MemoryStore
 from agent.memory.tokens import count_tokens
 
@@ -110,11 +117,48 @@ DEFAULT_NEIGHBOUR_WINDOW = 2
 #: spec), so it has to leave room for X to still hold the conversation.
 DEFAULT_TOKEN_BUDGET = 3_000
 
+logger = logging.getLogger(__name__)
+
 _NOTHING_YET = "(nothing has been compacted away yet -- there is nothing to recall)"
 
 
-def _rank_bullets(bullets: list[Bullet], query_vec, top_k: int) -> list[Bullet]:
-    embeddable = [b for b in bullets if b.embedding is not None]
+def _comparable(items: list, model: str) -> list:
+    """Only the vectors produced by the model we are querying with.
+
+    Comparing across embedding spaces is the failure this guards, and it is
+    quieter than it sounds. Mismatched dimensions raise a ValueError from
+    numpy that agent/pipeline/tools.py catches and turns into one line of
+    stderr, so recall simply stops working for the rest of the session. Worse,
+    a hosted model emitting the SAME dimension -- Gemini can be asked for 384,
+    OpenAI's can be truncated -- raises nothing at all: the shapes line up, the
+    scores look plausible, and two unrelated spaces get ranked against each
+    other. Checking dimensions would not catch that; checking the model does.
+
+    A vector with no stamp was written before the column existed. Its space is
+    unknown, so it is not comparable either.
+    """
+    comparable = [i for i in items if i.embedding is not None and i.embedding_model == model]
+    foreign = sum(
+        1 for i in items
+        if i.embedding is not None and i.embedding_model != model
+    )
+    if foreign and not comparable:
+        # Everything stored was embedded by a different model, so ranking is
+        # impossible and recall silently degrades to unranked most-recent.
+        # That is the safe behaviour but an invisible one -- said out loud
+        # here, because the fix is to re-embed the store and nothing else will
+        # ever mention it.
+        logger.warning(
+            "%d stored vector(s) were embedded by a different model than %r -- "
+            "they cannot be ranked against this query. Re-embed the store to "
+            "use them again.",
+            foreign, model,
+        )
+    return comparable
+
+
+def _rank_bullets(bullets: list[Bullet], query_vec, top_k: int, model: str = "") -> list[Bullet]:
+    embeddable = _comparable(bullets, model)
     if query_vec is None or not embeddable:
         return bullets[-top_k:]  # fallback: most recent, unranked
     return sorted(
@@ -122,11 +166,11 @@ def _rank_bullets(bullets: list[Bullet], query_vec, top_k: int) -> list[Bullet]:
     )[:top_k]
 
 
-def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int) -> list[Chunk]:
+def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "") -> list[Chunk]:
     """Every compacted chunk is a candidate here, so this is the one step that
     scales with session length -- hence the single matrix product rather than
     a Python-level loop over cosine_similarity()."""
-    embeddable = [c for c in chunks if c.embedding is not None]
+    embeddable = _comparable(chunks, model)
     if query_vec is None or not embeddable:
         return chunks[-max_chunks:]  # fallback: most recent, unranked
     matrix = np.stack([c.embedding for c in embeddable])
@@ -187,16 +231,17 @@ def recall(
 
     try:
         query_vec = embed_query(query)
+        query_model = current_model_name()
     except EmbeddingUnavailable:
-        query_vec = None
+        query_vec, query_model = None, ""
 
     # Every live bullet's hashes, not just the matched ones -- the module
     # docstring's stage 1, and why narrowing here was a trap.
     candidate_hashes = sorted({h for b in bullets for h in b.hash_refs})
     candidates = store.get_chunk_rows(kind, candidate_hashes)
-    picked_bullets = _rank_bullets(bullets, query_vec, top_k)
+    picked_bullets = _rank_bullets(bullets, query_vec, top_k, query_model)
     shown = _select(
-        store, kind, _rank_chunks(candidates, query_vec, max_chunks),
+        store, kind, _rank_chunks(candidates, query_vec, max_chunks, query_model),
         neighbour_window, token_budget,
     )
 
