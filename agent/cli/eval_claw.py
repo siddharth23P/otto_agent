@@ -25,6 +25,8 @@ from typing_extensions import Annotated
 from agent.cli.ui import err, out
 from agent.memory.lessons import bind_bank, read_only
 from agent.memory.store import MemoryStore
+from agent.router.outcomes import bind_log
+from agent.router.outcomes import read_only as routing_read_only
 from agent.eval.claw_bench import (
     ClawEvalUnavailable,
     claw_root,
@@ -183,11 +185,23 @@ def eval_claw_cmd(
     learning = ExitStack()
     if no_learning:
         learning.enter_context(bind_bank(None))
+        # Routing adapts from observed outcomes too, so the baseline has to
+        # hold that still as well. A "no learning" arm that quietly reordered
+        # the model chain partway through would be measuring two things.
+        learning.enter_context(bind_log(None))
     else:
         if lesson_bank:
             learning.enter_context(bind_bank(MemoryStore(lesson_bank)))
+            # Beside the bank, so a measurement's routing evidence travels
+            # with its lessons instead of leaking into the working install.
+            learning.enter_context(bind_log(Path(lesson_bank).with_suffix(".seats.db")))
         if split == "holdout":
+            # Read what the development runs learned, write nothing back --
+            # lessons and routing evidence alike. That is what makes the
+            # held-out number answer "does this TRANSFER" rather than "did the
+            # loop find something that works on what it was tuned on".
             learning.enter_context(read_only())
+            learning.enter_context(routing_read_only())
     err.print(
         "learning: " + ("off (baseline)" if no_learning else
                         "read-only (held out)" if split == "holdout" else "on")

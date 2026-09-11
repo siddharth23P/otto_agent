@@ -318,6 +318,7 @@ from agent.pipeline.tools import (
 )
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
+from agent.router import outcomes as seat_outcomes
 from agent.router.mapping import Task
 from agent.router.router import Router
 
@@ -2285,6 +2286,36 @@ def _criteria(llm, task_text: str) -> list[str]:
     return _parse_rubric(reply)
 
 
+def _record_seat(state: AgentState, *, approved: bool) -> None:
+    """Credit the seat that produced this answer, for agent/router/outcomes.py.
+
+    ONLY SINGLE-MODE RUNS. If the agent changed modes, several models touched
+    the answer and one verdict came back; crediting any of them is guessing.
+    The data thrown away is real and the alternative is worse -- a log that
+    mis-attributes cannot be trusted enough to change routing, which is the
+    only thing it is for.
+
+    Not the evaluator's own seat either. Nothing in a run says whether the
+    JUDGE was right, so recording the judge's verdict against the judge would
+    be a system marking its own homework.
+
+    Costs no model call. This is the whole appeal of it: the evidence is a
+    by-product of runs that were happening anyway.
+    """
+    if state.get("mode_log"):
+        return
+    mode = state.get("mode") or DEFAULT_MODE
+    task = MODES[mode].task
+    try:
+        model_id = ROUTER.resolve(task).model.id
+    except ProviderError:
+        return
+    seat_outcomes.record(
+        task.value, model_id,
+        approved=approved, calls=(current_budget().calls if current_budget() else 0),
+    )
+
+
 def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     """One cheap call at the end of a run, turning the trajectory into at most
     three lessons for the next one.
@@ -2461,6 +2492,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
                 for lesson in _distil(state, succeeded=succeeded)]
 
     if approve:
+        _record_seat(state, approved=True)
         board = ["evaluator approved the answer"] + learned_from(True)
         return Command(
             update={
@@ -2481,6 +2513,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
         # It still learns. A run the judge would not accept is the one most
         # worth learning from -- distilling only from accepted runs throws away
         # the half of the signal that says what NOT to do.
+        _record_seat(state, approved=False)
         board = [
             f"evaluator rejected {node} {rejections} times; answering "
             "anyway, unverified: " + reason

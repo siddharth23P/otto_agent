@@ -92,3 +92,17 @@ rates have hidden 7:1 and up to 31x differences in what they cost, so the
 primary signal for self-evolution is cost converging on a stream of related
 tasks, not the score going up. `otto lessons` prints what the bank learned,
 and `otto lessons --clear` empties it.
+
+## What adapts between runs
+
+Two things, both off in the `--no-learning` arm and read-only on `--split
+holdout`, so the disciplined pair above holds them still:
+
+| | where | what it changes |
+| --- | --- | --- |
+| lessons | `~/.otto/memory/lessons.db` | one short lesson injected at the start of a run, when one is relevant |
+| seat outcomes | `~/.otto/outcomes.db` | the order candidates are tried in for a task, once a model has enough runs behind it |
+
+`--lesson-bank PATH` moves both: the seat log goes to `PATH.seats.db`, so a
+measurement's evidence travels with its lessons rather than leaking into the
+working install. Read them with `otto lessons` and `otto route <task>`.
