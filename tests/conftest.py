@@ -61,3 +61,19 @@ def _no_real_lesson_bank(request):
         return
     with _lessons.bind_bank(None):
         yield
+
+
+#: And never the developer's real seat-outcome log, for the same reason.
+#: agent/router/outcomes.py reorders routing from it, so a suite that wrote
+#: into it would eventually change which model answers -- a test run silently
+#: reconfiguring the agent it is testing.
+from agent.router import outcomes as _outcomes  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_real_outcome_log(request, tmp_path_factory):
+    if "seat_log" in getattr(request, "fixturenames", ()):
+        yield  # that test binds its own
+        return
+    with _outcomes.bind_log(tmp_path_factory.mktemp("seats") / "outcomes.db"):
+        yield

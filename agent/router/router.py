@@ -10,6 +10,7 @@ from agent.router.llm_provider import get_provider
 from agent.router.llm_provider import provider_class, provider_names
 from agent.router.llm_provider.temperature import apply_to_params
 from agent.router.llm_provider.base import AuthError, Capability, CapabilityNotSupported, ModelInfo, ProviderError
+from agent.router import outcomes as seat_outcomes
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 
 @dataclass(frozen=True,slots=True)
@@ -40,7 +41,22 @@ class RoutingDecision:
 
     @property
     def fell_back(self) -> bool:
-        return self.index > 0
+        """Something ahead of this candidate was TRIED and could not serve.
+
+        Not `index > 0`. Since agent/router/outcomes.py reorders the chain
+        from observed results, a later candidate can be chosen first on
+        purpose -- and reporting that as "degraded", which is what every
+        reader of this does, would call the router's best-evidenced choice a
+        failure. Degradation is about candidates that were skipped, so ask
+        that."""
+        return bool(self.skipped)
+
+    @property
+    def chosen_on_evidence(self) -> bool:
+        """Picked ahead of a candidate declared above it, nothing having
+        failed. The reason `otto route` can explain an order that does not
+        match mapping.py."""
+        return self.index > 0 and not self.skipped
     
 class NoViableRoute(ProviderError):
     def __init__(self, task: Task, skipped: tuple[Skip, ...]):
@@ -222,15 +238,28 @@ class Router:
         
     def resolve(self, task: Task, *, only: str | None = None) -> RoutingDecision:
         skips: list[Skip] = []
-        for i, c in enumerate(TASK_ROUTES[task]):
+        declared = TASK_ROUTES[task]
+        # Declared order, re-ordered by what this installation has actually
+        # observed each seat's model achieve. A no-op until a (task, model)
+        # pair has enough runs behind it to be trusted, which is most of the
+        # time -- see agent/router/outcomes.py for why the bar is where it is.
+        chain = seat_outcomes.reorder(task.value, declared)
+        # `index` stays an index into the DECLARED chain, never into the tried
+        # order. Everything that reads it -- the tree `otto route`
+        # prints -- is asking "which candidate in mapping.py is this", and an
+        # index into a list the reader cannot see would answer a different
+        # question while looking like the same one.
+        position = {id(c): i for i, c in enumerate(declared)}
+        for tried, c in enumerate(chain):
+            i = position[id(c)]
             outcome = self._match(c, only=only)
             if isinstance(outcome, str):
                 skips.append(Skip(i, render(c), outcome))
                 continue
-            
-            if self.strict and i > 0:
+
+            if self.strict and tried > 0:
                 raise RoutingDegraded(task, tuple(skips))
-            
+
             return RoutingDecision(
                 task=task, provider=outcome.provider, model=outcome,
                 endpoint=c.endpoint, params=dict(c.params),
