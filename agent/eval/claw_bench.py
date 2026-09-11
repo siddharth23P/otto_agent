@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import sys
 import time
@@ -308,6 +309,42 @@ def _clip(text: str) -> str:
     return f"{text[:half]}\n... [{len(text) - MAX_TOOL_RESULT_CHARS} characters omitted] ...\n{text[-half:]}"
 
 
+#: Verbs that mean a call changes something outside Otto. Claw-Eval's tool
+#: specs do not say -- every endpoint is a POST -- so this reads the name.
+#:
+#: A heuristic, and deliberately biased: anything unrecognised is treated as
+#: mutating and gated. Over-gating a read costs one model call; under-gating a
+#: send is T026, where three contacts matched "Manager Zhang" and the agent
+#: sent to the first. The asymmetry is the whole point (SABER: a mutating
+#: deviation cuts success odds 55-96%, a non-mutating one 7-21%).
+_READING_VERBS = (
+    "list", "get", "search", "read", "find", "fetch", "query", "view",
+    "show", "check", "lookup", "describe", "download", "extract",
+)
+_WRITING_VERBS = (
+    "send", "create", "update", "delete", "write", "save", "post", "add",
+    "remove", "set", "cancel", "book", "submit", "reply", "forward", "move",
+    "assign", "close", "pay", "transfer", "schedule", "upload", "modify",
+)
+
+
+def tool_mutates(name: str) -> bool:
+    """Whether a task tool changes something. Unrecognised means yes.
+
+    Matched on WORD tokens rather than substrings, which a test caught being
+    necessary: "widget" ends in "get", so a substring match classified
+    `frobnicate_widget` as a read. Tool names here are `service_verb_object`,
+    so splitting on the separators and comparing whole tokens is both correct
+    and simpler.
+    """
+    tokens = {t for t in re.split(r"[^a-z0-9]+", name.lower()) if t}
+    if tokens & set(_WRITING_VERBS):
+        return True
+    if tokens & set(_READING_VERBS):
+        return False
+    return True
+
+
 def task_tools(claw, task, dispatcher, recorder: TraceRecorder, deadline: Deadline) -> list[ExtraTool]:
     """Each of the task's declared tools, wrapped so Otto can call it by name
     with a JSON body, and so the call lands in the trace exactly as one of
@@ -354,6 +391,7 @@ def task_tools(claw, task, dispatcher, recorder: TraceRecorder, deadline: Deadli
             description=spec.description,
             call=call,
             schema=spec.input_schema or {},
+            mutates=tool_mutates(spec.name),
         )
 
     served = [spec for spec in task.tools if spec.name in endpoints]
