@@ -16,10 +16,13 @@ control that says what they cost: the same model, the same tools, the same
 deadline, one system prompt and ONE conversation that never resets, with the
 agent deciding for itself when it is finished.
 
-It is deliberately not wired into the CLI and nothing in agent/pipeline
-imports it. It exists to be run side by side with the real pipeline on the
-same benchmark task, and to be deleted if the answer turns out to be "the
-graph is fine."
+Nothing in agent/pipeline imports it, and it is not a command of its own. It
+exists to be run side by side with the real pipeline on the same benchmark
+task, and to be deleted if the answer turns out to be "the graph is fine."
+The benchmark harnesses reach it through a flag rather than a command:
+`otto eval-claw --architecture single` runs it on Claw-Eval's tasks with the
+same tools, the same deadline and the same graders as the graph gets, so the
+only difference between the two numbers is the architecture.
 """
 from __future__ import annotations
 
