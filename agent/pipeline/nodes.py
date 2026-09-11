@@ -308,7 +308,7 @@ from langgraph.types import Command, interrupt
 
 from agent.pipeline.state import AgentState, PlanStep
 from agent.pipeline.tools import TOOL_DISPATCH
-from agent.router.llm_provider.base import ProviderError
+from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router.mapping import Task
 from agent.router.router import Router
 
@@ -786,12 +786,30 @@ def _call(llm, messages: list) -> str:
             if "No generation chunks" not in str(exc):
                 raise
             logger.warning(
-                "inception: %s returned an empty stream (attempt %d/%d)",
-                current.model, attempt + 1, MAX_DIFFUSION_RETRIES,
+                "%s returned an empty stream (attempt %d/%d)",
+                _model_label(current), attempt + 1, MAX_DIFFUSION_RETRIES,
             )
             if attempt < MAX_DIFFUSION_RETRIES - 1:
                 continue  # transient often enough to be worth one more try
             return ""
+        except ProviderError:
+            # Inception's own provider already translated this one; re-wrapping
+            # would bury the specific subclass the callers branch on.
+            raise
+        except Exception as exc:
+            # The chat model here may be a LangChain class Otto does not own,
+            # which raises its vendor's SDK errors straight out of .stream().
+            # _run_role and evaluator catch only ProviderError, so an untranslated
+            # one unwinds the whole graph instead of becoming a clean edge back
+            # to the overseer.
+            #
+            # Clause order is load-bearing twice over. The ValueError clause
+            # must stay FIRST, or a bare `except Exception` swallows the
+            # empty-stream retry above. And a `raise` from an earlier clause is
+            # not caught by a later clause of the same try, which is what keeps
+            # an unrelated ValueError propagating. Collapsing these into one
+            # handler with isinstance checks breaks both.
+            raise translate_unknown(exc) from exc
         if reply is None:
             return ""
 
@@ -799,19 +817,21 @@ def _call(llm, messages: list) -> str:
         if not (getattr(current, "diffusing", False) and finish_reason == "length"):
             return _content_text(reply.content)
 
+        # Everything below is Inception-only by construction: `diffusing` is a
+        # ChatInception field, so no other vendor's model reaches it.
         if attempt == MAX_DIFFUSION_RETRIES - 1:
             raise ProviderError(
-                f"inception: {current.model} truncated a diffusing response at "
-                f"max_tokens={current.max_tokens!r} on every one of "
+                f"{_model_label(current)} truncated a diffusing response at "
+                f"max_tokens={getattr(current, 'max_tokens', None)!r} on every one of "
                 f"{MAX_DIFFUSION_RETRIES} attempts -- refusing to hand an "
                 f"unconverged diffusion snapshot to the rest of the graph"
             )
-        bumped = max(current.max_tokens or 1024, 1024) * 2
+        bumped = max(getattr(current, "max_tokens", None) or 1024, 1024) * 2
         logger.warning(
-            "inception: %s truncated a diffusing response at max_tokens=%r "
+            "%s truncated a diffusing response at max_tokens=%r "
             "(attempt %d/%d) -- retrying at max_tokens=%d",
-            current.model, current.max_tokens, attempt + 1,
-            MAX_DIFFUSION_RETRIES, bumped,
+            _model_label(current), getattr(current, "max_tokens", None),
+            attempt + 1, MAX_DIFFUSION_RETRIES, bumped,
         )
         current = current.model_copy(update={"max_tokens": bumped})
     return ""  # unreachable -- the loop always returns or raises
@@ -946,6 +966,22 @@ def _parse_worker_reply(text: str) -> tuple[Literal["action", "final", "unparsea
             return "final", "", body
         return "unparseable", "", text.strip()
     return "unparseable", "", text.strip()
+
+
+def _model_label(llm) -> str:
+    """A model's id for a log line, whichever vendor's chat class this is.
+
+    `ChatInception`, `ChatAnthropic` and `ChatGoogleGenerativeAI` expose
+    `model`; `ChatOpenAI` exposes `model_name` and keeps `model` only as a
+    populate-by-name alias, so the plain attribute access this replaced raised
+    AttributeError there. The messages that used it were also hardcoded to say
+    "inception:", which is simply untrue for any other vendor.
+    """
+    for attr in ("model", "model_name", "model_id"):
+        value = getattr(llm, attr, None)
+        if isinstance(value, str):
+            return value
+    return type(llm).__name__
 
 
 def _summarise_action(tool_name: str, body: str, result) -> str:
