@@ -90,16 +90,56 @@ def test_evaluator_approves_a_final_answer_and_ends_the_graph(monkeypatch):
 
 
 def test_evaluator_judges_a_final_answer_using_the_final_answer_framing(monkeypatch):
+    # The framing used to name the role that produced the output, because five
+    # different nodes could. One loop produces every answer now, so there is one
+    # framing and the label is just ANSWER.
     fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: fine")
     _install(monkeypatch, fake)
 
-    pn.evaluator(_state(node="solver", output="def f(): return 1"))
+    pn.evaluator(_state(node="agent", output="def f(): return 1"))
 
     system, human = fake.calls[0]
-    assert "SOLVER OUTPUT" in system
+    assert "ANSWER" in system
     assert "as a finished answer" in system
-    assert "SOLVER OUTPUT" in human
+    assert "ANSWER:" in human
     assert "def f(): return 1" in human
+
+
+def test_the_evaluator_no_longer_judges_blind(monkeypatch):
+    """It used to see the conversation, the request and the answer, and nothing
+    else -- so "I cannot verify this" came back as a rejection, and every
+    rejection cost a whole extra round. Everything below already existed and
+    was already bounded; it was simply never shown to the judge."""
+    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: fine")
+    _install(monkeypatch, fake)
+
+    pn.evaluator(_state(
+        node="agent",
+        output="the suite passes",
+        actions=["solve: execute_bash pytest -> ok (0 failed)"],
+        mode_log=["call 3: solve -> plan (needs ordering)"],
+        transcript=[{"kind": "human", "content": "TOOL RESULT:\nstdout:\n0 failed"}],
+        context="the failing test was test_auth",
+    ))
+
+    _, human = fake.calls[0]
+    assert "pytest -> ok" in human, "the judge cannot see what was run"
+    assert "solve -> plan" in human, "the judge cannot see how the run worked"
+    assert "0 failed" in human, "the judge cannot see the evidence"
+    assert "test_auth" in human, "the judge cannot see the gathered context"
+
+
+def test_a_third_rejection_lets_the_answer_stand_rather_than_spending_the_budget(monkeypatch):
+    """Judgment is worth paying for; judgment without a bound is a way to spend
+    a whole run re-reading one answer. The board says it was not verified."""
+    fake = _FakeModel("FINAL:\nAPPROVE: no\nWHY: still not right")
+    _install(monkeypatch, fake)
+
+    result = pn.evaluator(_state(node="agent", output="best effort", rejections=2))
+
+    assert result.goto == END
+    assert result.update["final_output"] == "best effort"
+    assert "unverified" in " ".join(result.update["board"])
 
 
 def test_evaluator_shows_prior_conversation_ahead_of_the_original_request(monkeypatch):
@@ -125,13 +165,13 @@ def test_evaluator_shows_prior_conversation_ahead_of_the_original_request(monkey
     assert "ORIGINAL REQUEST:\nimprove above solution" in human
 
 
-def test_evaluator_rejects_a_final_answer_and_routes_feedback_back_to_router(monkeypatch):
+def test_evaluator_rejects_a_final_answer_and_routes_feedback_back_to_the_loop(monkeypatch):
     fake = _FakeModel("FINAL:\nAPPROVE: no\nWHY: never checked divisibility")
     _install(monkeypatch, fake)
 
     result = pn.evaluator(_state(round=1))
 
-    assert result.goto == "router"
+    assert result.goto == "agent"
     assert result.update["feedback"] == "never checked divisibility"
     assert "final_output" not in result.update
 
@@ -144,57 +184,7 @@ def test_evaluator_rejects_repeatedly_with_no_round_cap(monkeypatch):
 
     result = pn.evaluator(_state(round=500))
 
-    assert result.goto == "router"
-    assert "final_output" not in result.update
-
-
-def test_evaluator_judges_a_plan_when_the_pending_output_came_from_planner(monkeypatch):
-    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: sound and complete")
-    _install(monkeypatch, fake)
-
-    result = pn.evaluator(_state(node="planner", output='[{"task": "do x"}, {"task": "do y"}]'))
-
-    system, human = fake.calls[0]
-    assert "PLAN" in system
-    assert "JSON list of executable steps" in system
-    assert "PLAN (from planner, should be a JSON array of steps)" in human
-
-
-def test_evaluator_approving_a_plan_parses_it_into_step_dicts_and_returns_to_router_not_end(monkeypatch):
-    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: sound and complete")
-    _install(monkeypatch, fake)
-
-    result = pn.evaluator(_state(node="planner", output='[{"task": "do x"}, {"task": "do y"}]'))
-
-    assert result.goto == "router"
-    assert result.update["plan"] == [
-        {"task": "do x", "route_to": None, "output": None},
-        {"task": "do y", "route_to": None, "output": None},
-    ]
-    assert result.update["active_step"] is None
-    assert result.update["output"] is None
-    assert result.update["feedback"] == ""
-    assert "final_output" not in result.update
-
-
-def test_evaluator_approving_a_malformed_plan_falls_back_to_one_step_rather_than_dropping_it(monkeypatch):
-    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: it's fine even though it's not JSON")
-    _install(monkeypatch, fake)
-
-    result = pn.evaluator(_state(node="planner", output="1. do x\n2. do y"))
-
-    assert result.update["plan"] == [{"task": "1. do x\n2. do y", "route_to": None, "output": None}]
-
-
-def test_evaluator_rejecting_a_plan_routes_feedback_back_to_router_same_as_a_final_answer(monkeypatch):
-    fake = _FakeModel("FINAL:\nAPPROVE: no\nWHY: missing a step")
-    _install(monkeypatch, fake)
-
-    result = pn.evaluator(_state(node="planner", output='[{"task": "do x"}]'))
-
-    assert result.goto == "router"
-    assert result.update["feedback"] == "missing a step"
-    assert "plan" not in result.update
+    assert result.goto == "agent"
     assert "final_output" not in result.update
 
 
@@ -217,7 +207,7 @@ def test_evaluator_treats_a_verdict_less_reply_as_a_rejection_not_an_approval(mo
 
     result = pn.evaluator(_state(round=1))
 
-    assert result.goto == "router"
+    assert result.goto == "agent"
     assert "final_output" not in result.update
 
 
@@ -282,13 +272,13 @@ def test_evaluator_asking_with_choices_parses_them_out(monkeypatch):
 # for either an approval or a rejection.
 # --------------------------------------------------------------------------
 
-def test_a_provider_failure_returns_to_router_with_node_error_set_instead_of_crashing(monkeypatch):
+def test_a_provider_failure_returns_to_the_loop_with_node_error_set_instead_of_crashing(monkeypatch):
     fake = _FailingModel(pn.ProviderError("inception: The read operation timed out"))
     _install(monkeypatch, fake)
 
     result = pn.evaluator(_state(node="solver", output="def f(): return 1"))
 
-    assert result.goto == "router"
+    assert result.goto == "agent"
     assert "evaluator" in result.update["node_error"]
     assert "timed out" in result.update["node_error"]
     assert result.goto != END

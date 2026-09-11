@@ -264,11 +264,19 @@ def build_prompt_session() -> PromptSession:
 # left to animate: exactly one specialist runs per round).
 # --------------------------------------------------------------------------
 
-#: The four specialists (mirrors agent.pipeline.nodes.ROLE_NODES -- not
-#: imported directly to avoid this display module pulling in the whole
-#: pipeline, including its module-level Router()/provider clients, just to
-#: know four literal strings).
-_ROLE_NODES = ("planner", "solver", "summarizer", "finder")
+#: The one working node. It was four -- planner, solver, summarizer, finder --
+#: until they collapsed into a single agent loop that switches mode instead of
+#: switching node (agent/pipeline/nodes.py). Still a literal rather than an
+#: import, so this display module does not pull in the whole pipeline and its
+#: module-level Router() just to know one string.
+#:
+#: Where its lines come from changed too, and that matters more than the name.
+#: LangGraph's "updates" stream emits once per node RETURN, so with one
+#: long-running loop this branch used to fire once, at the very end, after
+#: minutes of silence. The loop now writes each tool call and mode swap to the
+#: "custom" stream as it happens (nodes.py's `_emit`), in this same node-shaped
+#: form -- so these lines arrive live and the branch below needs no changes.
+_ROLE_NODES = ("agent",)
 
 
 def render_update(node: str, delta: dict, tally: Counter, sink: Callable[[object], None] = out.print) -> None:
@@ -303,10 +311,6 @@ def render_update(node: str, delta: dict, tally: Counter, sink: Callable[[object
         tally.clear()
         return
 
-    if node == "router":
-        for line in delta.get("board", []):
-            sink(f"[muted]{line}[/]")
-        return
     if node in _ROLE_NODES:
         for line in delta.get("board", []):
             sink(f"[muted]{line}[/]")
