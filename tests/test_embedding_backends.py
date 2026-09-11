@@ -54,14 +54,33 @@ def backend(monkeypatch):
 # ---- backend selection ----------------------------------------------------
 
 
-def test_the_local_model_is_the_default(monkeypatch):
+def test_the_local_model_is_the_default_with_no_key(monkeypatch):
     """It is also the measured one: 96% recall coverage at production
-    defaults, which is the bar a hosted model has to beat."""
+    defaults, which is the bar a hosted model has to beat.
+
+    "Default" is conditional and the condition is a key. Naming the key in the
+    test name matters, because the other branch -- a machine WITH
+    GEMINI_API_KEY -- silently uses a different embedding space, and vectors
+    written under one are excluded when read under the other."""
     monkeypatch.delenv("OTTO_EMBEDDING_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     emb.reset_backend()
 
     assert isinstance(emb.current_backend(), emb.LocalBGEBackend)
     assert emb.current_model_name() == emb.MODEL_NAME
+
+
+def test_a_gemini_key_alone_changes_the_embedding_space(monkeypatch):
+    """The hazard, made visible. Nothing in the environment says "switch
+    embedding model" -- a key that VISION and SUMMARIZE both require is enough,
+    and agent/memory/retrieval.py then excludes every vector written under the
+    other model. A session that gains or loses this key loses its recall."""
+    monkeypatch.delenv("OTTO_EMBEDDING_MODEL", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-placeholder-not-a-real-key")
+    emb.reset_backend()
+
+    assert emb.current_model_name() == emb.DEFAULT_HOSTED_SPEC
+    assert not isinstance(emb.current_backend(), emb.LocalBGEBackend)
 
 
 @pytest.mark.parametrize("spec,expected", [
@@ -77,6 +96,12 @@ def test_a_hosted_backend_is_selected_by_env_and_names_itself(monkeypatch, spec,
 
 @pytest.mark.parametrize("spec", ["", "nonsense", "openai", "unknown:model"])
 def test_an_unusable_spec_falls_back_to_local(monkeypatch, spec):
+    # GEMINI_API_KEY must be cleared explicitly. An empty OTTO_EMBEDDING_MODEL
+    # does NOT mean "local" on a machine that has a Gemini key -- it means "use
+    # the measured hosted default", which is the whole of current_backend()'s
+    # second branch. Leaving it to the ambient environment makes this test pass
+    # or fail depending on whose laptop it runs on.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("OTTO_EMBEDDING_MODEL", spec)
     emb.reset_backend()
 

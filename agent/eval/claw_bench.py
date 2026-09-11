@@ -255,7 +255,13 @@ class Deadline:
     def check(self) -> tuple[str, str, int] | None:
         now = time.monotonic()
         if now >= self.hard_at:
-            raise DeadlineExceeded("the task's time budget is spent")
+            # Refuse, do not raise. agent/pipeline/budget.py now owns ending a
+            # run, and it ends it by answering. This check only still exists to
+            # stop ONE long command; raising here would unwind the graph out
+            # from under the budget and lose the work -- which is what it did
+            # on T026, where a 50-second model call let the clock pass between
+            # the loop's budget check and the tool dispatch right after it.
+            return ("", "the task's time budget is spent -- stop and answer now.", 1)
         if now >= self.wrap_up_at:
             return (
                 "",

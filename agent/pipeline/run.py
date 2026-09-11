@@ -90,6 +90,7 @@ from langfuse.langchain import CallbackHandler
 from langgraph.types import Command
 
 from agent.memory.session import bind_store
+from agent.pipeline.budget import bind_budget, current_budget, default_budget
 from agent.memory.store import MemoryStore
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
 from agent.pipeline.state import AgentState
@@ -287,8 +288,14 @@ def run_pipeline(
     handler = CallbackHandler()
     config = _config(_graph_thread_id(session_id), handler)
     store = MemoryStore.for_session(session_id)
+    # A run with nobody watching still needs a ceiling. Both benchmark harnesses
+    # bind their own Budget; an `otto chat` turn bound NOTHING, so
+    # OTTO_MAX_MODEL_CALLS was a dead env var and an interactive turn could
+    # spend without limit. `current_budget() or default_budget()` keeps a
+    # harness's own budget when there is one.
+    budget = current_budget() or default_budget()
 
-    with bind_store(store):
+    with bind_budget(budget), bind_store(store):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -352,8 +359,14 @@ def run_pipeline_stream(
     graph_thread_id = _graph_thread_id(session_id)
     config = _config(graph_thread_id, handler)
     store = MemoryStore.for_session(session_id)
+    # A run with nobody watching still needs a ceiling. Both benchmark harnesses
+    # bind their own Budget; an `otto chat` turn bound NOTHING, so
+    # OTTO_MAX_MODEL_CALLS was a dead env var and an interactive turn could
+    # spend without limit. `current_budget() or default_budget()` keeps a
+    # harness's own budget when there is one.
+    budget = current_budget() or default_budget()
 
-    with bind_store(store):
+    with bind_budget(budget), bind_store(store):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -399,8 +412,14 @@ def resume_pipeline_stream(answer, *, thread_id: str, session_id: str):
     handler = CallbackHandler()
     config = _config(thread_id, handler)
     store = MemoryStore.for_session(session_id)
+    # A run with nobody watching still needs a ceiling. Both benchmark harnesses
+    # bind their own Budget; an `otto chat` turn bound NOTHING, so
+    # OTTO_MAX_MODEL_CALLS was a dead env var and an interactive turn could
+    # spend without limit. `current_budget() or default_budget()` keeps a
+    # harness's own budget when there is one.
+    budget = current_budget() or default_budget()
 
-    with bind_store(store):
+    with bind_budget(budget), bind_store(store):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
