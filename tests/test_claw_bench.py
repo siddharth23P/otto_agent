@@ -58,11 +58,17 @@ def test_past_the_wrap_up_point_a_tool_refuses_instead_of_running():
     assert "final answer now" in stderr
 
 
-def test_past_the_hard_point_it_raises_so_the_graph_unwinds():
+def test_past_the_hard_point_it_refuses_rather_than_raising():
+    """It used to raise. agent/pipeline/budget.py now owns ending a run, and it
+    ends it by answering -- raising here unwinds the graph out from under the
+    budget and loses the work. Seen on T026: a 50-second model call let the
+    clock pass between the loop's own budget check and the tool dispatch right
+    after it, and the whole run went down."""
     now = time.monotonic()
     d = cb.Deadline(hard_at=now - 1, wrap_up_at=now - 2)
-    with pytest.raises(cb.DeadlineExceeded):
-        d.check()
+    stdout, stderr, code = d.check()
+    assert code == 1
+    assert "answer now" in stderr
 
 
 def test_the_wrap_up_stage_comes_before_the_hard_stage():

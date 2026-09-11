@@ -27,8 +27,13 @@ writes down what it found -- which is why `check()` returns text rather than
 raising, and why exhaustion is a `stop` the caller handles rather than an
 exception that unwinds the graph.
 
-NOTHING BOUND IS A VALID STATE and it is what an ordinary `otto chat` turn
-uses unless OTTO_MAX_MODEL_CALLS says otherwise. Same contextvar shape as
+NOTHING BOUND IS A VALID STATE for a direct caller of `_call`, but a real run
+always has one: agent/pipeline/run.py binds `current_budget() or
+default_budget()` around every entry point, so a harness's own budget wins and
+an ordinary `otto chat` turn still gets the OTTO_MAX_MODEL_CALLS ceiling. This
+docstring previously claimed that already happened, and it did not -- the
+function was imported and never called, which made the env var dead and left an
+interactive turn able to spend without limit. Same contextvar shape as
 agent/pipeline/execution.py, workspace.py and toolkit.py, for the same reason:
 `_call` is reached through a graph and cannot see the run it belongs to.
 """

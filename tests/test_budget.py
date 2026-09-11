@@ -156,3 +156,29 @@ def test_the_default_ceiling_is_env_overridable(monkeypatch):
 def test_a_junk_env_value_falls_back_rather_than_crashing(monkeypatch):
     monkeypatch.setenv("OTTO_MAX_MODEL_CALLS", "not-a-number")
     assert default_budget().max_model_calls == DEFAULT_MAX_MODEL_CALLS
+
+
+# --------------------------------------------------------------------------
+# The ceiling actually reaches a run
+# --------------------------------------------------------------------------
+
+def test_every_pipeline_entry_point_binds_a_budget():
+    """`default_budget` was imported and never called, so OTTO_MAX_MODEL_CALLS
+    was a dead env var and an interactive turn had no ceiling on spend at all.
+    The docstring said otherwise, which is how it survived."""
+    import inspect
+
+    from agent.pipeline import run
+
+    for fn in (run.run_pipeline, run.run_pipeline_stream, run.resume_pipeline_stream):
+        assert "bind_budget" in inspect.getsource(fn), f"{fn.__name__} binds no budget"
+
+
+def test_a_harness_budget_is_not_replaced_by_the_default():
+    """`current_budget() or default_budget()` -- a benchmark binds its own
+    deadline and must keep it."""
+    import inspect
+
+    from agent.pipeline import run
+
+    assert "current_budget() or default_budget()" in inspect.getsource(run.run_pipeline)

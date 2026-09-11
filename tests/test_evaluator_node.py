@@ -304,3 +304,39 @@ def test_a_provider_failure_judging_a_plan_says_plan_not_output_in_the_feedback(
     assert "planner" in result.update["feedback"]
     assert "plan" in result.update["feedback"]
     assert "output" not in result.update  # untouched, still pending judgment
+
+
+def test_the_evaluator_never_appends_an_empty_assistant_turn(monkeypatch):
+    """It runs on Anthropic, which rejects empty text blocks, and `_call`
+    returns "" on an empty stream. One of those in its message list breaks every
+    later call in the same judgment.
+
+    The guard existed in the agent loop and not in this copy -- which is the
+    argument for there being one loop rather than two."""
+    class _EmptyThenVerdict:
+        def __init__(self):
+            self.seen = []
+
+        def stream(self, messages):
+            self.seen.append(list(messages))
+            reply = "" if len(self.seen) == 1 else "FINAL:\nAPPROVE: yes\nWHY: ok"
+            yield AIMessageChunk(content=reply)
+
+    fake = _EmptyThenVerdict()
+    _install(monkeypatch, fake)
+
+    pn.evaluator(_state(node="agent", output="an answer"))
+
+    for sent in fake.seen:
+        for message in sent:
+            assert str(message.content).strip(), "an empty message reached the judge"
+
+
+def test_the_evaluator_prompt_promises_the_budget_it_is_given():
+    """It used to be told five exchanges and given two. A model told it has
+    budget it does not have will plan to use it."""
+    import inspect
+
+    source = inspect.getsource(pn.evaluator)
+    assert "max_iter=MAX_EVALUATOR_ITERATIONS" in source
+    assert "max_iter=MAX_TOOL_ITERATIONS" not in source

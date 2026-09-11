@@ -979,7 +979,14 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
                     dead_replies,
                 )
                 return output
-            messages.append(AIMessage(text))
+            # Never an EMPTY AIMessage. `_call` returns "" on an empty stream,
+            # Anthropic rejects empty text blocks, and this loop is the
+            # evaluator's -- which runs on Anthropic. One empty reply here
+            # breaks every later call in the same judgment. The same guard
+            # exists in `_agent_loop`; this copy did not get it, which is the
+            # argument for there being one loop rather than two.
+            if text:
+                messages.append(AIMessage(text))
             messages.append(HumanMessage(UNPARSEABLE_FEEDBACK))
             continue
 
@@ -1596,7 +1603,13 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     llm = ROUTER.chat_model(Task.EVALUATE)
     target, target_note = "ANSWER", "as a finished answer"
     human_label = "ANSWER"
-    system_prompt = EVALUATOR_PROMPT.format(target=target, target_note=target_note, max_iter=MAX_TOOL_ITERATIONS)
+    # The SAME number the loop below is actually run with. It used to be
+    # MAX_TOOL_ITERATIONS, so the prompt promised five exchanges and the loop
+    # allowed two -- a model told it has budget it does not have will plan to
+    # use it.
+    system_prompt = EVALUATOR_PROMPT.format(
+        target=target, target_note=target_note, max_iter=MAX_EVALUATOR_ITERATIONS,
+    )
     # It used to judge blind: conversation, request, output, nothing else. So
     # "I cannot verify this" came back as a rejection, and a rejection cost a
     # whole extra round. Everything added below already exists and is already
