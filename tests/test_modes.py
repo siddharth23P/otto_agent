@@ -125,3 +125,40 @@ def test_a_mode_with_no_reason_gives_an_empty_string():
 
 def test_a_very_long_reason_is_clipped():
     assert len(mode_reason("solve\n" + "x" * 1000)) <= 200
+
+
+# --------------------------------------------------------------------------
+# Depth: an ordering, for one decision
+# --------------------------------------------------------------------------
+
+def test_every_mode_declares_a_depth():
+    for mode in MODES.values():
+        assert isinstance(mode.depth, int)
+
+
+def test_the_orderings_are_not_all_the_same():
+    """If every mode sat at one depth, no swap would ever be an escalation and
+    the asymmetric handoff would be dead code."""
+    assert len({m.depth for m in MODES.values()}) > 1
+
+
+def test_the_reasoning_mode_is_the_deepest():
+    assert MODES["solve"].depth == max(m.depth for m in MODES.values())
+
+
+def test_lookup_is_shallower_than_reasoning():
+    """Otherwise `find` -> `solve` would not restart, which is the case the
+    measurement is about."""
+    assert MODES["find"].depth < MODES["solve"].depth
+
+
+def test_depth_names_no_model_and_no_price():
+    """Which vendor serves a Task is mapping.py's business, and depth has to
+    stay true when that table changes."""
+    import inspect
+
+    from agent.pipeline import modes
+
+    source = inspect.getsource(modes)
+    for vendor in ("gpt", "claude", "gemini", "mercury", "haiku"):
+        assert vendor not in source.lower().split("depth")[-1][:200]

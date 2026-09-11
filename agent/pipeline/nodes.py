@@ -1557,7 +1557,8 @@ def _transcript_size(messages: list) -> int:
 
 
 def _agent_loop(state: AgentState, messages: list, *, mode: str,
-                actions: list[str], mode_log: list[str]) -> tuple[str, str, str]:
+                actions: list[str], mode_log: list[str],
+                seed: list | None = None) -> tuple[str, str, str]:
     """Run one conversation until it answers, pauses, or runs out of budget.
 
     Returns `(output, why_it_stopped, mode)`. `output` is only ever set from an
@@ -1632,7 +1633,7 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
             mode, swaps, did_work_since_swap = _switch_mode(
                 messages, body, mode=mode, swaps=swaps,
                 did_work=did_work_since_swap, mode_log=mode_log,
-                calls=budget.calls if budget else 0,
+                calls=budget.calls if budget else 0, seed=seed,
             )
             llm = ROUTER.chat_model(MODES[mode].task)
             continue
@@ -1683,11 +1684,24 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
 
 
 def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
-                 did_work: bool, mode_log: list[str], calls: int) -> tuple[str, int, bool]:
+                 did_work: bool, mode_log: list[str], calls: int,
+                 seed: list | None = None) -> tuple[str, int, bool]:
     """Handle one `switch_mode` request. Returns `(mode, swaps, did_work)`.
 
     Three refusals, cheapest first, and none of them raises -- a refusal is a
     message the model reads and acts on, exactly like a failed tool result.
+
+    And an asymmetry, which is the measured part. Handing a stronger model the
+    weaker one's trajectory recovers under half the quality it should, at four
+    to six times the cost; DISCARDING that trajectory takes recovery from 47%
+    to 64%. The reverse is not true -- removing a strong model's trajectory
+    before handing down HURTS. In the paper's words: strong trajectories guide
+    weak receivers, weak trajectories burden strong ones.
+
+    So escalating restarts from the seed, and de-escalating carries everything.
+    The restart is only affordable because the checklist survives it: what the
+    run has established is state, not conversation, so a clean restart loses
+    the weaker model's phrasing and none of its findings.
     """
     want = parse_mode_body(body)
     if want is None:
@@ -1722,9 +1736,26 @@ def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
         return mode, swaps, did_work
 
     reason = mode_reason(body)
+    escalating = MODES[want].depth > MODES[mode].depth
+    if escalating and seed is not None:
+        # Clean restart. Everything the run established is in the checklist and
+        # in the workspace; what is dropped is the weaker model's account of
+        # getting there, which is the part measured as a burden.
+        messages[:] = list(seed)
+        messages.append(HumanMessage(
+            f"Starting fresh in {want} mode. The work so far stands -- what is "
+            "already true is listed above, and anything written is still "
+            "written. What you do not have is the earlier back-and-forth, "
+            "which you do not need."
+        ))
     messages.append(_mode_message(want))
-    mode_log.append(f"call {calls}: {mode} -> {want}" + (f" ({reason})" if reason else ""))
-    _emit({"agent": {"board": [f"switched to {want} mode" + (f" -- {reason}" if reason else "")]}})
+    direction = "escalated" if escalating else "switched"
+    mode_log.append(
+        f"call {calls}: {mode} -> {want}"
+        + (" (restarted)" if escalating and seed is not None else "")
+        + (f" ({reason})" if reason else "")
+    )
+    _emit({"agent": {"board": [f"{direction} to {want} mode" + (f" -- {reason}" if reason else "")]}})
     return want, swaps + 1, False
 
 
@@ -1787,6 +1818,9 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
     try:
         output, why, mode = _agent_loop(
             state, messages, mode=mode, actions=actions, mode_log=mode_log,
+            # What an escalation restarts from: the prompts, the task and the
+            # checklist, with none of the working conversation.
+            seed=list(messages[:3]),
         )
     except NeedsUserInput as exc:
         return Command(

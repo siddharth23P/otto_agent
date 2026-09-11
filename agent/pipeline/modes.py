@@ -43,6 +43,15 @@ class Mode:
 
     name: str
     task: Task
+    #: Roughly how much reasoning this mode buys, as an ordering rather than a
+    #: measurement: 0 fast, 1 middling, 2 deep.
+    #:
+    #: It exists for one decision. Moving UP this order is an escalation and
+    #: moving down is not, and the two want opposite treatment of the
+    #: conversation -- see nodes.py's `_switch_mode`. Deliberately not a model
+    #: name or a price: which vendor serves a Task is mapping.py's business,
+    #: and this has to stay true when that table changes.
+    depth: int
     #: Appended to the live conversation as a HumanMessage when this mode is
     #: entered. NEVER a SystemMessage: langchain_anthropic raises on
     #: non-consecutive system messages and langchain_google_genai hoists a
@@ -59,6 +68,7 @@ DEFAULT_MODE = "solve"
 MODES: dict[str, Mode] = {
     "solve": Mode(
         name="solve",
+        depth=2,
         task=Task.REASON,
         guidance=(
             "Work out a concrete answer, writing and running code where that "
@@ -68,6 +78,7 @@ MODES: dict[str, Mode] = {
     ),
     "plan": Mode(
         name="plan",
+        depth=1,
         task=Task.PLAN,
         guidance=(
             "Break the work into an ordered list of concrete steps before "
@@ -78,6 +89,7 @@ MODES: dict[str, Mode] = {
     ),
     "summarize": Mode(
         name="summarize",
+        depth=0,
         task=Task.SUMMARIZE,
         guidance=(
             "Condense what you already have. You are not looking anything new "
@@ -87,6 +99,7 @@ MODES: dict[str, Mode] = {
     ),
     "find": Mode(
         name="find",
+        depth=0,
         task=Task.CHAT_FAST,
         guidance=(
             "Look something up before answering. In order: recall_memory for "
