@@ -454,6 +454,9 @@ class TaskOutcome:
     agent_actions: int
     wall_time_s: float
     error: str = ""
+    #: What the run was held to, and how each criterion settled. The single
+    #: most useful thing for reading a low score afterwards.
+    checklist: list = field(default_factory=list)
 
 
 def _final_text(state: dict | None) -> str:
@@ -531,6 +534,7 @@ def run_one(
 
     history: list = []
     turn_text = prompt
+    checklist: list = []
 
     with tempfile.TemporaryDirectory(prefix="otto-claw-") as scratch:
         runner = sandbox_runner(sandbox_url, deadline) if sandbox_url else None
@@ -555,6 +559,12 @@ def run_one(
                         state = run_pipeline(turn_text, session_id=session_id, history=history)
                         answer = _final_text(state)
                         turns += len(state.get("actions") or ()) if state else 0
+                        # The criteria the run worked against and how they
+                        # settled. Without this a low score is undiagnosable
+                        # from the trace: you can see what the agent did and
+                        # what it answered, but not what it was being held to.
+                        # Cost two blind re-runs on T136 before it went in.
+                        checklist = (state or {}).get("checklist") or []
                     if answer:
                         recorder.text("assistant", answer)
                         answer_recorded = True
@@ -615,6 +625,7 @@ def run_one(
         ))
 
     return trace_path, {
+        "checklist": checklist,
         "tool_calls": recorder.tool_calls,
         "wall_time_s": wall,
         "error": error,
@@ -800,6 +811,7 @@ def run_task_file(
 
     if meta["error"] and not outcome.error:
         outcome.error = meta["error"]
+    outcome.checklist = meta.get("checklist") or []
     return outcome
 
 

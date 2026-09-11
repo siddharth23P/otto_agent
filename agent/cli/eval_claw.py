@@ -131,6 +131,8 @@ def eval_claw_cmd(
             continue
         outcomes.append(outcome)
         flag = "[ok]pass[/]" if outcome.passed else "[warn]fail[/]"
+        for item in outcome.checklist:
+            err.print(f"    [{item.get('status', '?')}] {item.get('text', '')[:90]}")
         detail = f" ({outcome.error})" if outcome.error else ""
         out.print(
             f"  {flag} score={outcome.task_score:.2f} "
@@ -151,6 +153,7 @@ def eval_claw_cmd(
                 "completion": o.completion, "robustness": o.robustness,
                 "communication": o.communication, "safety": o.safety,
                 "tool_calls": o.tool_calls, "agent_actions": o.agent_actions,
+                "checklist": o.checklist,
                 "wall_time_s": o.wall_time_s, "error": o.error,
             }
             for o in outcomes
