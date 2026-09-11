@@ -59,6 +59,11 @@ class _Failing:
 
 def _install(monkeypatch, fake):
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
+    # The loop writes its checklist from the task before it starts. Tests that
+    # care about that call it explicitly; the rest are about what the loop does
+    # afterwards, so they get a fixed one and keep their scripted replies
+    # aligned with the exchanges they are actually asserting on.
+    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["the task is done"])
 
 
 def _state(**overrides) -> dict:
@@ -305,12 +310,16 @@ def test_a_swap_changes_which_task_the_next_call_routes_to(monkeypatch):
         "FINAL:\ndone",
     ])
     monkeypatch.setattr(pn.ROUTER, "chat_model", chat_model)
+    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["done"])
 
     result = pn.agent(_state())
 
     assert result.update["mode"] == "plan"
     assert asked[-1] is pn.MODES["plan"].task
-    assert asked[0] is pn.MODES[pn.DEFAULT_MODE].task
+    # asked[0] is the checklist, written before the loop starts and routed to
+    # the judging seat rather than the working one. The loop's own first call
+    # is the one after it.
+    assert asked[1] is pn.MODES[pn.DEFAULT_MODE].task
 
 
 def test_a_swap_keeps_everything_that_came_before_it(monkeypatch):
@@ -519,22 +528,20 @@ def test_a_read_only_tool_runs_without_a_hold(monkeypatch):
     assert len(fake.seen) == 2, "a read-only tool was held"
 
 
-def test_a_writing_tool_is_held_once_before_it_runs(monkeypatch, tmp_path):
+def test_a_workspace_write_is_not_held(monkeypatch, tmp_path):
+    """Writing into a throwaway workspace or a task container is recoverable --
+    write it again. Gating it cost a model call per new file and bought
+    nothing; measured live, a two-file task went from 6 calls to 9."""
     from agent.pipeline.workspace import bind_workspace
 
-    fake = _Scripted([
-        "ACTION: write_file\nCODE:\nout.txt\nhello",
-        "ACTION: write_file\nCODE:\nout.txt\nhello",
-        "FINAL:\ndone",
-    ])
+    fake = _Scripted(["ACTION: write_file\nCODE:\nout.txt\nhello", "FINAL:\ndone"])
     _install(monkeypatch, fake)
 
     with bind_workspace(tmp_path):
         pn.agent(_state())
 
-    held = "\n".join(m.content for m in fake.seen[1])
-    assert "HOLD" in held
-    assert (tmp_path / "out.txt").exists(), "the confirmed write never ran"
+    assert len(fake.seen) == 2, "a workspace write was held"
+    assert (tmp_path / "out.txt").exists()
 
 
 def test_the_hold_names_the_ambiguity_rule(monkeypatch, tmp_path):
@@ -551,25 +558,30 @@ def test_the_hold_offers_a_way_forward_rather_than_a_refusal(monkeypatch):
     assert "issue the same call again" in pn.MUTATION_GATE_NOTE
 
 
-def test_the_same_target_is_held_only_once(monkeypatch, tmp_path):
+def test_the_same_target_is_held_only_once(monkeypatch):
     """A gate that fired every time would loop forever or teach the model to
     ignore it."""
-    from agent.pipeline.workspace import bind_workspace
+    from agent.pipeline.toolkit import ExtraTool, bind_extra_tools
+    from agent.pipeline.tools import ToolResult
+
+    ran = []
+    send = ExtraTool(name="send_message", description="Send it.",
+                     call=lambda b: (ran.append(b), ToolResult("ok", "", 0))[1],
+                     schema={"type": "object", "properties": {"to": {"type": "string"}}})
 
     fake = _Scripted([
-        "ACTION: write_file\nCODE:\nout.txt\nfirst",
-        "ACTION: write_file\nCODE:\nout.txt\nfirst",
-        "ACTION: write_file\nCODE:\nout.txt\nsecond",
+        'ACTION: send_message\nCODE:\n{"to": "a@b.c"}',
+        'ACTION: send_message\nCODE:\n{"to": "a@b.c"}',
+        'ACTION: send_message\nCODE:\n{"to": "a@b.c"}',
         "FINAL:\ndone",
     ])
     _install(monkeypatch, fake)
-
-    with bind_workspace(tmp_path):
+    with bind_extra_tools([send]):
         pn.agent(_state())
 
     holds = sum(1 for sent in fake.seen for m in sent if "HOLD" in str(m.content))
     assert holds >= 1
-    assert (tmp_path / "out.txt").read_text() == "second", "the second write was blocked"
+    assert len(ran) == 2, "the confirmed sends did not both run"
 
 
 def test_a_run_scoped_tool_is_gated_unless_it_says_otherwise(monkeypatch):
@@ -610,3 +622,99 @@ def test_a_run_scoped_tool_that_only_reads_is_not_gated(monkeypatch):
         pn.agent(_state())
 
     assert len(fake.seen) == 2, "a read-only run-scoped tool was held"
+
+
+# --------------------------------------------------------------------------
+# The checklist: the run's working state, not its conversation
+# --------------------------------------------------------------------------
+#
+# In the ablation this comes from, a verified working state was worth +24
+# points where an experience library over the same tasks was worth +2 -- and
+# injecting more library text with no state signal scored 16 points BELOW
+# state alone. What matters is knowing what is still open.
+
+def test_the_loop_is_told_what_has_to_be_true(monkeypatch):
+    fake = _Scripted(["FINAL:\ndone"])
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
+    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["fib(10) prints 55", "fib.py exists"])
+
+    result = pn.agent(_state())
+
+    seeded = "\n".join(m.content for m in fake.seen[0])
+    assert "fib(10) prints 55" in seeded
+    assert "fib.py exists" in seeded
+    assert len(result.update["checklist"]) == 2
+
+
+def test_the_checklist_is_written_before_any_attempt_exists(monkeypatch):
+    """Stronger than writing it after the fact: nothing in it can be shaped by
+    an attempt trying to satisfy it."""
+    seen_task = []
+    fake = _Scripted(["FINAL:\ndone"])
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
+    monkeypatch.setattr(pn, "_criteria", lambda llm, task: seen_task.append(task) or ["c"])
+
+    pn.agent(_state())
+
+    assert seen_task == ["fix the failing test"], "the checklist saw more than the task"
+
+
+def test_an_existing_checklist_is_not_rewritten(monkeypatch):
+    """A rejection must not move the bar the attempt is being judged against."""
+    calls = []
+    fake = _Scripted(["FINAL:\nsecond attempt"])
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
+    monkeypatch.setattr(pn, "_criteria", lambda llm, task: calls.append(1) or ["new"])
+
+    existing = [{"text": "the original bar", "status": "pending", "evidence": ""}]
+    result = pn.agent(_state(checklist=existing, transcript=[{"kind": "human", "content": "earlier"}],
+                             feedback="not yet"))
+
+    assert calls == [], "the checklist was rewritten mid-run"
+    assert result.update["checklist"][0]["text"] == "the original bar"
+
+
+def test_a_rejected_run_is_shown_what_is_still_open(monkeypatch):
+    fake = _Scripted(["FINAL:\nsecond attempt"])
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
+
+    pn.agent(_state(
+        checklist=[{"text": "the file exists", "status": "met", "evidence": "saw it"},
+                   {"text": "the test passes", "status": "pending", "evidence": ""}],
+        transcript=[{"kind": "human", "content": "earlier"}],
+        feedback="the test still fails",
+    ))
+
+    resumed = "\n".join(m.content for m in fake.seen[0])
+    assert "[done] the file exists" in resumed
+    assert "[  ] the test passes" in resumed
+
+
+def test_only_the_judgment_may_change_a_status():
+    """An executor's claim about its own work is not evidence -- that
+    separation is the whole reason the state layer exists."""
+    checklist = [{"text": "a", "status": "pending", "evidence": ""}]
+    approved = pn._settle(checklist, pn._parse_verdict(
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: verified"))
+    assert approved[0]["status"] == "met"
+    assert approved[0]["evidence"] == "verified"
+
+
+def test_a_blocked_record_is_not_the_same_as_an_open_one():
+    """An obstacle outside the agent's control should not be retried
+    identically, and a plain rejection invites exactly that."""
+    checklist = [{"text": "a", "status": "pending", "evidence": ""}]
+    blocked = pn._settle(checklist, pn._parse_verdict(
+        "FINAL:\nMET: 0/1\nBLOCKED: yes\nAPPROVE: no\nWHY: the service was down"))
+    assert blocked[0]["status"] == "blocked"
+
+
+def test_a_rejection_leaves_records_open_rather_than_guessing():
+    """The verdict says how many criteria were met, not which. A wrong `met`
+    is worse than an honest `pending`, because the next attempt would skip the
+    thing that is actually missing."""
+    checklist = [{"text": "a", "status": "pending", "evidence": ""},
+                 {"text": "b", "status": "pending", "evidence": ""}]
+    settled = pn._settle(checklist, pn._parse_verdict(
+        "FINAL:\nMET: 1/2\nBLOCKED: no\nAPPROVE: no\nWHY: b is missing"))
+    assert [i["status"] for i in settled] == ["pending", "pending"]

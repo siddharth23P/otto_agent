@@ -87,15 +87,17 @@ def test_a_rejection_costs_one_round_trip_not_a_router_decision(monkeypatch):
     """A rejection used to return to the overseer, which spent a call deciding
     who should retry. The evaluator hands straight back to the loop."""
     model, final = _run(monkeypatch, [
-        "FINAL:\nfirst attempt",                           # 1, work
-        "- it is verified",                                 # 2, rubric
+        "- it is verified",                                  # 1, the checklist
+        "FINAL:\nfirst attempt",                            # 2, work
         "FINAL:\nMET: 0/1\nBLOCKED: no\nAPPROVE: no\nWHY: not verified",
-        "FINAL:\nsecond attempt",                           # 4, work
-        "- it is verified",                                  # 5, rubric again
+        "FINAL:\nsecond attempt",                           # 4, work again
         "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: now it checks out",
     ])
 
-    assert model.calls == 6
+    # Five, not six. The criteria are written ONCE for the run rather than once
+    # per judgment, so the re-judgment after a rejection costs nothing to set
+    # up -- the judge and the actor are working from the same list.
+    assert model.calls == 5
     assert final["final_output"] == "second attempt"
 
 

@@ -216,4 +216,20 @@ class AgentState(TypedDict):
     #: How many times the evaluator has rejected an answer in this run. Bounded
     #: so judgment cannot eat the whole budget -- see nodes.py's MAX_REJECTIONS.
     rejections: int
+    #: What this run has to be true at the end, as records rather than prose.
+    #: `[{"text": str, "status": "pending"|"met"|"blocked", "evidence": str}]`.
+    #:
+    #: This is the run's working STATE, and it is deliberately not the
+    #: conversation. The measured case: in one ablation a verified working
+    #: state was worth +24 points where an experience library over the same
+    #: task was worth +2, and injecting more library text with no state signal
+    #: scored 16 points BELOW state alone. What matters is knowing what is
+    #: still open, not having more to read.
+    #:
+    #: Written once at the start of a run, from the task alone, before any
+    #: attempt exists -- so nothing here can be shaped by an attempt trying to
+    #: satisfy it. The loop reads it to know what is left; the evaluator judges
+    #: against it and is the only thing that may change a status, because an
+    #: executor's claim about its own work is not evidence.
+    checklist: list[dict] | None
     final_output: str | None

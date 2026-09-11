@@ -122,6 +122,7 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = (), memory_context: 
         "mode_log": [],
         "model_calls": 0,
         "rejections": 0,
+        "checklist": None,
         "final_output": None,
     }
 
