@@ -9,6 +9,8 @@ Every threshold here exists to stop the router acting on noise. On a benchmark
 whose own scores swing 0.36 between identical runs, a chain reordered from
 three samples is a chain reordered by a coin.
 """
+import random
+
 import pytest
 
 from agent.router import outcomes as o
@@ -16,7 +18,14 @@ from agent.router.mapping import Candidate, Task
 
 
 @pytest.fixture
-def seat_log(tmp_path):
+def seat_log(tmp_path, monkeypatch):
+    """A throwaway log, with exploration pinned OFF.
+
+    Exploration fires on one reorder in ten, which is a one-in-ten flake in
+    every test about the ORDERING -- and it caused one, in the commit that
+    introduced it. Tests about exploration turn it back on deliberately.
+    """
+    monkeypatch.setattr(o.random, "random", lambda: 1.0)
     with o.bind_log(tmp_path / "outcomes.db"):
         yield
 
@@ -194,3 +203,69 @@ def test_a_real_fallback_is_still_reported_as_one():
     )
     assert degraded.fell_back
     assert not degraded.chosen_on_evidence
+
+
+# --------------------------------------------------------------------------
+# Exploration -- without which the ordering is a ratchet
+# --------------------------------------------------------------------------
+
+def test_a_demoted_candidate_keeps_accruing_evidence(monkeypatch, seat_log):
+    """The bug the first version of this file shipped with. Once a candidate
+    was demoted it stopped being resolved, so it stopped accruing runs, so its
+    record froze at the twelve samples that demoted it -- measured, 200 further
+    runs left the loser on exactly 12. Twelve runs would then decide a seat
+    forever, and a model that later improved would never get a second chance.
+    """
+    monkeypatch.setattr(o.random, "random", random.Random(0).random)
+    _fill("reason", "model-a", runs=o.MIN_SAMPLES, approved=2)
+    _fill("reason", "model-b", runs=o.MIN_SAMPLES, approved=o.MIN_SAMPLES)
+
+    for _ in range(300):
+        chosen = o.reorder("reason", [A, B])[0]
+        o.record("reason", o.spec_id(chosen), approved=True, calls=10)
+
+    assert o.preference("reason")["model-a"].runs > o.MIN_SAMPLES
+
+
+def test_exploration_is_the_exception_not_the_rule(monkeypatch, seat_log):
+    """One in ten. A router that explored half the time would be a router
+    that had learned nothing."""
+    # A seeded generator, so "about one in ten" is asserted without a
+    # one-in-ten chance of the assertion itself being the flake.
+    monkeypatch.setattr(o.random, "random", random.Random(0).random)
+    _fill("reason", "model-a", runs=o.MIN_SAMPLES, approved=0)
+    _fill("reason", "model-b", runs=o.MIN_SAMPLES, approved=o.MIN_SAMPLES)
+
+    picks = [o.spec_id(o.reorder("reason", [A, B])[0]) for _ in range(400)]
+    share = picks.count("model-a") / len(picks)
+
+    assert 0.02 < share < 0.25, f"explored {share:.0%} of the time"
+
+
+def test_it_explores_the_candidate_it_knows_least_about(monkeypatch, seat_log):
+    monkeypatch.setattr(o.random, "random", lambda: 0.0)
+    _fill("reason", "model-a", runs=o.MIN_SAMPLES * 4, approved=o.MIN_SAMPLES * 4)
+    _fill("reason", "model-b", runs=o.MIN_SAMPLES, approved=0)
+
+    assert _ids(o.reorder("reason", [A, B])) == [B.spec, A.spec]
+
+
+def test_a_read_only_run_never_explores(monkeypatch, seat_log):
+    """An exploration nobody records buys a worse answer and learns nothing --
+    and it would make a held-out measurement irreproducible, silently using a
+    different model on one run in ten."""
+    monkeypatch.setattr(o.random, "random", lambda: 0.0)
+    _fill("reason", "model-a", runs=o.MIN_SAMPLES, approved=0)
+    _fill("reason", "model-b", runs=o.MIN_SAMPLES, approved=o.MIN_SAMPLES)
+
+    with o.read_only():
+        assert _ids(o.reorder("reason", [A, B])) == [B.spec, A.spec]
+
+
+def test_nothing_to_explore_between_is_not_explored(monkeypatch, seat_log):
+    """One measured candidate and one unmeasured is not a choice -- the
+    unmeasured one has no position to defend and never moves anyway."""
+    monkeypatch.setattr(o.random, "random", lambda: 0.0)
+    _fill("reason", "model-b", runs=o.MIN_SAMPLES, approved=o.MIN_SAMPLES)
+
+    assert _ids(o.reorder("reason", [A, B])) == [A.spec, B.spec]
