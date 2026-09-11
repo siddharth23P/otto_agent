@@ -248,7 +248,7 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
 
     Task.SUMMARIZE: (
         Candidate(
-            spec="gemini:gemini-2.5-flash-lite",
+            spec="gemini:gemini-flash-lite-latest",
             requires=frozenset({Capability.CHAT}),
             params={"temperature": 0.0, "max_tokens": 4096},
         ),
@@ -260,12 +260,19 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
     ),
 
     Task.VISION: (
+        # Pinned to an id that was verified to actually SERVE a request, not
+        # merely to appear in the catalogue: Gemini's model list still returns
+        # gemini-2.5-flash and gemini-2.5-flash-lite, both of which answer
+        # generateContent with 404 "no longer available". Router._select can
+        # only check that a pin exists in the catalogue, so a retired id
+        # resolves cleanly and then fails at call time.
+        #
         # Deliberately NO Inception fallback. Mercury has no vision, and a
         # chain that quietly fell through to a text model would answer
         # confidently about an image it never saw. NoViableRoute -> a failing
         # ToolResult is the correct outcome when no Gemini key is configured.
         Candidate(
-            spec="gemini:gemini-2.5-flash",
+            spec="gemini:gemini-3-flash-preview",
             requires=frozenset({Capability.CHAT, Capability.VISION}),
             params={"temperature": 0.0, "max_tokens": 4096},
         ),

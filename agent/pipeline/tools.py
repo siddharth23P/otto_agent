@@ -88,6 +88,7 @@ nothing in a role/evaluator node's reach may call it.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 import re
@@ -103,6 +104,7 @@ from typing import Callable, Iterator
 from agent.memory.retrieval import recall
 from agent.memory.session import current_store
 from agent.pipeline.execution import current_command_runner
+from agent.pipeline.vision import describe_image, sniff_media_type
 from agent.pipeline.workspace import (
     OutsideWorkspace,
     current_workspace,
@@ -419,6 +421,16 @@ def read_file(body: str) -> ToolResult:
         return _workspace_failure("read_file", str(exc))
     if not path.is_file():
         return _workspace_failure("read_file", f"{spec!r} is not a file in the workspace")
+    # Signpost, not a silent fallback. Reading an image as text returns pages
+    # of line-numbered mojibake -- it burns context and teaches the agent
+    # nothing, least of all that a tool exists for this. Naming that tool at
+    # the moment it is needed is what makes it discoverable, and it costs no
+    # network call.
+    if (kind := sniff_media_type(path.read_bytes()[:16])) is not None:
+        return _workspace_failure(
+            "read_file",
+            f"{spec!r} is a {kind} image, not text -- use view_image to look at it",
+        )
     try:
         lines = path.read_text(errors="replace").splitlines()
     except OSError as exc:
@@ -652,6 +664,107 @@ _LISTING_SKIP = frozenset({
 })
 
 
+#: Ceiling on an image Otto will ship to a vision model, overridable because
+#: the right number depends on the vendor and the wallet rather than on
+#: anything this file knows. Over it, the agent is told it can downscale the
+#: file itself with a shell command -- deliberately no Pillow dependency, and
+#: in a container the file is not on this machine to resize anyway.
+MAX_IMAGE_BYTES = int(os.environ.get("OTTO_MAX_IMAGE_BYTES", 8 * 1024 * 1024))
+
+#: Reads the file and base64s it in one command, size-checked first so an
+#: enormous file is refused rather than transferred. `base64 < file` rather
+#: than `base64 -w0 file`: `-w` is GNU coreutils and missing on BusyBox and
+#: BSD, while reading stdin and stripping newlines works everywhere.
+_REMOTE_IMAGE_SCRIPT = (
+    'sz=$(wc -c < {path}) || exit 2; '
+    '[ "$sz" -le {cap} ] || {{ echo "too big: $sz bytes" >&2; exit 3; }}; '
+    "base64 < {path} | tr -d '\\n'"
+)
+
+
+def view_image(body: str) -> ToolResult:
+    """Look at an image file and answer a question about it.
+
+    CODE: body is the path on the FIRST line, and the question after it:
+
+        fixtures/Canon1.png
+        transcribe the top staff bar by bar, with pitch and duration
+
+    The question matters more than it looks. A vision model returns words, and
+    those words are all the reasoning model ever sees -- for "reproduce this
+    score as SVG" a generic caption is worthless, while a narrow question
+    answered twice is close to being able to look. Ask again to narrow; the
+    repeat detector in agent/pipeline/nodes.py knows this tool is different and
+    keys on the question too, not just the path.
+
+    The image never enters the conversation -- see agent/pipeline/vision.py for
+    why that is a deliberate ceiling. One consequence worth knowing: a
+    description can be summarised away by memory compaction, and the recovery
+    is simply to call this again, since the file is still on disk.
+    """
+    head, _, question = body.partition("\n")
+    path = head.strip()
+    if not path:
+        return _workspace_failure("view_image", "first line must be the image path")
+
+    remote = current_command_runner()
+    if remote is not None:
+        command = _REMOTE_IMAGE_SCRIPT.format(path=shlex.quote(path), cap=MAX_IMAGE_BYTES)
+        stdout, stderr, code = remote(command, 60.0)
+        if code != 0:
+            return _workspace_failure("view_image", stderr.strip() or f"could not read {path!r}")
+        try:
+            # Never _clip this: clipping base64 yields silently corrupt image
+            # bytes, which surface as a baffling answer rather than an error.
+            data = base64.b64decode(stdout.strip(), validate=True)
+        except (ValueError, binascii.Error) as exc:
+            return _workspace_failure("view_image", f"{path!r} did not transfer cleanly: {exc}")
+    else:
+        try:
+            resolved = resolve_in_workspace(path)
+        except OutsideWorkspace as exc:
+            return _workspace_failure("view_image", str(exc))
+        if not resolved.is_file():
+            return _workspace_failure("view_image", f"{path!r} is not a file in the workspace")
+        data = resolved.read_bytes()
+        if len(data) > MAX_IMAGE_BYTES:
+            return _workspace_failure(
+                "view_image",
+                f"{path!r} is {len(data)} bytes, over the {MAX_IMAGE_BYTES}-byte limit -- "
+                "downscale it first (for example with a shell command) and try again",
+            )
+
+    media_type = sniff_media_type(data)
+    if media_type is None:
+        return _workspace_failure(
+            "view_image", f"{path!r} is not an image this can read (checked its first bytes)",
+        )
+
+    try:
+        # Imported here, not at module level, for the same reason _get_router()
+        # is lazy: agent/eval/runner.py imports this module for offline golden
+        # checking with no keys set, and that path must keep working.
+        from agent.router.mapping import Task
+
+        llm = _get_router().chat_model(Task.VISION)
+        answer = describe_image(
+            llm, base64.b64encode(data).decode(), media_type, question.strip(),
+        )
+    except ProviderError as exc:
+        # No GEMINI_API_KEY means Task.VISION has no viable route, and that
+        # arrives here as a ProviderError. It must degrade like any other
+        # failing tool, never take down a benchmark run.
+        return _workspace_failure("view_image", f"could not look at {path!r}: {exc}")
+    except Exception as exc:  # a vendor SDK error must not escape either
+        return _workspace_failure("view_image", f"could not look at {path!r}: {exc}")
+
+    header = (
+        f"view_image: a vision model looked at {path} "
+        f"({media_type}, {len(data)} bytes) and reports:"
+    )
+    return ToolResult(stdout=_clip(f"{header}\n{answer}"), stderr="", returncode=0)
+
+
 def web_search(query: str) -> ToolResult:
     """STUB (see module docstring) -- always fails with a legible reason
     instead of a crash or a silent empty result, so a caller's tool-loop
@@ -771,6 +884,7 @@ TOOL_TIERS: dict[str, str] = {
     "execute_python": READ_ONLY,
     "execute_bash": READ_ONLY,
     "read_file": READ_ONLY,
+    "view_image": READ_ONLY,
     "list_files": READ_ONLY,
     "write_file": WORKSPACE,
     "edit_file": WORKSPACE,
@@ -790,6 +904,7 @@ TOOL_DISPATCH: dict[str, Callable[[str], ToolResult]] = {
     "execute_python": execute_python,
     "execute_bash": execute_bash,
     "read_file": read_file,
+    "view_image": view_image,
     "list_files": list_files,
     "write_file": write_file,
     "edit_file": edit_file,
