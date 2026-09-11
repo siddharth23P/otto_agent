@@ -45,6 +45,50 @@ RETIRED: dict[str, dict[str, str]] = {
     },
 }
 
+#: Model families a vendor serves happily but which cannot do the job this
+#: router hands out. Separate from RETIRED because the failure is different in
+#: kind: these are alive, they simply are not chat models.
+#:
+#: This matters because capability detection is generous. Gemini's provider
+#: tags every `gemini-*` model VISION-capable, so a capability query for "a
+#: model that can see" picked `gemini-2.5-flash-preview-tts` -- a
+#: text-to-speech model -- the moment the pinned vision model was withdrawn.
+#: A pin hides that; a capability fallback does not, which is exactly what a
+#: fallback is for.
+#:
+#: Patterns rather than ids, because these families grow continuously and a
+#: list of exact names would be stale within a release.
+UNUSABLE_PATTERNS: dict[str, tuple[str, ...]] = {
+    "gemini": (
+        "-tts",            # text-to-speech
+        "-image",          # image generation, not image understanding
+        "imagen",
+        "veo",             # video generation
+        "embedding",
+        "-aqa",            # attributed question answering, a different API
+        "transcribe",      # speech-to-text
+        "-live-",          # bidirectional streaming, a different API surface
+        "native-audio",
+        "computer-use",    # tool surface of its own, not a chat model
+        "omni",            # 400 "This model only supports Interactions API"
+        "learnlm",
+        "gemma",           # open weights, served without the chat surface
+        "robotics",
+    ),
+    "openai": (
+        "tts", "whisper", "dall-e", "embedding", "moderation",
+        "-audio", "-realtime", "-transcribe", "-search-preview", "-image",
+        "babbage", "davinci", "codex",
+    ),
+}
+
+
+def is_unusable(provider: str, model_id: str) -> bool:
+    """True if `model_id` is alive but cannot serve a chat request."""
+    lowered = model_id.lower()
+    return any(p in lowered for p in UNUSABLE_PATTERNS.get(provider, ()))
+
+
 #: Learned during this process by note_retired(). Never persisted; see the
 #: module docstring for why that is on purpose.
 _LEARNED: dict[str, set[str]] = {}
@@ -58,11 +102,23 @@ RETIREMENT_MARKERS = (
     "is deprecated",
     "model not found",
     "does not exist",
+    # Not a retirement but permanently unusable here all the same: Gemini
+    # answers a generateContent call to some ids with "This model only
+    # supports Interactions API". Capability tags do not distinguish those, so
+    # a capability fallback can pick one -- and picking it twice in one run is
+    # pure waste.
+    "only supports",
 )
 
 
 def is_retired(provider: str, model_id: str) -> bool:
     return model_id in RETIRED.get(provider, {}) or model_id in _LEARNED.get(provider, set())
+
+
+def is_serviceable(provider: str, model_id: str) -> bool:
+    """True if this model is worth offering to the router at all -- neither
+    withdrawn by the vendor nor the wrong kind of model for a chat call."""
+    return not is_retired(provider, model_id) and not is_unusable(provider, model_id)
 
 
 def note_retired(provider: str, model_id: str, reason: str) -> None:
