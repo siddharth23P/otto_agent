@@ -685,16 +685,25 @@ EVALUATOR_PROMPT = (
 DISTIL_PROMPT = (
     "A run just finished. Write down what a DIFFERENT task could reuse from "
     "it.\n\n"
-    "A lesson is transferable or it is not a lesson. \"The config lives in "
-    "/etc/app.conf\" is a fact about one machine. \"When a tool reports a "
-    "path that does not exist, check the working directory before assuming "
-    "the file is missing\" is a lesson.\n\n"
-    "Write at most THREE, fewer is better, and zero is a perfectly good "
-    "answer for a run that went straightforwardly. Each has a `cue` -- the "
-    "SITUATION it applies in, not this task -- and an `action`, and an "
-    "`outcome` of \"worked\" or \"failed\". A lesson from something that "
-    "went wrong is worth more than one from something that went right; say "
-    "\"failed\" and describe what to do instead.\n\n"
+    "Look for FRICTION. What was retried, what was surprising, what took two "
+    "attempts, what nearly went wrong, what turned out not to be where it "
+    "looked. That is where a reusable lesson lives. A run that went smoothly "
+    "usually still contains one -- the thing that made it go smoothly and "
+    "would not have been obvious beforehand.\n\n"
+    "A lesson is transferable or it is not a lesson:\n"
+    "  no  -- \"the config lives in /etc/app.conf\" (a fact about one machine)\n"
+    "  no  -- \"read files before editing them\" (true of every task, so it "
+    "tells the next run nothing)\n"
+    "  yes -- \"when a tool reports a path that does not exist, check the "
+    "working directory before assuming the file is missing\"\n\n"
+    "Write ONE to THREE. Keep each field under 25 words -- a lesson nobody "
+    "can read at a glance is a lesson nobody uses. Each has a `cue` -- the "
+    "SITUATION it applies in, never this task's subject -- an `action`, and "
+    "an `outcome` of "
+    "\"worked\" or \"failed\". A lesson from something that went wrong is "
+    "worth more than one from something that went right; say \"failed\" and "
+    "describe what to do instead. Reply with an empty array only if the run "
+    "genuinely contained no friction and no non-obvious choice.\n\n"
     "Reply with a JSON array and nothing else:\n"
     '[{{"cue": "...", "action": "...", "outcome": "worked"}}]'
 )
@@ -2177,12 +2186,20 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     """One cheap call at the end of a run, turning the trajectory into at most
     three lessons for the next one.
 
-    RUN ON A CHEAP MODEL, DELIBERATELY. Harness-UPDATING is flat in base
-    capability -- a 9B model's updates measure as good as a frontier model's,
-    and a 7B meta-agent trained in one GPU hour gave +2.9 to +24.6% designing
-    for stronger executors. Harness-BENEFIT is the part that is not flat. So
-    the capability belongs on the executor and the small change belongs here:
-    Task.SUMMARIZE, which is the cheapest seat in agent/router/mapping.py.
+    RUN ON A CHEAP MODEL, BUT NOT THE CHEAPEST. The evidence says
+    harness-UPDATING is flat in base capability -- a 9B model's updates
+    measure as good as a frontier model's, and a 7B meta-agent trained in one
+    GPU hour gave +2.9 to +24.6% designing for stronger executors -- while
+    harness-BENEFIT is not flat. So this deliberately does not get the seat
+    the executor gets.
+
+    It was Task.SUMMARIZE for exactly one measurement. On a real 29-message
+    trajectory that model returned `[]` every time, including from a run the
+    judge had rejected; the same body on Task.PLAN produced three usable
+    lessons. "Flat in capability" is about whether the updates are GOOD,
+    which says nothing about whether a model will emit any at all -- and a
+    distiller that always answers "nothing to learn" is a bank that never
+    fills. Task.PLAN it is, one call per run.
 
     FROM THE RAW TRAJECTORY, NEVER FROM THE BANK. The bank is not shown to
     this call. Consolidating a model's own distillations and feeding them back
@@ -2208,7 +2225,7 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
         # see is exactly the kind of thing milestone 7 exists to prevent.
         # BudgetExhausted is caught below along with everything else: a run
         # with nothing left to spend learns nothing, which is correct.
-        reply = _call(ROUTER.chat_model(Task.SUMMARIZE),
+        reply = _call(ROUTER.chat_model(Task.PLAN),
                       [SystemMessage(DISTIL_PROMPT), HumanMessage(body)])
     except Exception as exc:  # noqa: BLE001 -- never fail a finished run
         logger.info("distilling lessons failed, learning nothing: %s", exc)
