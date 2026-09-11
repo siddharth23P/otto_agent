@@ -232,7 +232,7 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
     ),
 }
 
-KNOWN_PROVIDERS = frozenset({"inception"})
+KNOWN_PROVIDERS = frozenset({"inception", "anthropic", "openai", "gemini"})
 INCEPTION_ONLY_ENDPOINTS = frozenset({Endpoint.FIM, Endpoint.EDIT})
 ENDPOINT_CAPABILITY: dict[Endpoint, Capability] = {
     Endpoint.CHAT: Capability.CHAT,
@@ -241,8 +241,8 @@ ENDPOINT_CAPABILITY: dict[Endpoint, Capability] = {
 }
 
 #: Deliberately named for the vendor it describes. These are Inception's
-#: parameter sets, not a general truth -- when a second FIM provider appears,
-#: this name is what tells you the table needs rethinking.
+#: parameter sets, not a general truth -- see PARAMS_BY_PROVIDER below, which
+#: is the table that grew when the second vendor actually arrived.
 #:
 #: `model`, `prompt`, `suffix` and `messages` are absent on purpose: the provider
 #: wrapper supplies them positionally, so a route listing one would pass it twice
@@ -259,6 +259,37 @@ INCEPTION_PARAMS_BY_ENDPOINT: dict[Endpoint, frozenset[str]] = {
     Endpoint.EDIT: frozenset({
         "max_tokens", "temperature", "top_p", "presence_penalty",
     }),
+}
+
+
+#: What each vendor's chat model actually accepts, so a route carrying the
+#: wrong kwarg fails at import rather than on the first live call.
+#:
+#: This matters more than it looks. Every CHAT route here used to carry
+#: `reasoning_effort` and `diffusing`, which are `ChatInception` constructor
+#: arguments -- handing either to `ChatOpenAI` or `ChatAnthropic` raises. The
+#: old validation ran only `if provider == "inception"`, so a non-Inception
+#: route's params were completely unchecked and the mistake would surface as a
+#: TypeError deep inside a node, mid-run.
+#:
+#: A provider absent from this table is not validated, which is the honest
+#: default for a vendor whose parameter set nobody here has written down yet.
+PARAMS_BY_PROVIDER: dict[str, dict[Endpoint, frozenset[str]]] = {
+    "inception": INCEPTION_PARAMS_BY_ENDPOINT,
+    # LangChain's ChatAnthropic / ChatOpenAI / ChatGoogleGenerativeAI share
+    # this much; anything vendor-specific goes through `model_kwargs`.
+    "anthropic": {Endpoint.CHAT: frozenset({
+        "temperature", "max_tokens", "top_p", "top_k", "timeout",
+        "stop", "model_kwargs", "thinking",
+    })},
+    "openai": {Endpoint.CHAT: frozenset({
+        "temperature", "max_tokens", "max_completion_tokens", "top_p",
+        "timeout", "stop", "model_kwargs", "reasoning_effort",
+    })},
+    "gemini": {Endpoint.CHAT: frozenset({
+        "temperature", "max_tokens", "max_output_tokens", "top_p", "top_k",
+        "timeout", "model_kwargs",
+    })},
 }
 
 
@@ -388,11 +419,12 @@ def validate(routes: Mapping[Task, tuple[Candidate, ...]] = TASK_ROUTES) -> None
                     )
 
             # --- params, checked only where we actually know the parameter set ---
-            if provider == "inception":
-                illegal = sorted(set(c.params) - INCEPTION_PARAMS_BY_ENDPOINT[c.endpoint])
+            known = PARAMS_BY_PROVIDER.get(provider or "", {}).get(c.endpoint)
+            if known is not None:
+                illegal = sorted(set(c.params) - known)
                 if illegal:
                     problems.append(
-                        f"{where}: params {illegal} not accepted by inception "
+                        f"{where}: params {illegal} not accepted by {provider} "
                         f"{c.endpoint.value!r}"
                     )
 

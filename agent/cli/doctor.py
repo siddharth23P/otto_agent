@@ -34,10 +34,10 @@ def router_view(router: Router) -> Panel:
     t.add_column(style="muted")
     t.add_column()
     t.add_row("required", router.REQUIRED)
-    t.add_row("secondary", router.secondary or "[muted]none[/]")
-    if router.ignored:
-        t.add_row("ignored", f"{', '.join(router.ignored)} "
-                   f"[muted](configured, but not the selected secondary)[/]")
+    # Every configured provider is usable now -- there is no single "secondary"
+    # seat any more (agent/router/router.py's own docstring for why).
+    optional = tuple(p for p in router.usable() if p != router.REQUIRED)
+    t.add_row("also configured", ", ".join(optional) if optional else "[muted]none[/]")
     return Panel(t, box=box.ROUNDED, border_style="muted", expand=False)
 
 

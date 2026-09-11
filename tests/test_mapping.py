@@ -151,20 +151,18 @@ REJECTED = [
                  "needs", id="endpoint-capability-not-required"),
 
     # --- endpoints only Inception implements ---
-    # openai/anthropic no longer being KNOWN_PROVIDERS members at all means
-    # these two now fail one check earlier than they used to ("unknown
-    # provider" instead of "inception-only") -- there is no longer a
-    # *registered* non-Inception vendor left to exercise the inception-only
-    # branch specifically against. Either way the table is correctly
-    # rejected, which is the property these cases actually guard.
+    # These exercise the inception-only branch for real again. While openai
+    # and anthropic were unregistered they failed one check earlier, on
+    # "unknown provider", and the comment here used to note the lost
+    # coverage; registering those vendors (2026-09-11) restores it.
     pytest.param({Task.CODE_COMPLETE: (Candidate(spec="openai:gpt-4o",
                                                  requires=frozenset({Capability.FIM}),
                                                  endpoint=Endpoint.FIM),)},
-                 "unknown provider", id="fim-pinned-to-an-unregistered-vendor"),
+                 "inception-only", id="fim-pinned-to-a-non-inception-vendor"),
     pytest.param({Task.CODE_EDIT: (Candidate(provider="anthropic",
                                              requires=frozenset({Capability.EDIT}),
                                              endpoint=Endpoint.EDIT),)},
-                 "unknown provider", id="edit-scoped-to-an-unregistered-vendor"),
+                 "inception-only", id="edit-scoped-to-a-non-inception-vendor"),
     pytest.param({Task.CODE_COMPLETE: (Candidate(requires=frozenset({Capability.FIM}),
                                                  endpoint=Endpoint.FIM),)},
                  "open query", id="fim-as-an-open-query"),

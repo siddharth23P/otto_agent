@@ -326,25 +326,43 @@ def test_usable_with_inception_only():
     assert router().usable() == ("inception",)
 
 
-def test_optional_is_permanently_empty():
-    """The policy this change actually encodes: there is no longer a second
-    vendor for `secondary`/`ignored` to ever resolve to. Phase 8's plain hive
-    (agent/graph/nodes.py, agent/graph/run.py -- untouched here) still reads
-    `ROUTER.secondary`/`ROUTER.REQUIRED` for its `secondary_seats` diversity
-    feature; this is what makes that read always come back `None` instead of
-    raising `AttributeError`."""
-    assert Router.OPTIONAL == ()
+def test_every_configured_provider_is_usable():
+    """Superseded policy (2026-09-11): this used to admit `REQUIRED` plus one
+    `secondary`, so a third configured vendor was silently unreachable. The
+    routing table now names four at once -- Anthropic judges and plans, OpenAI
+    solves, Gemini reads images, Inception keeps chat-fast and the FIM/edit
+    endpoints -- and under the old rule three of the four would never resolve.
+    """
+    r = Router(catalogue=FakeCatalogue({
+        "inception": [MERCURY_25], "anthropic": [MERCURY_25], "gemini": [MERCURY_25],
+    }))
+
+    assert set(r.usable()) == {"inception", "anthropic", "gemini"}
 
 
-def test_secondary_and_ignored_stay_empty_even_if_a_stray_key_is_set(monkeypatch):
-    """`_snapshot` walks `provider_names()` (the real registry), not whatever
-    a catalogue happens to claim -- so even a catalogue that reports some
-    other vendor as configured cannot promote it, because that vendor was
-    never registered to begin with."""
-    monkeypatch.setattr(router_mod, "provider_names", lambda: ("inception", "not-really-registered"))
-    r = Router(catalogue=FakeCatalogue({"inception": [MERCURY_25], "not-really-registered": [MERCURY_25]}))
-    assert r.secondary is None
-    assert r.ignored == ()
+def test_a_provider_without_a_key_is_simply_not_usable():
+    """Optional in the real sense: configure a vendor and its routes resolve,
+    leave it out and they are skipped with a legible reason."""
+    r = Router(catalogue=FakeCatalogue({"inception": [MERCURY_25]}))
+
+    assert r.usable() == ("inception",)
+
+
+def test_inception_is_still_required():
+    """It alone serves Endpoint.FIM/EDIT (mapping.py's INCEPTION_ONLY_ENDPOINTS),
+    so a missing key there is a broken install, not a degraded one."""
+    with pytest.raises(AuthError):
+        Router(catalogue=FakeCatalogue({"anthropic": [MERCURY_25]}))
+
+
+def test_a_vendor_the_registry_does_not_know_can_never_become_usable():
+    """`_snapshot` walks `provider_names()` -- the real registry -- and only
+    then asks the catalogue whether each is configured. So a catalogue that
+    claims some other vendor cannot promote it: being keyed is not the same as
+    being registered, and only the registry can add a provider."""
+    r = Router(catalogue=FakeCatalogue({"inception": [MERCURY_25], "mistral": [MERCURY_25]}))
+
+    assert "mistral" not in r.usable()
 
 
 # ---------------------------------------------------------------------------
