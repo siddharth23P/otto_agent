@@ -1,0 +1,35 @@
+# Claw-Eval config for `otto eval-claw`.
+#
+# The `model:` block is NOT what runs the tasks -- Otto's own router does, and
+# it ignores this entirely. It is here because Claw-Eval's config schema
+# requires one and its trace directory is named from it. What this file
+# actually decides is who GRADES and who plays the simulated user.
+#
+# Both are Gemini Flash, deliberately: the benchmark's own general split uses
+# Gemini-3-Flash as judge, so scores from here are comparable to the published
+# ones, and neither role is played by a model Otto itself routes to for the
+# answer.
+#
+# Needs GEMINI_API_KEY, and the judge patch next to this file applied to the
+# checkout (see README.md here).
+
+model:
+  api_key: ${INCEPTION_API_KEY}
+  base_url: https://api.inceptionlabs.ai/v1
+  model_id: otto-agent
+  context_window: 260000
+
+judge:
+  api_key: ${GEMINI_API_KEY}
+  base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  model_id: gemini-3-flash-preview
+  enabled: true
+
+user_agent_model:
+  api_key: ${GEMINI_API_KEY}
+  base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  model_id: gemini-3-flash-preview
+
+defaults:
+  trace_dir: traces
+  tasks_dir: tasks

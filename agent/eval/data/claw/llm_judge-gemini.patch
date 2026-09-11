@@ -1,0 +1,57 @@
+diff --git a/src/claw_eval/graders/llm_judge.py b/src/claw_eval/graders/llm_judge.py
+index 3d21727..23d084d 100644
+--- a/src/claw_eval/graders/llm_judge.py
++++ b/src/claw_eval/graders/llm_judge.py
+@@ -14,6 +14,21 @@ from pydantic import BaseModel
+ from ..models.trace import _now
+ 
+ 
++def _gemini_auth_headers(api_key: str) -> dict:
++    """Auth headers for a Gemini generateContent call.
++
++    This path is Gemini-native (generateContent) and therefore always Google,
++    which authenticates API keys via `x-goog-api-key`. The framework ships
++    `Authorization: Bearer`, right for OpenRouter (its default judge route)
++    and rejected here with a 401 -- which surfaces as the judge retrying 30
++    times, returning None, and the task grader crashing on `.score`. Keying
++    off the key's prefix does not work either: AI Studio now issues `AQ.`
++    keys, not just the classic `AIza` ones. Transport only; nothing about the
++    grading changes.
++    """
++    return {"Content-Type": "application/json", "x-goog-api-key": api_key}
++
++
+ class JudgeResult(BaseModel):
+     score: float  # 0.0-1.0
+     reasoning: str
+@@ -76,6 +91,18 @@ class LLMJudge:
+             root = base_url.rstrip("/")
+             if root.endswith("/v1"):
+                 root = root[:-3]
++            # Google needs two DIFFERENT roots for the two paths this class can
++            # take: the OpenAI-compatible client wants
++            # https://generativelanguage.googleapis.com/v1beta/openai, while a
++            # native generateContent call wants the bare host. Configuring the
++            # former (so self.client works) and stripping it here (so this URL
++            # works) is what lets one base_url serve both -- otherwise
++            # whichever path the grader happens to take 404s, and the judge
++            # retries thirty times and scores communication 0.
++            for suffix in ("/v1beta/openai", "/openai"):
++                if root.endswith(suffix):
++                    root = root[: -len(suffix)]
++                    break
+             self._gemini_url = (
+                 f"{root}/v1beta/models/{self._gemini_model}:generateContent"
+             )
+@@ -113,10 +140,7 @@ class LLMJudge:
+         resp = httpx.post(
+             self._gemini_url,
+             json=body,
+-            headers={
+-                "Content-Type": "application/json",
+-                "Authorization": f"Bearer {self._gemini_api_key}",
+-            },
++            headers=_gemini_auth_headers(self._gemini_api_key),
+             timeout=300.0,
+         )
+         resp.raise_for_status()
