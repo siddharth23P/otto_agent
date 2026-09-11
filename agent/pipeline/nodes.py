@@ -926,7 +926,8 @@ def _summarise_action(tool_name: str, body: str, result) -> str:
     return f"{call} -> FAILED (exit {result.returncode}): {problem[:200]}"
 
 
-def _tool_loop(llm, messages: list, actions: list[str] | None = None) -> str:
+def _tool_loop(llm, messages: list, actions: list[str] | None = None,
+               *, max_iterations: int | None = None) -> str:
     """Run the shared ACTION/FINAL tool-calling loop -- every role node AND
     the evaluator drive their conversation through this one function. A
     role node's FINAL body IS its candidate answer; the evaluator's FINAL
@@ -956,7 +957,7 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None) -> str:
     last_target: str | None = None
     repeats = 0
     failed_targets: set[str] = set()
-    for _ in range(MAX_TOOL_ITERATIONS):
+    for _ in range(max_iterations or MAX_TOOL_ITERATIONS):
         # The evaluator drives this loop, and a judgment that kept checking
         # past the ceiling would spend the budget the agent was stopped to
         # protect. Its own MAX_TOOL_ITERATIONS cap stays as the inner bound.
@@ -1205,6 +1206,21 @@ def _actions_block(state: AgentState) -> str:
         + "\n".join(f"- {line}" for line in already[-_ACTIONS_SHOWN:])
     )
 
+
+#: How many exchanges the evaluator gets to reach a verdict.
+#:
+#: Measured, after giving it the evidence it had been missing: it went from
+#: judging blind to spending its whole five-iteration budget checking, on every
+#: judgment. On a task as small as "write fib.py and run it", one run cost 24
+#: model calls and 106 seconds -- and FIFTEEN of those 24 were the evaluator,
+#: three judgments of five calls each. The loop doing the actual work used six.
+#:
+#: That is the opposite of what the evidence was for. The point was one
+#: better-informed judgment, not four extra checks per judgment: it can now see
+#: the commands that were run and what they printed, so the common case needs no
+#: tool call at all. Two leaves room for one real check when something genuinely
+#: cannot be taken on trust.
+MAX_EVALUATOR_ITERATIONS = 2
 
 #: How many rejections a run may collect before the answer stands anyway.
 #: Judgment is worth paying for; judgment without a bound is a way to spend a
@@ -1602,7 +1618,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     ) if part)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     try:
-        reply = _tool_loop(llm, messages)
+        reply = _tool_loop(llm, messages, max_iterations=MAX_EVALUATOR_ITERATIONS)
     except NeedsUserInput as exc:
         # Seventh refinement (module docstring): the evaluator itself got
         # stuck judging something and needs the person's input to settle

@@ -149,3 +149,26 @@ def test_model_calls_counts_the_judgment_too(monkeypatch):
 
     assert model.calls == 4
     assert final["model_calls"] == 4
+
+
+def test_the_judgment_does_not_go_on_a_checking_expedition(monkeypatch):
+    """Measured regression, caught by a live probe rather than review.
+
+    Giving the evaluator the evidence it had been missing made it MORE active,
+    not less: it spent its whole five-iteration tool budget on every judgment.
+    On "write fib.py and run it" one run cost 24 model calls and 106 seconds,
+    fifteen of them the evaluator across three judgments, against six for the
+    loop doing the actual work. Capping it took the same task to 7 calls and 31
+    seconds -- and it approved first time, because judging from the evidence
+    beats going looking for something to complain about.
+    """
+    judge = _Counting(["ACTION: execute_python\nCODE:\nprint(1)"] * 10)
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: judge)
+
+    pn.evaluator({
+        "messages": [HumanMessage("do it")], "node": "agent", "output": "the answer",
+        "board": [], "actions": [], "mode_log": [], "transcript": [],
+        "context": "", "rejections": 0,
+    })
+
+    assert judge.calls <= pn.MAX_EVALUATOR_ITERATIONS
