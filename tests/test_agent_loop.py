@@ -1343,6 +1343,11 @@ def test_a_dead_judge_ends_the_run_instead_of_bouncing(monkeypatch):
     def refuses(llm, messages, **kw):
         raise pn.ProviderError("credit balance is too low")
 
+    # The router is stubbed as well as the loop: resolving a seat LISTS the
+    # vendor's models, which is a network call with nothing in this test to
+    # answer it. Patching only what the test is about left it passing on a
+    # machine with working keys and failing in CI with placeholder ones.
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: object())
     monkeypatch.setattr(pn, "_tool_loop", refuses)
     state = {
         "messages": [HumanMessage("do the thing")],
@@ -1366,6 +1371,7 @@ def test_the_first_provider_failure_is_still_retried(monkeypatch):
     def refuses(llm, messages, **kw):
         raise pn.ProviderError("connection reset")
 
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: object())
     monkeypatch.setattr(pn, "_tool_loop", refuses)
     command = pn.evaluator({
         "messages": [HumanMessage("do the thing")],
@@ -1382,24 +1388,35 @@ def test_the_first_provider_failure_is_still_retried(monkeypatch):
     )
 
 
-def test_a_failed_rubric_is_not_retried_on_every_pass(monkeypatch):
-    """carry() writes a None checklist back over whatever the evaluator
-    settled, so without this the next pass finds None again and pays for
-    another rubric call against the provider that just refused it. Twenty of
-    them in one turn, on the run that found this."""
+def test_a_failed_rubric_is_paid_for_once_and_not_on_every_pass(monkeypatch):
+    """A run that re-enters the agent node -- after a rejection, or after the
+    person answers a question -- must not buy the rubric again from a provider
+    that just refused it. Twenty rubric calls in one turn, on the run that
+    found this.
+
+    What stops it is that a failed call returns an empty Rubric rather than
+    nothing: the checklist it produces is [], carry() writes [] back, and []
+    is not None, so the next pass does not ask again."""
     tried = []
 
     def dead(llm, task_text):
         tried.append(task_text)
-        return None
+        return pn.Rubric([])
 
-    monkeypatch.setattr(pn, "_criteria", dead)
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: object())
+    monkeypatch.setattr(pn, "_rubric", dead)
     monkeypatch.setattr(pn, "_agent_loop", lambda *a, **kw: ("an answer", "final", "solve"))
 
-    resuming = {
-        "messages": [HumanMessage("do the thing")],
-        "transcript": [{"kind": "human", "content": "TASK:\ndo the thing"}],
-    }
-    pn.agent(resuming)
+    first = pn.agent({"messages": [HumanMessage("do the thing")]})
 
-    assert tried == [], "a resuming pass paid for the rubric all over again"
+    assert len(tried) == 1
+    assert first.update["checklist"] == []
+    assert first.goto == "evaluator", "a failed rubric skipped the judge"
+
+    pn.agent({
+        "messages": [HumanMessage("do the thing")],
+        "checklist": first.update["checklist"],
+        "transcript": [{"kind": "human", "content": "TASK:\ndo the thing"}],
+    })
+
+    assert len(tried) == 1, "a second pass paid for the rubric all over again"

@@ -124,6 +124,18 @@ posix_only = pytest.mark.skipif(
     reason="exercises the container path by running POSIX commands on the host shell",
 )
 
+#: A test that genuinely needs to reach a vendor, as opposed to one that only
+#: reached one by accident.
+#:
+#: conftest sets every provider key to a placeholder when the environment has
+#: none, so "is a key present" is not the question -- "is it a real one" is.
+#: Without this, a test needing live search failed in CI with a 401 that looked
+#: like a bug in the code it was testing.
+live_anthropic = pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY", "").startswith("sk-"),
+    reason="needs a real ANTHROPIC_API_KEY, not conftest's placeholder",
+)
+
 #: Filesystem behaviour that genuinely differs on Windows -- symlink creation
 #: needs a privilege, and an over-long path fails with a different error at a
 #: different layer. The production code handles both; only the assertions here

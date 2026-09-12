@@ -14,7 +14,7 @@ never let a routing/provider failure crash the whole tool loop.
 """
 import pytest
 
-from conftest import posix_only
+from conftest import live_anthropic, posix_only
 
 from agent.pipeline import tools as pt
 from agent.pipeline.tools import TOOL_DISPATCH, TOOL_TIERS, execute_bash, rag, web_search
@@ -68,9 +68,14 @@ def test_web_search_without_a_key_degrades_instead_of_crashing(monkeypatch):
     assert "web_search failed" in result.stderr
 
 
+@live_anthropic
 def test_web_search_actually_searches_when_it_is_configured():
     """The other half, and the one the old test made unreachable: with a
-    working route this returns a real answer, not a degraded one."""
+    working route this returns a real answer, not a degraded one.
+
+    Skipped without a real key rather than stubbed, because a stub would make
+    it a test of the stub. It is the only test in this file that leaves the
+    machine."""
     result = web_search("what is the capital of France")
 
     assert result.ok, result.stderr

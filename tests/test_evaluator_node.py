@@ -495,7 +495,8 @@ def test_a_retrying_judge_does_not_pay_for_the_rubric_again(monkeypatch):
         tried.append(task_text)
         return None
 
-    monkeypatch.setattr(pn, "_criteria", dead)
+    _install(monkeypatch, object())
+    monkeypatch.setattr(pn, "_rubric", dead)
     monkeypatch.setattr(pn, "_tool_loop",
                         lambda *a, **kw: "FINAL:\nMET: 1/1\nAPPROVE: yes\nWHY: fine")
 
@@ -514,6 +515,7 @@ def test_a_rejection_with_nothing_in_it_still_says_something(monkeypatch):
 
     "" is exactly what an exhausted _tool_loop returns when it never rendered
     a verdict at all."""
+    _install(monkeypatch, object())
     monkeypatch.setattr(pn, "_tool_loop", lambda *a, **kw: "")
 
     result = pn.evaluator(_state(node="agent", output="5"))
@@ -525,6 +527,7 @@ def test_a_rejection_with_nothing_in_it_still_says_something(monkeypatch):
 
 def test_a_real_rejection_keeps_its_own_words(monkeypatch):
     """The note stands in for a missing verdict, never over a real one."""
+    _install(monkeypatch, object())
     monkeypatch.setattr(
         pn, "_tool_loop",
         lambda *a, **kw: "FINAL:\nMET: 1/3\nAPPROVE: no\nWHY: it never ran the tests",
