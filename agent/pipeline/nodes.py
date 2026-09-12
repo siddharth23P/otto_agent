@@ -682,8 +682,8 @@ def compose_agent_prompt(live=None, *, may_delegate: bool = True) -> str:
         "Before you finish, run something that would FAIL if the task were "
         "not done, and read what it prints. An explanation is not evidence. "
         "When you have seen it work, reply with exactly\nFINAL:\n<the answer "
-        "itself -- the numbers, the names, the decision -- not a description "
-        "of what you did>"
+        "itself -- the numbers, the names, the decision. No preamble, no "
+        "recap of your steps, no offer of further help.>"
     )
 
 
