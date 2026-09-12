@@ -42,6 +42,36 @@ for _name in _PLACEHOLDER_KEYS:
 os.environ.setdefault("OTTO_EMBEDDING_MODEL", "")
 
 
+#: Never let one test's embedding backend become every later test's.
+#:
+#: agent/memory/embeddings.py caches the backend in a module global and builds
+#: it once, on first use. `reset_backend()` clears it, and the tests that
+#: exercise backend selection call that -- but nothing puts it back, and
+#: monkeypatch restoring GEMINI_API_KEY or OTTO_EMBEDDING_MODEL does not
+#: rebuild a backend already chosen under the patched values.
+#:
+#: So a test that deliberately selected the local model left every later test
+#: in the session running on it. That is how
+#: test_semantic_is_not_beaten_on_rare_tokens_either failed only in the full
+#: suite and never on its own: alone it ran on hosted Gemini and recalled all
+#: three rare tokens, and in the suite it ran on leaked BAAI/bge-small and
+#: missed the date. A test whose result depends on which other tests ran
+#: before it is not testing what it says it is.
+import pytest  # noqa: E402
+
+from agent.memory import embeddings as _embeddings  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_embedding_backend():
+    """Snapshot and restore, rather than reset. Resetting would make the next
+    test that embeds rebuild the backend from scratch -- for the local model
+    that is loading weights, on every test in the suite."""
+    before = _embeddings._backend
+    yield
+    _embeddings._backend = before
+
+
 #: Never let a test read from or write to the developer's real lesson bank.
 #:
 #: agent/memory/lessons.py opens ~/.otto/memory/lessons.db on first use, so a
@@ -49,8 +79,6 @@ os.environ.setdefault("OTTO_EMBEDDING_MODEL", "")
 #: that finished a run would TEACH it. Both are wrong: a suite that writes into
 #: the thing the agent learns from is a suite that changes the agent's behaviour
 #: by being run. Tests about the bank bind their own with `bind_bank`.
-import pytest  # noqa: E402
-
 from agent.memory import lessons as _lessons  # noqa: E402
 
 
