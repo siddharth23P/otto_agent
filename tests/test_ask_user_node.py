@@ -404,3 +404,107 @@ def test_the_answer_is_not_replayed_into_the_next_run_of_the_loop(monkeypatch):
     assert not queue  # the run really did go all the way through the rejection
     retry = seen[-2]  # the loop's second post-answer run, after the rejection
     assert sum("exactly 8 queens please" in m for m in retry) == 1
+
+
+# --------------------------------------------------------------------------
+# MAX_USER_QUESTIONS -- the bound on how much of somebody else's attention one
+# turn may spend. Nothing capped this: a rejection loop is capped by
+# MAX_REJECTIONS and a tool loop by MAX_TOOL_ITERATIONS, but a run could pause,
+# be answered, and pause again without limit. Live-tested twice, the second
+# time with the work finished and the person having already said "done" and
+# then "nothing else".
+# --------------------------------------------------------------------------
+
+def test_ask_user_counts_each_answered_pause(monkeypatch):
+    monkeypatch.setattr(pn, "interrupt", lambda payload: "8")
+
+    result = pn.ask_user(_state(asks=2))
+
+    assert result.update["asks"] == 3
+
+
+def test_ask_user_counts_from_zero_when_nothing_has_asked_yet(monkeypatch):
+    monkeypatch.setattr(pn, "interrupt", lambda payload: "8")
+
+    result = pn.ask_user(_state())
+
+    assert result.update["asks"] == 1
+
+
+def test_the_loop_still_asks_while_it_has_budget():
+    fake = _FakeModel("ACTION: ask_user\nCODE:\nwhich one?")
+
+    with pytest.raises(pn.NeedsUserInput):
+        pn._tool_loop(fake, [HumanMessage("do the thing")],
+                      asked=pn.MAX_USER_QUESTIONS - 1)
+
+
+def test_the_loop_is_refused_rather_than_paused_once_the_asks_are_spent():
+    # Refused, NOT ended: a wall with no way through it is what makes an
+    # agent invent the thing it was denied (ASK_BUDGET_SPENT's own comment),
+    # so the ask comes back as a failed tool call and the loop carries on.
+    fake = _FakeModel("ACTION: ask_user\nCODE:\nanything else?")
+
+    pn._tool_loop(fake, [HumanMessage("do the thing")],
+                  asked=pn.MAX_USER_QUESTIONS)
+
+    assert len(fake.calls) > 1  # it kept working instead of unwinding
+    last = fake.calls[-1]
+    assert any("asking again is not available" in str(m) for m in last)
+
+
+def test_the_agent_loop_hands_over_rather_than_spin_on_a_refused_ask(monkeypatch):
+    # _agent_loop is the one loop with no iteration ceiling -- the agent node
+    # passes max_iterations=None, and what used to end a run of asks was the
+    # pause itself unwinding out of it. Refusing the ask without
+    # MAX_REFUSED_ASKS turns a model that asks on every reply into a loop that
+    # spends the whole budget being told no. A regression here HANGS rather
+    # than fails, which is why it is worth its own test.
+    fake = _FakeModel("ACTION: ask_user\nCODE:\nanything else?")
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
+    state = _state(asks=pn.MAX_USER_QUESTIONS, transcript=None, mode=None)
+
+    output, why, _mode = pn._agent_loop(
+        state, [HumanMessage("say hi")], mode=pn.DEFAULT_MODE,
+        actions=[], mode_log=[],
+    )
+
+    assert why == "dead"
+    assert len(fake.calls) <= pn.MAX_REFUSED_ASKS + 1
+
+
+def test_a_turn_cannot_pause_more_than_the_cap_however_many_times_it_tries(monkeypatch):
+    """The runaway itself, through the real graph.
+
+    The agent asks on every single reply. Without the cap this never returns
+    an answer -- it pauses, is answered, and pauses again for as long as
+    somebody keeps typing. With it, the turn pauses MAX_USER_QUESTIONS times
+    and then finishes.
+    """
+    import uuid
+
+    queue = ["- the request is answered"]
+    monkeypatch.setattr(
+        pn.ROUTER, "chat_model",
+        lambda *a, **kw: _FakeModel(
+            queue.pop(0) if queue else "ACTION: ask_user\nCODE:\nanything else?"
+        ),
+    )
+
+    config = {
+        "configurable": {"thread_id": f"test:{uuid.uuid4().hex}"},
+        "recursion_limit": pn._RECURSION_SAFETY_NET,
+    }
+    initial = _initial_state("say hi")
+    initial["asks"] = 0
+
+    pauses = 0
+    updates = list(pn.app.stream(initial, config, stream_mode="updates"))
+    while "__interrupt__" in updates[-1]:
+        pauses += 1
+        assert pauses <= pn.MAX_USER_QUESTIONS, "the turn paused past its cap"
+        updates = list(pn.app.stream(pn.Command(resume="nothing else"), config,
+                                     stream_mode="updates"))
+
+    assert pauses == pn.MAX_USER_QUESTIONS
+    assert pn.app.get_state(config).values["asks"] == pn.MAX_USER_QUESTIONS
