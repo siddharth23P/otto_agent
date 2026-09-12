@@ -448,6 +448,20 @@ class BenchmarkReport:
                 for cat, results in sorted(by_category.items())
             },
             "overall_compression_ratio": (final_total / raw_total) if raw_total else None,
+            #: Whether this run measured the thing the benchmark exists to
+            #: measure. False means NOTHING was ever compacted, so every
+            #: citation sat in the verbatim window and the retrieval path --
+            #: the whole point -- never executed.
+            #:
+            #: A run like that used to report `recalled 0%` beside
+            #: `answerable 100%` and a ratio of 1.000, which reads as a
+            #: perfect score and is actually an empty one. The default
+            #: X_BUDGET/Y_BUDGET are sized for real sessions; LoCoMo
+            #: conversations are shorter, so at the defaults the production
+            #: budgets never bind and the benchmark quietly measures nothing.
+            #: Callers are expected to REFUSE to report on a False here --
+            #: agent/cli/eval_memory.py does.
+            "recall_exercised": _recall_was_exercised(final_total, raw_total),
             "conversation_count": len(self.conversations),
             #: See ConversationResult.unparsed_bullet_count / _UNPARSED_BULLET
             #: above -- a non-zero unparsed_bullets here means at least one
@@ -457,6 +471,20 @@ class BenchmarkReport:
             "bullet_count": bullet_total,
             "unparsed_bullet_count": unparsed_total,
         }
+
+
+#: A final_view/raw token ratio at or above this means nothing was compacted
+#: away, so `recall_coverage` was never asked a question. Not exactly 1.0:
+#: token counting is approximate and a view can come back a hair under raw
+#: without a single compaction having happened.
+NO_COMPACTION_RATIO = 0.99
+
+
+def _recall_was_exercised(final_tokens: int, raw_tokens: int) -> bool:
+    """Did anything get compacted, i.e. did the retrieval path run at all?"""
+    if not raw_tokens:
+        return False
+    return (final_tokens / raw_tokens) < NO_COMPACTION_RATIO
 
 
 def run_benchmark(

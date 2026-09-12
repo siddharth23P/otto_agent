@@ -2,5 +2,5 @@
   "id": "nphard_math_clique_01",
   "domain": "math",
   "prompt": "An undirected graph has these edges:\n(1,2), (1,3), (1,4), (2,3), (2,4), (3,4), (4,5), (5,6), (4,6), (5,7), (6,7), (4,7), (1,5), (2,6), (3,7), (8,1), (8,2), (8,3), (8,4), (9,10), (9,11), (10,11)\nWhat is the size of the largest clique -- the largest set of vertices that are all pairwise adjacent? Give the final numeric answer.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\n# exhaustive over every vertex subset, largest pairwise-adjacent one\nassert any(abs(n - 5.0) < 1e-6 for n in nums), f'5 not found in {nums}'\nprint('OK')\n"
+  "checker": "# 4 is the obvious clique on 1,2,3,4; adding vertex 8 makes 5.\nanswer_is(5.0, decoys=[4.0])\nprint('OK')\n"
 }

@@ -2,5 +2,5 @@
   "id": "nphard_math_setcover_01",
   "domain": "math",
   "prompt": "The universe is the integers 1 to 12. The available sets are:\n  A = [1, 2, 3, 8]\n  B = [1, 4, 6, 9]\n  C = [2, 5, 7, 10]\n  D = [3, 6, 11]\n  E = [4, 5, 12]\n  F = [7, 8, 9, 10, 11]\n  G = [1, 2, 4, 5, 12]\nWhat is the smallest number of these sets whose union covers the whole universe? Give the final numeric answer. Greedy set cover does not always find the minimum.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\n# exhaustive over all subsets of the seven sets, smallest covering size\nassert any(abs(n - 3.0) < 1e-6 for n in nums), f'3 not found in {nums}'\nprint('OK')\n"
+  "checker": "# 4 is what greedy takes here; the minimum is 3.\nanswer_is(3.0, decoys=[4.0])\nprint('OK')\n"
 }

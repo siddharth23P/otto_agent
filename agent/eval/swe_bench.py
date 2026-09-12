@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 import platform
 import re
 import shlex
@@ -181,6 +182,18 @@ def image_for(instance_id: str) -> str:
     return image_name(instance_id, host_arch())
 
 
+#: How much longer an emulated instance gets than a native one.
+#:
+#: Emulation is "several times slower" (resolve_image below), so a budget
+#: tuned for native turns a machine problem into a recorded agent failure.
+#: Three is deliberately a round guess rather than a measurement: the honest
+#: fix for the emulated half is to run it on x86_64, and this only stops the
+#: budget being the thing that decides the score. It does NOT make an
+#: emulated number comparable to a native one, which is why every report
+#: says how many of its instances were emulated.
+EMULATION_TIME_FACTOR = 3.0
+
+
 def resolve_image(instance_id: str) -> tuple[str, bool]:
     """(image, emulated) -- the arm64 build when one exists, else x86_64.
 
@@ -201,9 +214,19 @@ def resolve_image(instance_id: str) -> tuple[str, bool]:
     return image_name(instance_id, "x86_64"), True
 
 
+@lru_cache(maxsize=None)
 def _manifest_exists(image: str) -> bool:
     """Whether the registry has this image, asked without downloading 3.5GB
-    to find out."""
+    to find out.
+
+    CACHED on the IMAGE NAME, which is the expensive part -- one `docker
+    manifest inspect` round trip per miss, and `resolve_image` is now asked
+    twice per instance (once to size the deadline, once by start_container).
+    Deliberately not cached on `resolve_image` itself: that would capture
+    `host_arch()` in the key, and a test monkeypatching the architecture
+    then reads a previous test's answer. The registry's answer for a given
+    image name does not change inside one run.
+    """
     try:
         return _docker("manifest", "inspect", image, timeout=90).returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -514,8 +537,16 @@ def run_instance(
     from agent.pipeline.workspace import bind_workspace
 
     started = time.monotonic()
-    deadline = Deadline.of(max_seconds)
-    name, emulated = start_container(instance)
+    # Which image this instance will run on has to be settled BEFORE the
+    # deadline, because it decides how long the deadline should be. An
+    # x86_64 image under emulation on Apple silicon is several times slower,
+    # and django -- 231 of the 500 instances -- had no arm64 build in every
+    # instance tried. At a budget tuned for native, roughly half the
+    # benchmark was being killed by the machine and recorded as the agent
+    # failing. See EMULATION_TIME_FACTOR.
+    _image, emulated = instance.runnable_image
+    deadline = Deadline.of(max_seconds * (EMULATION_TIME_FACTOR if emulated else 1.0))
+    name, _ = start_container(instance)
     answer = error = ""
     state: dict = {}
     try:

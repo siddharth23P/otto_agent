@@ -39,6 +39,30 @@ from agent.eval.claw_bench import (
 )
 
 
+#: How many trials per task before a Claw-Eval number is evidence of
+#: anything.
+#:
+#: Measured, not chosen. Task T093 on identical code and configuration, three
+#: runs: 0.86, 0.60, 0.96 -- a spread of 0.36 on a 0-1 scale. Over two trials
+#: pass^2 came out 0.25 against pass@2 of 1.00: it got there once and not
+#: twice. Completion is LLM-judged for 260 of the 300 tasks, which is where
+#: most of that comes from.
+#:
+#: The consequence is retroactive and worth stating plainly: any single-run
+#: before/after difference smaller than about 0.3 on this benchmark is inside
+#: the noise. Much of the optimisation work on this branch was read from one
+#: run per task, and the only difference in that set large enough to survive
+#: was a crash going from 0.00 to 0.955.
+#:
+#: Three, matching what the issues here already ask for when they say how to
+#: settle something ("--trials 3").
+MIN_TRIALS_FOR_EVIDENCE = 3
+
+#: The observed spread above, quoted in the warning so the number a reader is
+#: being told to distrust comes with the reason.
+OBSERVED_SINGLE_RUN_SPREAD = 0.36
+
+
 def _summary(outcomes: list, claw=None) -> dict:
     scored = [o for o in outcomes if o is not None]
     if not scored:
@@ -59,6 +83,16 @@ def _summary(outcomes: list, claw=None) -> dict:
         "mean_model_calls": round(sum(o.model_calls for o in scored) / n, 2),
         "total_model_calls": sum(o.model_calls for o in scored),
     }
+
+    # Always present, so a reader of otto_summary.json never has to infer the
+    # trial count from whether a reliability key happens to exist.
+    summary["trials"] = min((len(o.trials) for o in scored), default=0)
+    #: Whether this run is enough trials to be read as a measurement at all --
+    #: MIN_TRIALS_FOR_EVIDENCE. False does NOT mean the numbers are wrong; it
+    #: means the difference between them and another run's is not attributable
+    #: to anything. Carried in the JSON as well as printed, because the JSON is
+    #: what gets pasted into a comparison months later.
+    summary["is_evidence"] = summary["trials"] >= MIN_TRIALS_FOR_EVIDENCE
 
     repeated = [o for o in scored if len(o.trials) > 1]
     if repeated and claw is not None:
@@ -300,9 +334,27 @@ def _build_report(outcomes, claw, *, architecture, tag, split, trials,
 
 def _print_summary(report: dict, out_dir: Path, split: str) -> None:
     s = report["summary"]
+
+    # Said BEFORE the numbers, not after. A caveat printed underneath a mean
+    # score is read after the score has already been believed, and the whole
+    # failure this guards against is a single run being quoted as a result.
+    if s.get("tasks") and not s.get("is_evidence", True):
+        trials = s.get("trials", 1)
+        err.print(
+            f"\n[bad]NOT EVIDENCE: {trials} trial(s) per task.[/] "
+            f"[warn]Identical code and configuration have scored "
+            f"{OBSERVED_SINGLE_RUN_SPREAD:.2f} apart on a single task here, so "
+            f"any before/after difference below roughly 0.3 in what follows is "
+            f"noise. Do not quote these numbers as a result.[/]\n"
+            f"[muted]Re-run with --trials {MIN_TRIALS_FOR_EVIDENCE} and read "
+            f"pass^k, not the mean.[/]"
+        )
+
     out.print(
         f"\n{s.get('passed', 0)}/{s.get('tasks', 0)} passed "
-        f"({s.get('pass_rate', 0):.1%})  mean score {s.get('mean_task_score', 0):.3f}  "
+        f"({s.get('pass_rate', 0):.1%})  "
+        f"{'mean score' if s.get('is_evidence', True) else 'score (1 run)'} "
+        f"{s.get('mean_task_score', 0):.3f}  "
         f"completion {s.get('mean_completion', 0):.3f}  "
         f"{s.get('errors', 0)} harness/agent error(s)"
     )

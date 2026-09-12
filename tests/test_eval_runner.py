@@ -4,7 +4,18 @@ candidates/checkers for real (no LLM calls involved here -- run_golden()'s
 LLM-driving path is exercised manually via `otto eval`, not in the offline
 suite).
 """
+import pytest
+
 from agent.eval.runner import GoldenItem, check_output, load_golden
+
+
+def _golden_item(item_id: str) -> GoldenItem:
+    """The real item from agent/eval/golden, by id -- so these tests run the
+    shipped checker rather than a copy of it that can drift."""
+    for item in load_golden():
+        if item.id == item_id:
+            return item
+    raise AssertionError(f"no golden item {item_id!r}")
 
 
 def test_golden_set_loads_and_has_both_domains():
@@ -197,3 +208,97 @@ def test_check_output_math_domain_accepts_the_right_number_anywhere_in_text():
     )
     passed, _ = check_output(item, "After computing carefully, the answer is 4.")
     assert passed is True
+
+
+# --------------------------------------------------------------------------
+# The hole the math checkers used to have: they asserted the right number
+# appeared ANYWHERE in the candidate's text, so a model that enumerated
+# possibilities and concluded the wrong one still passed, as long as the
+# right value went by at some point. It was not being exploited when this was
+# found -- the point is that it could not have been caught.
+# --------------------------------------------------------------------------
+
+_SHOWED_WORKING = {
+    # Each pair is (a candidate that reasons aloud and lands on the WRONG
+    # answer, the name of the wrong method it used). Every decoy here is the
+    # `wrong` half of a pair that already existed in the test above.
+    "nphard_math_subsetsum_01": (
+        "Let me try. The target is 33333. Greedy from the largest: "
+        "10453 + 9161 + 8353 + 3541 = 31508. Trying other subsets I can reach "
+        "33308. But the cap is 33333, so the answer is 33333.",
+        "reading the target off the question",
+    ),
+    "nphard_math_binpacking_01": (
+        "First-fit-decreasing packs these into 5 bins. A smarter arrangement "
+        "might manage 4, but I will go with 5 bins.",
+        "first-fit-decreasing",
+    ),
+    "nphard_math_setcover_01": (
+        "Greedy picks 4 sets. It is conceivable that 3 suffice; my answer is "
+        "4 sets.",
+        "greedy",
+    ),
+    "nphard_math_clique_01": (
+        "Vertices 1,2,3,4 are mutually adjacent, so there is a clique of 4. "
+        "Adding 8 might give 5 but I cannot confirm it. The answer is 4.",
+        "stopping at the obvious clique",
+    ),
+}
+
+
+@pytest.mark.parametrize("item_id", sorted(_SHOWED_WORKING))
+def test_mentioning_the_right_number_while_concluding_a_wrong_one_fails(item_id):
+    candidate, method = _SHOWED_WORKING[item_id]
+    item = _golden_item(item_id)
+
+    passed, evidence = check_output(item, candidate)
+
+    assert not passed, (
+        f"{item_id}: a candidate that concluded by {method} was accepted "
+        "because the right number appeared earlier in its working"
+    )
+    assert "wrong answer" in evidence
+
+
+@pytest.mark.parametrize("item_id", sorted(_SHOWED_WORKING))
+def test_the_same_items_still_accept_real_working(item_id):
+    # The guard must not reject a candidate that reasons aloud and gets it
+    # RIGHT -- otherwise it trades a false pass for a false fail, which is
+    # worse because nobody goes looking for it.
+    item = _golden_item(item_id)
+    correct = {
+        "nphard_math_subsetsum_01":
+            "Enumerating all 1024 subsets, the largest sum not exceeding the "
+            "cap is 33308.",
+        "nphard_math_binpacking_01":
+            "First-fit-decreasing uses more bins than necessary here; an "
+            "exhaustive check shows 4 bins suffice.",
+        "nphard_math_setcover_01":
+            "Greedy is not optimal here. The minimum cover uses 3 sets.",
+        "nphard_math_clique_01":
+            "The obvious mutually-adjacent group is not maximal; including "
+            "vertex 8 gives a clique of 5.",
+    }[item_id]
+
+    passed, evidence = check_output(item, correct)
+
+    assert passed, f"{item_id}: correct working rejected -- {evidence}"
+
+
+def test_a_decoy_equal_to_the_answer_cannot_reject_every_candidate():
+    # Defensive: a mis-authored item whose decoy IS the answer would
+    # otherwise fail every candidate including the right one, and the report
+    # would look like a model regression rather than a bad item.
+    item = GoldenItem(id="x", domain="math", prompt="",
+                      checker="answer_is(7.0, decoys=[7.0])\nprint('OK')\n")
+
+    passed, evidence = check_output(item, "the answer is 7")
+
+    assert passed, evidence
+
+
+def test_plain_math_items_do_not_need_decoys_to_work():
+    item = _golden_item("math_01")
+
+    assert check_output(item, "The answer is 1275.")[0]
+    assert not check_output(item, "The answer is 42.")[0]

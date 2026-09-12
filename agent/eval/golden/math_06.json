@@ -2,5 +2,5 @@
   "id": "math_06",
   "domain": "math",
   "prompt": "What is the area of a circle with radius 7? Use pi = 3.14159 and give the final numeric answer rounded to 2 decimal places.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\nassert any(abs(n - 153.94) < 0.5 for n in nums), f'~153.94 not found in {nums}'\nprint('OK')\n"
+  "checker": "answer_is(153.94, tol=0.5)\nprint('OK')\n"
 }

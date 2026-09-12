@@ -70,13 +70,77 @@ def load_golden(directory: Path = GOLDEN_DIR) -> list[GoldenItem]:
     return items
 
 
+#: Injected ahead of every non-code checker, so the rule below lives in ONE
+#: place instead of being restated in twenty JSON strings.
+#:
+#: `answer_is` exists because the old checkers passed on
+#:
+#:     nums = [float(x) for x in re.findall(...)]
+#:     assert any(abs(n - 1275.0) < 1e-6 for n in nums)
+#:
+#: which accepts the right number appearing ANYWHERE in the candidate's text.
+#: A model that enumerates possibilities and concludes the wrong one still
+#: passed, as long as the right value went by at some point -- and the harder
+#: the problem, the more likely the model reasons out loud and the weaker that
+#: check becomes. It was not being exploited when the issue was filed; the
+#: point is that it could not have caught it.
+#:
+#: TWO tests, and the second is the one that matters. The value has to be
+#: there, AND no `decoy` may be -- a decoy being the answer a specific wrong
+#: method actually produces (first-fit needing 5 bins where 4 suffice, greedy
+#: taking 4 sets where 3 do, the target read straight off a subset-sum
+#: question). Naming the wrong answer is what turns "did the number appear"
+#: into "did it reach the right one", and every decoy here already existed as
+#: the `wrong` half of a pair in tests/test_eval_runner.py.
+#:
+#: Deliberately NOT "score the last number": an answer that closes with a
+#: unit, a citation, or a restated question breaks that, and the failure is
+#: silent -- a correct answer marked wrong.
+_MATH_PREAMBLE = """
+import re as _re
+
+
+def _numbers(text):
+    return [float(x) for x in _re.findall(r"-?\\d+\\.?\\d*", text)]
+
+
+def answer_is(expected, *, decoys=(), tol=1e-6, text=None):
+    '''Assert the candidate reached `expected` and did not also offer a decoy.
+
+    A decoy is what a NAMED wrong method produces on this instance, not an
+    arbitrary number -- so its presence means the candidate showed its
+    working and landed somewhere else, or hedged between two answers. Either
+    way it has not answered the question.
+    '''
+    body = CANDIDATE_OUTPUT if text is None else text
+    nums = _numbers(body)
+    assert any(abs(n - expected) <= tol for n in nums), (
+        f"{expected} not found in {nums}"
+    )
+    for decoy in decoys:
+        if abs(decoy - expected) <= tol:
+            continue   # a decoy equal to the answer would reject every pass
+        assert not any(abs(n - decoy) <= tol for n in nums), (
+            f"{expected} was present but so was the wrong answer {decoy} -- "
+            f"a candidate that offers both has not answered. numbers: {nums}"
+        )
+"""
+
+
 def _build_script(domain: str, candidate_output: str, checker: str) -> str:
     if domain == "code":
         return candidate_output + "\n\n" + checker
     # math (or any other non-code domain): candidate text isn't executable,
     # so it's injected as a string literal (repr() sidesteps any quoting/
-    # escaping issue with arbitrary model output) that the checker inspects.
-    return f"CANDIDATE_OUTPUT = {candidate_output!r}\n\n" + checker
+    # escaping issue with arbitrary model output) that the checker inspects,
+    # followed by _MATH_PREAMBLE's `answer_is` -- the rule about what counts
+    # as an answer lives there, once, rather than in twenty JSON strings.
+    return (
+        f"CANDIDATE_OUTPUT = {candidate_output!r}\n"
+        + _MATH_PREAMBLE
+        + "\n"
+        + checker
+    )
 
 
 def check_output(item: GoldenItem, candidate_output: str) -> tuple[bool, str]:

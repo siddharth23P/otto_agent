@@ -2,5 +2,5 @@
   "id": "math_01",
   "domain": "math",
   "prompt": "What is the sum of the first 50 positive integers (1 + 2 + ... + 50)? Give the final numeric answer.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\nassert any(abs(n - 1275.0) < 1e-6 for n in nums), f'1275 not found in {nums}'\nprint('OK')\n"
+  "checker": "answer_is(1275.0)\nprint('OK')\n"
 }
