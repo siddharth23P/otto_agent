@@ -295,38 +295,45 @@ def test_evaluator_asking_with_choices_parses_them_out(monkeypatch):
 # for either an approval or a rejection.
 # --------------------------------------------------------------------------
 
-def test_a_provider_failure_returns_to_the_loop_with_node_error_set_instead_of_crashing(monkeypatch):
+def test_a_provider_failure_retries_the_judge_instead_of_crashing(monkeypatch):
     fake = _FailingModel(pn.ProviderError("inception: The read operation timed out"))
     _install(monkeypatch, fake)
 
     result = pn.evaluator(_state(node="solver", output="def f(): return 1"))
 
-    assert result.goto == "agent"
+    assert result.goto == "evaluator"
     assert "evaluator" in result.update["node_error"]
     assert "timed out" in result.update["node_error"]
     assert result.goto != END
     assert "final_output" not in result.update
 
 
-def test_a_provider_failure_writes_feedback_naming_whose_output_it_was_judging(monkeypatch):
+def test_a_provider_failure_does_not_send_the_agent_back_to_rework(monkeypatch):
+    """It used to. The failure went to the agent as `feedback`, from a design
+    where a planner read it the way it read any other rejected attempt --
+    there is no planner in this graph any more, and the agent has nothing to
+    fix, because there was no verdict. It reworked a perfectly good answer at
+    two model calls a time in response to a message that said, in its own
+    words, "not a real rejection"."""
     fake = _FailingModel(pn.ProviderError("inception: The read operation timed out"))
     _install(monkeypatch, fake)
 
     result = pn.evaluator(_state(node="solver", output="def f(): return 1"))
 
-    assert "solver" in result.update["feedback"]
-    assert "not a real rejection" in result.update["feedback"]
+    assert "feedback" not in result.update
+    assert result.update["judge_errors"] == 1
 
 
-def test_a_provider_failure_judging_a_plan_says_plan_not_output_in_the_feedback(monkeypatch):
+def test_the_answer_pending_judgment_is_left_untouched(monkeypatch):
+    """Whatever is waiting to be judged stays waiting. A retry that rewrote
+    it would be judging something other than what the agent produced."""
     fake = _FailingModel(pn.ProviderError("boom"))
     _install(monkeypatch, fake)
 
     result = pn.evaluator(_state(node="planner", output='[{"task": "step one"}]'))
 
-    assert "planner" in result.update["feedback"]
-    assert "plan" in result.update["feedback"]
-    assert "output" not in result.update  # untouched, still pending judgment
+    assert "output" not in result.update
+    assert "final_output" not in result.update
 
 
 def test_the_evaluator_never_appends_an_empty_assistant_turn(monkeypatch):
@@ -475,3 +482,58 @@ def test_the_rubric_prompt_asks_for_coverage():
     Coverage is part of the answer, not part of the route."""
     assert "COVERAGE" in pn.RUBRIC_PROMPT
     assert "every one of them" in pn.RUBRIC_PROMPT
+
+
+def test_a_retrying_judge_does_not_pay_for_the_rubric_again(monkeypatch):
+    """This node retries itself on a provider failure, and a rubric call that
+    just failed against the same model is not going to succeed a second
+    later. Measured across the twenty golden items with the Anthropic key
+    exhausted: sixty rubric calls for twenty runs, every one refused."""
+    tried: list[str] = []
+
+    def dead(llm, task_text):
+        tried.append(task_text)
+        return None
+
+    _install(monkeypatch, object())
+    monkeypatch.setattr(pn, "_rubric", dead)
+    monkeypatch.setattr(pn, "_tool_loop",
+                        lambda *a, **kw: "FINAL:\nMET: 1/1\nAPPROVE: yes\nWHY: fine")
+
+    pn.evaluator(_state(node="agent", output="an answer", judge_errors=1))
+
+    assert tried == [], "the retry bought the same refusal over again"
+
+
+def test_a_rejection_with_nothing_in_it_still_says_something(monkeypatch):
+    """`feedback` is the only thing that makes the agent's next pass differ
+    from its last. An empty one leaves the rebuilt transcript byte-identical,
+    so the agent re-sent the same bytes, produced the same answer, and the
+    judge failed the same way -- three times, until MAX_REJECTIONS stopped
+    it. Measured on one golden item: nine model calls, three of them the
+    identical 8-character reply.
+
+    "" is exactly what an exhausted _tool_loop returns when it never rendered
+    a verdict at all."""
+    _install(monkeypatch, object())
+    monkeypatch.setattr(pn, "_tool_loop", lambda *a, **kw: "")
+
+    result = pn.evaluator(_state(node="agent", output="5"))
+
+    assert result.goto == "agent"
+    assert result.update["feedback"].strip(), "the retry was given nothing to change"
+    assert "not a finding about your answer" in result.update["feedback"]
+
+
+def test_a_real_rejection_keeps_its_own_words(monkeypatch):
+    """The note stands in for a missing verdict, never over a real one."""
+    _install(monkeypatch, object())
+    monkeypatch.setattr(
+        pn, "_tool_loop",
+        lambda *a, **kw: "FINAL:\nMET: 1/3\nAPPROVE: no\nWHY: it never ran the tests",
+    )
+
+    result = pn.evaluator(_state(node="agent", output="5"))
+
+    assert "never ran the tests" in result.update["feedback"]
+    assert pn.NO_VERDICT_NOTE not in result.update["feedback"]

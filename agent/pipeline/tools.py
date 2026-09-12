@@ -1050,6 +1050,18 @@ def look(question: str) -> ToolResult:
         )
     except ProviderError as exc:
         return _workspace_failure("look", f"could not look at the screen: {exc}")
+    except Exception as exc:
+        # The same clause view_image has, and for the same reason: this path
+        # reaches the vendor's own SDK, so it meets exceptions Otto does not
+        # own. Without it a vendor 400 -- "unable to process input image",
+        # which is what a capture of a blank or half-drawn screen gets --
+        # unwound the whole tool loop instead of arriving as one failed call.
+        # Translating rather than swallowing is what lets a model the vendor
+        # says is permanently unusable be remembered instead of picked again
+        # by the next fallback in this run.
+        return _workspace_failure(
+            "look", f"could not look at the screen: {_translated(llm, exc)}",
+        )
     return ToolResult(stdout=_clip(answer), stderr="", returncode=0)
 
 
@@ -1227,6 +1239,88 @@ def _blocks_to_text(content) -> str:
 _RAG_INDEXES: dict[tuple[str, str], "MemoryStore"] = {}
 
 
+#: A query that is one bare identifier, path or quoted string rather than a
+#: question -- `FALLOFF_RATIO`, `agent/pipeline/budget.py`, `"exit 3"`.
+_LITERAL = re.compile(r'^[\'\"]?[A-Za-z_][A-Za-z0-9_.:/-]*[\'\"]?$')
+
+
+def looks_like_a_literal(query: str) -> bool:
+    """Whether this is a string to find rather than a question to answer.
+
+    Measured on Otto's own `agent/` tree, four exact identifiers against four
+    questions about the same code:
+
+        query type     grep            semantic
+        exact token    4/4   0.2s      4/4   41.6s
+        conceptual     0/4   0.3s      4/4    2.5s
+
+    They are complementary, not competing. On an identifier the two find the
+    same files and grep is two orders of magnitude faster -- the semantic path
+    has to embed the whole workspace first, which is forty seconds nobody
+    needed. On a question grep finds NOTHING, because the words in the
+    question are not the words in the code.
+
+    The `rag` docstring used to say roughly this as advice, which left the
+    choice to the model on every call. This makes the tool decide, since the
+    query itself says which it is.
+
+    Deliberately narrow: one token, no spaces. Anything with a space is a
+    question, and anything ambiguous falls through to the semantic path, which
+    is slower but never wrong in the way grep is wrong here.
+    """
+    return bool(_LITERAL.match(query.strip()))
+
+
+def _grep_workspace(needle: str) -> ToolResult | None:
+    """Files containing `needle`, or None if grep could not be used.
+
+    Goes through the command runner when one is bound, so this works in the
+    container the same way every other tool does. None rather than a failure
+    on any trouble, so the caller falls through to the semantic path -- a slow
+    answer beats an error.
+    """
+    quoted = shlex.quote(needle.strip("'\""))
+    remote = current_command_runner()
+    if remote is not None:
+        try:
+            stdout, _, code = remote(f"grep -rln -e {quoted} . | head -n 40", 30.0)
+        except Exception:  # noqa: BLE001
+            return None
+        if code not in (0, 1):
+            return None
+        return _literal_result(needle, stdout)
+
+    root = current_workspace()
+    if root is None:
+        return None
+    try:
+        proc = subprocess.run(
+            ["grep", "-rln", "-e", needle.strip("'\""), "."],
+            cwd=root, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode not in (0, 1):
+        return None
+    return _literal_result(needle, proc.stdout)
+
+
+def _literal_result(needle: str, stdout: str) -> ToolResult:
+    files = [line for line in stdout.splitlines() if line.strip()][:40]
+    if not files:
+        return ToolResult(
+            stdout="",
+            stderr=(f"rag: nothing in the workspace contains {needle!r}. If you "
+                    "were asking a question rather than looking for that exact "
+                    "string, ask it in words and this will search by meaning."),
+            returncode=1,
+        )
+    return ToolResult(
+        stdout=f"files containing {needle!r}:\n" + "\n".join(files),
+        stderr="", returncode=0,
+    )
+
+
 def rag(query: str) -> ToolResult:
     """Search the CONTENTS of the files in this workspace, semantically.
 
@@ -1235,13 +1329,25 @@ def rag(query: str) -> ToolResult:
 
     Distinct from `recall_memory`, which searches what this CONVERSATION said
     earlier and then compacted away. This searches what is WRITTEN IN THE
-    FILES. When you want a specific string, `execute_bash` with grep is faster
-    and exact; reach for this when you do not know the word the code uses.
+    FILES.
+
+    Hand it either kind of query. A bare identifier or path is grepped, which
+    is exact and immediate; a question is answered by meaning. You do not have
+    to pick -- see `looks_like_a_literal` for the measurement that made this
+    the tool's job rather than yours.
 
     Requires a bound workspace, and returns a clean failure without one.
     """
     if not query.strip():
         return ToolResult(stdout="", stderr="rag: the query must not be empty", returncode=1)
+    if looks_like_a_literal(query):
+        # Grep it instead. See `looks_like_a_literal` for the measurement --
+        # on an exact identifier the two find the same files and grep is two
+        # orders of magnitude faster, while on a question grep finds nothing
+        # at all.
+        found = _grep_workspace(query.strip())
+        if found is not None:
+            return found
     root = current_workspace()
     if root is None:
         return ToolResult(
@@ -1401,6 +1507,95 @@ TOOL_TIERS: dict[str, str] = {
     "predict_edit": READ_ONLY,
     "recall_memory": READ_ONLY,
 }
+
+#: Tools whose output is content Otto did not write and the user did not say.
+#:
+#: A web page, a search result, a screenshot of somebody's UI, a chunk pulled
+#: out of a repository Otto was pointed at -- all of it arrives in the same
+#: `HumanMessage(f"TOOL RESULT:\n{...}")` envelope as the user's own task did.
+#: Framed identically, read identically: text inside a page saying "ignore
+#: your previous instructions" is sitting in the same role as the instruction
+#: it is trying to override.
+#:
+#: Marking it does not make the model immune. What it does is make the
+#: distinction available at all, at the point of delivery, which is the one
+#: place that knows it. The structural defences do not depend on this: the
+#: mutation gate is code and never reads tool output, and the rubric is
+#: written before any output is visible.
+#:
+#: Every ExtraTool is third-party too -- those are supplied per run by a
+#: benchmark task file or a caller, so their output has the same provenance
+#: as a web page. They are not listed here because they are not known here;
+#: nodes.py adds them by asking current_extra_tools().
+THIRD_PARTY: frozenset[str] = frozenset({
+    "browse", "browse_act", "web_search", "rag", "look",
+})
+
+#: What each tool needs bound before it can do anything at all.
+#:
+#: Declared beside TOOL_TIERS and for the same reason: a fact about a tool
+#: belongs next to the tool, so the next one added says its own preconditions
+#: instead of being discovered missing.
+#:
+#: These are not preferences. Each value is read off the tool's own first
+#: refusal -- `rag` says "no workspace is bound", `look` says "no container is
+#: bound" -- so the table cannot drift from the behaviour without a test
+#: noticing.
+ANYWHERE = "anywhere"
+NEEDS_CONTAINER = "container"
+NEEDS_WORKSPACE = "workspace_only"
+NEEDS_EITHER = "workspace_or_container"
+
+TOOL_NEEDS: dict[str, str] = {
+    "execute_python": ANYWHERE,
+    "execute_bash": ANYWHERE,
+    "web_search": ANYWHERE,
+    "complete_code": ANYWHERE,
+    "predict_edit": ANYWHERE,
+    "recall_memory": ANYWHERE,
+    # Each of these checks the command runner first and falls back to the
+    # workspace, so either one is enough.
+    "read_file": NEEDS_EITHER,
+    "write_file": NEEDS_EITHER,
+    "edit_file": NEEDS_EITHER,
+    "list_files": NEEDS_EITHER,
+    "view_image": NEEDS_EITHER,
+    # A browser and a screen live in the container; there is no local path.
+    "browse": NEEDS_CONTAINER,
+    "browse_act": NEEDS_CONTAINER,
+    "look": NEEDS_CONTAINER,
+    "look_act": NEEDS_CONTAINER,
+    # Both index files on this machine and have no remote branch.
+    "rag": NEEDS_WORKSPACE,
+    "code_map": NEEDS_WORKSPACE,
+}
+
+
+def reachable_tools() -> dict[str, str]:
+    """The standing tools that could actually do something in this run.
+
+    Used to decide what the PROMPT advertises. It is deliberately NOT used to
+    filter `dispatch_table()`: a model that names a tool left out of the menu
+    still reaches it and still gets that tool's own refusal, exactly as today.
+    That is what makes this free -- being wrong about reachability costs the
+    same as being right about it does now, so there is no new failure mode and
+    no extra round trip.
+    """
+    has_workspace = current_workspace() is not None
+    has_container = current_command_runner() is not None
+    live = {}
+    for name, tier in TOOL_TIERS.items():
+        need = TOOL_NEEDS.get(name, ANYWHERE)
+        if need == ANYWHERE:
+            live[name] = tier
+        elif need == NEEDS_CONTAINER and has_container:
+            live[name] = tier
+        elif need == NEEDS_WORKSPACE and has_workspace:
+            live[name] = tier
+        elif need == NEEDS_EITHER and (has_workspace or has_container):
+            live[name] = tier
+    return live
+
 
 #: One parsed index per workspace, keyed by path and by what the tree looked
 #: like when it was built. Rebuilt when a Python file's size or mtime changes,

@@ -266,7 +266,10 @@ def test_a_spent_budget_ends_the_run_rather_than_handing_on(monkeypatch):
         result = pn.agent(_state())
 
     assert result.goto == END
-    assert result.update["model_calls"] == 3
+    # Four, not three: a run that spent its budget without producing an answer
+    # now pays one more call to write down what it has, because reporting
+    # nothing is the worst outcome available. See OUT_OF_BUDGET_NOTE.
+    assert result.update["model_calls"] == 4
     assert "final_output" in result.update
 
 
@@ -1153,3 +1156,267 @@ def test_what_is_carried_is_bounded():
     assert "step 19" in carried
     assert "step 0 " not in carried
     assert len(carried) < 20 * 500
+
+
+# --------------------------------------------------------------------------
+# Settling criteria from the record, not only from the verdict
+# --------------------------------------------------------------------------
+
+def test_a_criterion_whose_artefact_was_written_stops_being_open():
+    """The checklist is re-stated every REMINDER_EVERY iterations while items
+    are open. Without this a run keeps being nagged about something it did
+    twenty actions ago, which is how a reminder becomes wallpaper -- the exact
+    failure the reminder exists to prevent."""
+    checklist = [
+        {"text": "a report exists at report.md", "status": "pending", "evidence": ""},
+        {"text": "the totals are correct", "status": "pending", "evidence": ""},
+    ]
+
+    settled = pn._note_evidence(checklist, ["solve: write_file report.md ok (42 lines)"])
+
+    assert [i["status"] for i in settled] == ["seen", "pending"]
+    assert "report.md" in settled[0]["evidence"]
+
+
+def test_it_stops_short_of_saying_the_criterion_is_met():
+    """A successful write is environment-grounded -- it is a returncode, not
+    the agent's account of itself -- but it says the artefact EXISTS, not that
+    its contents satisfy anything. A wrong `seen` costs a missing nag; a wrong
+    `met` would cost the next attempt skipping what is actually absent."""
+    settled = pn._note_evidence(
+        [{"text": "report.md holds the Q3 totals", "status": "pending", "evidence": ""}],
+        ["solve: write_file report.md ok"],
+    )
+
+    assert settled[0]["status"] == "seen"
+    assert settled[0]["status"] != "met"
+
+
+def test_a_failed_write_grounds_nothing():
+    settled = pn._note_evidence(
+        [{"text": "a report exists at report.md", "status": "pending", "evidence": ""}],
+        ["solve: write_file report.md failed: no such directory"],
+    )
+
+    assert settled[0]["status"] == "pending"
+
+
+def test_reading_a_file_is_not_evidence_that_it_was_produced():
+    """A criterion about a report is not satisfied by having looked at one."""
+    settled = pn._note_evidence(
+        [{"text": "a report exists at report.md", "status": "pending", "evidence": ""}],
+        ["solve: read_file report.md ok", "solve: list_files . ok"],
+    )
+
+    assert settled[0]["status"] == "pending"
+
+
+def test_an_unrelated_path_does_not_settle_a_criterion():
+    settled = pn._note_evidence(
+        [{"text": "a report exists at report.md", "status": "pending", "evidence": ""}],
+        ["solve: write_file scratch/notes.txt ok"],
+    )
+
+    assert settled[0]["status"] == "pending"
+
+
+def test_a_criterion_naming_no_path_is_left_alone():
+    """Most criteria are about values and behaviour, not files. Matching them
+    on prose would mark work done that nobody did."""
+    settled = pn._note_evidence(
+        [{"text": "the reported total is what the code prints", "status": "pending",
+          "evidence": ""}],
+        ["solve: write_file report.md ok"],
+    )
+
+    assert settled[0]["status"] == "pending"
+
+
+def test_a_settled_criterion_is_not_re_opened():
+    already = [{"text": "x at a.py", "status": "met", "evidence": "judge said so"}]
+
+    assert pn._note_evidence(already, ["solve: write_file a.py ok"]) == already
+
+
+def test_an_acted_on_criterion_is_not_listed_as_still_open():
+    """The point of the whole thing: the reminder names what is left."""
+    checklist = [
+        {"text": "a report exists at report.md", "status": "seen", "evidence": "wrote report.md"},
+        {"text": "the totals are correct", "status": "pending", "evidence": ""},
+    ]
+
+    reminder = pn._reminders(pn.REMINDER_EVERY, checklist)
+
+    assert "the totals are correct" in reminder
+    assert "report.md" not in reminder
+
+
+def test_the_loop_settles_the_checklist_as_it_goes():
+    """Not a unit of `_note_evidence`: the loop has to actually call it, or
+    the mechanism exists and nothing drives it."""
+    import inspect
+
+    source = inspect.getsource(pn._agent_loop)
+    assert "_note_evidence(checklist, actions)" in source
+
+
+# --------------------------------------------------------------------------
+# A spent run answers with what it has
+# --------------------------------------------------------------------------
+
+def test_a_run_that_runs_out_still_produces_an_answer(monkeypatch):
+    """Out of budget with nothing to show is the worst outcome available, and
+    it used to be a common one: the loop returned "" and the run reported
+    nothing. One more call buys an answer from what it already has."""
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 3
+                     + ["FINAL:\npartial, but here is what I found"])
+    _install(monkeypatch, fake)
+
+    with bind_budget(Budget(max_model_calls=3)):
+        result = pn.agent(_state())
+
+    assert result.update["final_output"] == "partial, but here is what I found"
+
+
+def test_the_salvage_never_hands_back_a_tool_call_as_the_answer():
+    """Returning the raw reply would put "ACTION: execute_bash..." in front of
+    the person as the result of their run -- the ACTION-protocol leak this
+    loop has a rule against, reintroduced by the one path that exists to
+    salvage something."""
+    class _Action:
+        def stream(self, messages):
+            from langchain_core.messages import AIMessageChunk
+            yield AIMessageChunk(content="ACTION: execute_bash\nCODE:\nls")
+
+    assert pn._answer_from_what_is_here(_Action(), []) == ""
+
+
+def test_prose_that_forgot_the_marker_is_still_an_answer():
+    class _Prose:
+        def stream(self, messages):
+            from langchain_core.messages import AIMessageChunk
+            yield AIMessageChunk(content="I found three files and two of them parse.")
+
+    answer = pn._answer_from_what_is_here(_Prose(), [])
+
+    assert "three files" in answer
+
+
+def test_a_failure_while_salvaging_leaves_the_run_no_worse():
+    """It returns the same nothing the caller already had, so this path can
+    never make the outcome worse than it was."""
+    class _Broken:
+        def stream(self, messages):
+            raise RuntimeError("provider down")
+
+    assert pn._answer_from_what_is_here(_Broken(), []) == ""
+
+
+def test_a_run_that_already_answered_pays_nothing_extra(monkeypatch):
+    """The salvage fires only when there is no answer. A run that finished
+    normally must not be charged for it."""
+    fake = _Scripted(["FINAL:\nthe answer"])
+    _install(monkeypatch, fake)
+
+    with bind_budget(Budget(max_model_calls=20)):
+        result = pn.agent(_state())
+
+    # Goes to the judge with an answer in hand, rather than ending on a
+    # salvage -- `output`, not `final_output`, which the evaluator sets.
+    assert result.update["output"] == "the answer"
+    assert result.update["model_calls"] <= 3
+
+
+# --------------------------------------------------------------------------
+# The one edge with no bound on it
+# --------------------------------------------------------------------------
+#
+# The evaluator handed a provider failure back to the agent with no counter
+# anywhere on the path. The agent reworked its answer, handed it back, the
+# same dead provider refused again, and the two bounced until LangGraph's
+# recursion limit ended the run outright -- losing the answer the agent had
+# been holding the whole time. Measured live with an exhausted Anthropic key:
+# 68 model requests and 190 seconds for a task that answers in three, ending
+# in GraphRecursionError with nothing.
+
+def test_a_dead_judge_ends_the_run_instead_of_bouncing(monkeypatch):
+    def refuses(llm, messages, **kw):
+        raise pn.ProviderError("credit balance is too low")
+
+    # The router is stubbed as well as the loop: resolving a seat LISTS the
+    # vendor's models, which is a network call with nothing in this test to
+    # answer it. Patching only what the test is about left it passing on a
+    # machine with working keys and failing in CI with placeholder ones.
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: object())
+    monkeypatch.setattr(pn, "_tool_loop", refuses)
+    state = {
+        "messages": [HumanMessage("do the thing")],
+        "output": "here is the thing",
+        "node": "agent",
+        "judge_errors": pn.MAX_JUDGE_ERRORS,
+    }
+
+    command = pn.evaluator(state)
+
+    assert command.goto == "__end__", "the judge bounced it back again"
+    assert command.update["final_output"] == "here is the thing", (
+        "the answer the agent was holding was thrown away"
+    )
+    assert "unverified" in command.update["board"][0]
+
+
+def test_the_first_provider_failure_is_still_retried(monkeypatch):
+    """One retry, not none. A network blip between two calls is real, and a
+    run that gave up on the first one would stop being judged over nothing."""
+    def refuses(llm, messages, **kw):
+        raise pn.ProviderError("connection reset")
+
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: object())
+    monkeypatch.setattr(pn, "_tool_loop", refuses)
+    command = pn.evaluator({
+        "messages": [HumanMessage("do the thing")],
+        "output": "here is the thing",
+        "node": "agent",
+    })
+
+    assert command.goto == "evaluator", (
+        "the agent was sent to rework an answer nobody rejected"
+    )
+    assert command.update["judge_errors"] == 1
+    assert "feedback" not in command.update, (
+        "a provider failure was handed to the agent as if it were a verdict"
+    )
+
+
+def test_a_failed_rubric_is_paid_for_once_and_not_on_every_pass(monkeypatch):
+    """A run that re-enters the agent node -- after a rejection, or after the
+    person answers a question -- must not buy the rubric again from a provider
+    that just refused it. Twenty rubric calls in one turn, on the run that
+    found this.
+
+    What stops it is that a failed call returns an empty Rubric rather than
+    nothing: the checklist it produces is [], carry() writes [] back, and []
+    is not None, so the next pass does not ask again."""
+    tried = []
+
+    def dead(llm, task_text):
+        tried.append(task_text)
+        return pn.Rubric([])
+
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: object())
+    monkeypatch.setattr(pn, "_rubric", dead)
+    monkeypatch.setattr(pn, "_agent_loop", lambda *a, **kw: ("an answer", "final", "solve"))
+
+    first = pn.agent({"messages": [HumanMessage("do the thing")]})
+
+    assert len(tried) == 1
+    assert first.update["checklist"] == []
+    assert first.goto == "evaluator", "a failed rubric skipped the judge"
+
+    pn.agent({
+        "messages": [HumanMessage("do the thing")],
+        "checklist": first.update["checklist"],
+        "transcript": [{"kind": "human", "content": "TASK:\ndo the thing"}],
+    })
+
+    assert len(tried) == 1, "a second pass paid for the rubric all over again"

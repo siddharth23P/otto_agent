@@ -61,12 +61,57 @@ DEFAULT_MAX_MODEL_CALLS = 120
 #: the two harnesses that already measured this working.
 WRAP_UP_FRACTION = 0.8
 
+#: The least a turn of a multi-turn task can be given and still produce an
+#: answer at all.
+#:
+#: A turn is not just the loop: it pays for the criteria call before the loop
+#: and the judgment after it, so a share of three calls is spent before any
+#: work happens. These are floors, not targets -- a turn that needs less
+#: returns the rest to the turns after it.
+#:
+#: Both numbers come from a run that went wrong. Rationing 480 seconds across
+#: C04's nine turns gave each one 53 seconds, and the grader's verdict was
+#: "the provided conversation only contains user messages and lacks any
+#: responses from the assistant" -- score 0.32 against 0.43 for the
+#: unrationed run it was meant to improve. A share too small to answer with is
+#: worse than no rationing at all, because one long answer beats none.
+MIN_TURN_CALLS = 8
+MIN_TURN_SECONDS = 90.0
+
 #: Said once, when the first stage opens. Deliberately the wording both
 #: harnesses arrived at independently, because it is what actually turns a
 #: run that is out of time into a run that produced something.
 WRAP_UP_NOTE = (
     "Time is nearly up. Stop exploring, make sure any change you made is "
     "actually written, and give your FINAL answer now."
+)
+
+#: How much of a run's budget is reconnaissance, before any of it is spent
+#: committing to an approach.
+#:
+#: Habits 1 and 3 in the agent prompt already say to find out what state the
+#: system is in before concluding, and to look wide before looking narrow.
+#: That is the right instinct stated as guidance the model may or may not
+#: follow. The failure it targets has a name -- premature exploitation,
+#: committing to training-time priors before learning what the environment
+#: actually allows -- and making exploration a phase with its own budget,
+#: spent BEFORE execution, was worth +6.3 to +11.7 points.
+#:
+#: Small, because the same work reports that naive exploration HURT. A fifth
+#: of the budget is enough to read the code a change touches and see what is
+#: actually running; more than that is the exploration becoming the task.
+#:
+#: Zero disables it, and that is the control the measurement needs.
+RECON_FRACTION = float(os.environ.get("OTTO_RECON_FRACTION", "0.2"))
+
+#: Said once, when the reconnaissance stretch ends. Not a prohibition -- the
+#: agent can still look at things afterwards -- but the point at which looking
+#: stops being the job.
+RECON_NOTE = (
+    "You have looked around enough. From here, work from what you have "
+    "found rather than gathering more: make the change, run the thing, and "
+    "check it. Look something up again only when a specific question blocks "
+    "you, not to be thorough."
 )
 
 Phase = Literal["ok", "wrap_up", "spent"]
@@ -89,6 +134,18 @@ class Budget:
     #: So the wrap-up note is said once rather than on every iteration, which
     #: would be both noise and a growing prompt.
     warned: bool = field(default=False)
+    #: Ceilings for the CURRENT turn of a multi-turn task, set by
+    #: `begin_turn`. None on an ordinary single-turn run, which is every
+    #: `otto chat` turn and most benchmark tasks.
+    turn_max_calls: int | None = field(default=None)
+    turn_hard_at: float | None = field(default=None)
+    #: Where the current turn began, so its wrap-up point is a fraction of
+    #: THIS turn's share rather than of the whole run -- otherwise a later
+    #: turn would be told to wrap up the moment it started.
+    turn_start_calls: int = field(default=0)
+    turn_wrap_at: float | None = field(default=None)
+    #: So the end-of-reconnaissance note is said once, like the wrap-up one.
+    recon_warned: bool = field(default=False)
 
     @classmethod
     def of(
@@ -124,24 +181,159 @@ class Budget:
         task ends."""
         return cls.of(max(monotonic_deadline - time.monotonic(), 1.0), **kwargs)
 
+    def begin_turn(self, turns_left: int) -> None:
+        """Ration what is left across this turn and the ones still to come.
+
+        NOTHING CALLS THIS. It was written for issue #12, measured, and found
+        to make the task it was written for WORSE. It stays as the mechanism a
+        working version would build on, and as the record of why the obvious
+        version does not work.
+
+        The premise was sound: a multi-turn task is many runs sharing one
+        budget, and nothing stopped the first run taking all of it. C03 and
+        C04 each reached ~930 seconds and ~46 model calls and then stopped
+        answering, with the graders saying so outright.
+
+        The measurement, on C04, at the budget the baseline had:
+
+            no rationing        46 calls   23 actions   933s   score 0.43
+            rationed, 480s      12 calls    7 actions   353s   score 0.32
+            rationed + floors   14 calls    4 actions   520s   score 0.32
+            rationed, 933s      16 calls    9 actions   635s   score 0.32
+
+        Worse on every axis, and the grader's reason names the mechanism:
+        "the transcript only contains the user's messages". A turn whose share
+        runs out returns NO answer, so rationing converted one mediocre answer
+        into nine empty turns -- and left 300 seconds of the budget unspent
+        while doing it.
+
+        What a working version needs first is for a turn to finish by
+        ANSWERING when its share ends, the way the run-level budget already
+        does through `wrap_up_once`. Rationing on top of a turn that can end
+        with nothing is rationing into a hole.
+
+        An equal share rather than anything cleverer. The alternative is
+        guessing which turn deserves more, and a wrong guess starves exactly
+        the turn that mattered -- where an equal share at least leaves every
+        turn able to answer.
+
+        The ceilings are absolute rather than relative so `phase()` stays a
+        comparison: a turn ends when `calls` reaches the number this set.
+        Calling it again for the next turn recomputes from what is actually
+        left, so a turn that finished early hands its unused share forward.
+        """
+        # Each turn gets its own wrap-up note. Said once per RUN, a later turn
+        # would never be told to finish.
+        self.warned = False
+        self.turn_start_calls = self.calls
+        turns_left = self._affordable_turns(max(1, int(turns_left)))
+        if self.max_model_calls is not None:
+            remaining = max(self.max_model_calls - self.calls, 0)
+            self.turn_max_calls = self.calls + max(
+                MIN_TURN_CALLS, remaining // turns_left,
+            )
+        if self.hard_at is not None:
+            now = time.monotonic()
+            share = max(
+                MIN_TURN_SECONDS, max(self.hard_at - now, 0.0) / turns_left,
+            )
+            self.turn_hard_at = now + share
+            self.turn_wrap_at = now + share * WRAP_UP_FRACTION
+
+    def _affordable_turns(self, turns_left: int) -> int:
+        """How many of the remaining turns this budget can actually pay for.
+
+        Dividing by every turn still to come is right only while the shares
+        stay usable. Past that it is worse than not rationing: nine turns of a
+        480-second budget is 53 seconds each, which buys a criteria call and
+        part of a judgment and no answer at all -- measured, and scored below
+        the unrationed run it was meant to beat.
+
+        So the count is capped by what the floors can be paid out of. Fewer
+        turns answered properly beats every turn answered with nothing, and
+        the turns past the cap are not abandoned -- they run on whatever is
+        genuinely left, which is the honest version of "there was not enough
+        budget for this conversation".
+        """
+        affordable = turns_left
+        if self.hard_at is not None:
+            remaining = max(self.hard_at - time.monotonic(), 0.0)
+            affordable = min(affordable, max(1, int(remaining // MIN_TURN_SECONDS)))
+        if self.max_model_calls is not None:
+            remaining_calls = max(self.max_model_calls - self.calls, 0)
+            affordable = min(affordable, max(1, remaining_calls // MIN_TURN_CALLS))
+        return max(1, affordable)
+
     def spend(self) -> None:
         """Record one model request. Called from `_call`, once per HTTP
         request rather than once per logical call, so a retry storm is
         visible to the ceiling that is meant to stop it."""
         self.calls += 1
 
+    def recon_once(self) -> str | None:
+        """The note to append when the reconnaissance stretch ends, once.
+
+        Paired with `wrap_up_once`: one marks the end of looking, the other
+        the end of working. Both are said a single time, because a reminder
+        repeated every iteration is one the model stops reading.
+        """
+        if self.recon_warned or self.in_recon():
+            return None
+        if self.max_model_calls is None and self.hard_at is None:
+            return None  # no budget, so no stretches to be past
+        self.recon_warned = True
+        return RECON_NOTE
+
     def phase(self) -> Phase:
-        """Where this run is: working, wrapping up, or done."""
+        """Where this run is: working, wrapping up, or done.
+
+        The turn ceilings are checked alongside the run's own, and "spent" on
+        a turn ceiling is not the end of the task -- the harness starts the
+        next turn, which calls `begin_turn` and raises them again.
+        """
+        now = time.monotonic()
         if self.max_model_calls is not None and self.calls >= self.max_model_calls:
             return "spent"
-        if self.hard_at is not None and time.monotonic() >= self.hard_at:
+        if self.hard_at is not None and now >= self.hard_at:
             return "spent"
+        if self.turn_max_calls is not None and self.calls >= self.turn_max_calls:
+            return "spent"
+        if self.turn_hard_at is not None and now >= self.turn_hard_at:
+            return "spent"
+
+        if self.turn_max_calls is not None:
+            share = self.turn_max_calls - self.turn_start_calls
+            if self.calls >= self.turn_start_calls + share * WRAP_UP_FRACTION:
+                return "wrap_up"
         if self.max_model_calls is not None:
             if self.calls >= self.max_model_calls * WRAP_UP_FRACTION:
                 return "wrap_up"
-        if self.wrap_up_at is not None and time.monotonic() >= self.wrap_up_at:
+        if self.turn_wrap_at is not None and now >= self.turn_wrap_at:
+            return "wrap_up"
+        if self.wrap_up_at is not None and now >= self.wrap_up_at:
             return "wrap_up"
         return "ok"
+
+    def in_recon(self) -> bool:
+        """Whether this run is still in its opening, looking-around stretch.
+
+        Its own predicate rather than a value from `phase()`. Reconnaissance
+        is about the START of a run and wrapping up is about its END -- the
+        same axis, but callers ask different questions of it, and adding a
+        fourth value to a Literal that `spent()` and `wrap_up_once()` already
+        switch on would have changed what a fresh budget reports to every
+        existing reader. It did, and two tests said so.
+        """
+        if RECON_FRACTION <= 0:
+            return False
+        if self.max_model_calls is not None:
+            return self.calls < self.max_model_calls * RECON_FRACTION
+        if self.hard_at is not None and self.wrap_up_at is not None:
+            # No call ceiling, so measure against the clock: the recon stretch
+            # is the same fraction of the run's total span.
+            span = (self.hard_at - self.wrap_up_at) / (1 - WRAP_UP_FRACTION)
+            return time.monotonic() < self.hard_at - span * (1 - RECON_FRACTION)
+        return False
 
     def wrap_up_once(self) -> str | None:
         """The note to append, the first time the run enters its last stretch.

@@ -246,3 +246,54 @@ def test_a_short_cue_does_not_force_a_long_action_to_be_cut(bank):
     rendered = L.Lesson("when x", "y" * 300, "worked").rendered()
 
     assert "y" * 300 in rendered
+
+
+# --------------------------------------------------------------------------
+# Contrast, on the runs that have something to contrast
+# --------------------------------------------------------------------------
+
+def _distil_body(monkeypatch, *, rejections: int) -> str:
+    """The prompt body `_distil` builds, without spending a call."""
+    from langchain_core.messages import HumanMessage
+
+    from agent.pipeline import nodes as pn
+
+    seen = {}
+    monkeypatch.setattr(pn, "_call", lambda llm, messages: seen.update(
+        body=messages[-1].content) or "[]")
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: object())
+    pn._distil({
+        "messages": [HumanMessage("do the thing")],
+        "actions": ["solve: write_file a.py ok"],
+        "transcript": [{"kind": "ai", "content": "FINAL:\ndone"}],
+        "rejections": rejections, "board": [], "mode_log": [], "context": "",
+    }, succeeded=True)
+    return seen.get("body", "")
+
+
+def test_a_retried_run_is_asked_what_changed_between_the_attempts(bank, monkeypatch):
+    """Automatically extracted principles scale and come out too generic to
+    act on. The ingredient that closes the gap is contrastive analysis --
+    naming one aspect and comparing a better attempt against a worse one. A
+    retried run holds both by construction."""
+    body = _distil_body(monkeypatch, rejections=2)
+
+    assert "REJECTED AND RETRIED 2 time(s)" in body
+    assert "say what CHANGED between them" in body
+
+
+def test_a_run_accepted_first_time_is_not_asked_to_compare(bank, monkeypatch):
+    """There is nothing to compare, and asking invites an invented contrast."""
+    body = _distil_body(monkeypatch, rejections=0)
+
+    assert "CHANGED between them" not in body
+    assert "REJECTED AND RETRIED" not in body
+
+
+def test_the_contrast_names_what_a_generic_lesson_looks_like():
+    """The instruction has to say what it is ruling out, or it reads as a
+    style note rather than a constraint."""
+    from agent.pipeline.nodes import CONTRAST_NOTE
+
+    assert "only the better attempt" in CONTRAST_NOTE
+    assert "one aspect" in CONTRAST_NOTE

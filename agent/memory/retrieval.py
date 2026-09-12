@@ -55,6 +55,7 @@ something imperfectly ordered beats showing nothing at all.
 from __future__ import annotations
 
 import logging
+import re
 
 import numpy as np
 
@@ -91,6 +92,30 @@ PROCEDURAL_TOP_K = 1
 #: This is the cap that makes recall() a slice of a budgeted prompt (agent/
 #: memory/queue.py's X_BUDGET/Y_BUDGET) rather than a second unbounded dump.
 DEFAULT_MAX_CHUNKS = 20
+
+#: How far below the best match a chunk may score and still be worth
+#: returning, as a fraction of that best score.
+#:
+#: This turns `max_chunks` from a quota into a ceiling: a query whose evidence
+#: is genuinely spread across many chunks still gets them, and one whose answer
+#: is in the first two stops there instead of padding the prompt to twenty.
+#:
+#: 0.85 rather than something tighter because these are cosine similarities on
+#: a self-similar stream, where the spread between a decisive chunk and a
+#: near-duplicate is small by construction -- a tight ratio would cut the
+#: second hop of a multi-hop question, which is the case this is meant to help.
+FALLOFF_RATIO = 0.85
+
+#: Never return fewer than this, however sharp the falloff. A threshold that
+#: could return one chunk would make an oddly-worded query worse than the fixed
+#: cap it replaced.
+MIN_CHUNKS = 3
+
+#: How many chunks the second hop may add. Small: it is reaching for evidence
+#: the question does not mention, which is exactly the material that is
+#: valuable when it is right and noise when it is wrong. Three is enough for
+#: the two-hop questions the benchmark actually contains.
+MAX_SECOND_HOP = 3
 
 #: How many chunks either side of each selected chunk to include (see the
 #: module docstring). 2 means "the two turns before and the two after".
@@ -198,10 +223,41 @@ def _rank_bullets(bullets: list[Bullet], query_vec, top_k: int, model: str = "")
     )[:top_k]
 
 
-def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "") -> list[Chunk]:
+#: A token worth matching literally: long enough not to be a common word, and
+#: carrying a digit or a separator, which is what ids, dates, versions, paths
+#: and hostnames have and ordinary prose does not. `AK-4417-QX`, `2027-01-31`,
+#: `v2.14.0`, `agent/memory/retrieval.py`.
+#:
+#: Deliberately narrow in the same way agent/pipeline/tools.py's
+#: `looks_like_a_literal` is, and for the same measured reason -- but not the
+#: same pattern: that one requires the whole query to BE the token, because
+#: grep either runs or does not. Here the literal pass is additive, so a token
+#: anywhere inside a longer question can be used.
+_RARE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./:-]{3,}")
+
+
+def _literal_tokens(query: str) -> list[str]:
+    return [t for t in _RARE_TOKEN.findall(query)
+            if any(ch.isdigit() for ch in t) or any(ch in t for ch in "_/:.")]
+
+
+def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "",
+                 *, second_hop: bool = False, query: str = "") -> list[Chunk]:
     """Every compacted chunk is a candidate here, so this is the one step that
     scales with session length -- hence the single matrix product rather than
-    a Python-level loop over cosine_similarity()."""
+    a Python-level loop over cosine_similarity().
+
+    An exact-token pass runs first when the query carries one. This is the
+    same finding agent/pipeline/tools.py's `rag` already acts on -- measured
+    on Otto's own tree, grep found 4/4 exact identifiers and 0/4 conceptual
+    questions, and the embedding index found 4/4 of both but took forty
+    seconds to do the first. Memory recall never got the other half of that
+    decision, and it shows on exactly the queries you would expect: a date.
+
+    Additive, never a replacement. Literal hits go first and the semantic
+    ranking fills whatever room is left, so a query with no rare token in it
+    behaves exactly as before, and one that has a token can only gain.
+    """
     embeddable = _comparable(chunks, model)
     if query_vec is None or not embeddable:
         # Same `[-0:]` trap as _rank_bullets above.
@@ -209,7 +265,108 @@ def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "
     matrix = np.stack([c.embedding for c in embeddable])
     norms = np.linalg.norm(matrix, axis=1) * (np.linalg.norm(query_vec) or 1.0)
     scores = (matrix @ query_vec) / np.where(norms == 0, 1.0, norms)
-    return [embeddable[i] for i in np.argsort(-scores)[:max_chunks]]
+    order = np.argsort(-scores)[:max_chunks]
+    keep = _before_the_falloff(scores[order])
+    ranked = [embeddable[i] for i in order[:keep]]
+
+    tokens = _literal_tokens(query)
+    if not tokens:
+        return ranked
+    # Over every candidate, not just the embeddable ones. A literal match
+    # needs no vector, so a chunk that was never embedded -- or was embedded
+    # by a model this query cannot be ranked against -- is still findable by
+    # the one thing that does not care: its text.
+    #
+    # Newest first among the exact hits: a literal appearing several times is
+    # usually being updated, and the last word on it is the one that matters.
+    hits = [c for c in reversed(chunks)
+            if any(t.lower() in c.content.lower() for t in tokens)]
+    if not hits:
+        return ranked
+    seen = {id(c) for c in hits}
+    room = max(max_chunks - len(hits), 0) if max_chunks else 0
+    return hits[:max_chunks or len(hits)] + [
+        c for c in ranked if id(c) not in seen
+    ][:room]
+
+
+def _second_hop(candidates: list[Chunk], primary: list[Chunk], room: int) -> list[Chunk]:
+    """Rank again against what the first pass FOUND, not against the query.
+
+    This is the multi-hop case, and it is why that category is the weakest one
+    the memory benchmark measures -- 82% against 91% overall. A question whose
+    answer needs two pieces of evidence only matches the FIRST of them: the
+    second matches the answer to the first hop, which does not appear in the
+    question at all. Ranking against the query alone cannot reach it however
+    many chunks it returns.
+
+    Costs nothing. Every chunk already carries a stored embedding, so the
+    second pass is one more matrix product against a vector already in memory
+    -- no model call, no network, no query rewriting.
+
+    Held to the same falloff bar as the first pass, and capped by whatever room
+    the first pass left.
+
+    NOTHING CALLS THIS. It was written for issue #22 and measured, and it did
+    not work:
+
+        multi-hop recall   82%  ->  82%     (no change, n=44)
+        overall recall     91%  ->  91%
+        text per query   2,318  ->  3,209   (+38%)
+
+    So it costs more and finds nothing extra. The reasoning still looks right
+    -- a multi-hop question's second piece of evidence really does match the
+    first hop's ANSWER rather than the question -- which is why it stays here
+    rather than being deleted. What it suggests is that the anchor is wrong:
+    ranking against the top chunk's whole embedding finds chunks similar to
+    that chunk, which in a self-similar stream is its neighbours, and those
+    were already being returned by the neighbour window. A working version
+    needs an anchor that represents what the question still LACKS, not what it
+    already found.
+    """
+    seen = {c.hash for c in primary}
+    pool = [c for c in candidates if c.hash not in seen and c.embedding is not None]
+    if not pool or room <= 0:
+        return []
+    anchor = primary[0].embedding
+    matrix = np.stack([c.embedding for c in pool])
+    norms = np.linalg.norm(matrix, axis=1) * (np.linalg.norm(anchor) or 1.0)
+    scores = (matrix @ anchor) / np.where(norms == 0, 1.0, norms)
+    order = np.argsort(-scores)[:room]
+    keep = min(_before_the_falloff(scores[order]), MAX_SECOND_HOP)
+    return [pool[i] for i in order[:keep]]
+
+
+def _before_the_falloff(ranked_scores) -> int:
+    """How many of the ranked chunks to keep, stopping where they stop helping.
+
+    `max_chunks` is a fixed number and a fixed number is wrong in both
+    directions: too shallow for a multi-hop question whose second piece of
+    evidence ranks low, too noisy for a single-fact lookup where everything
+    after the first match is filler. Agent memory is a bounded, highly
+    self-similar stream, so the hard part is telling decisive evidence from
+    near-duplicates rather than finding relevant text at all.
+
+    The cheap version of "expand while the next piece reduces uncertainty",
+    needing no extra model call: keep taking chunks while they score close to
+    the best one, and stop at the first that does not. A run of near-equal
+    scores is a genuine multi-hop spread and is kept; a cliff after the first
+    is the single-fact case and the tail is dropped.
+
+    Never returns fewer than MIN_CHUNKS. A threshold that can return one chunk
+    would make a slightly-odd query worse than the fixed cap it replaced, and
+    the floor costs almost nothing when the tail is cheap.
+    """
+    if len(ranked_scores) <= MIN_CHUNKS:
+        return len(ranked_scores)
+    best = float(ranked_scores[0])
+    if best <= 0:
+        return len(ranked_scores)  # nothing to measure a fall against
+    floor = best * FALLOFF_RATIO
+    for position, score in enumerate(ranked_scores):
+        if float(score) < floor:
+            return max(MIN_CHUNKS, position)
+    return len(ranked_scores)
 
 
 def _select(
@@ -280,7 +437,8 @@ def recall_chunks(
 
     candidates = store.get_chunk_rows(kind, hashes)
     shown = _select(
-        store, kind, _rank_chunks(candidates, query_vec, max_chunks, query_model),
+        store, kind,
+        _rank_chunks(candidates, query_vec, max_chunks, query_model, query=query),
         neighbour_window, token_budget,
     )
     return "\n".join(f"  > {c.content}" for c in shown)
@@ -325,7 +483,8 @@ def recall(
     candidates = store.get_chunk_rows(kind, candidate_hashes)
     picked_bullets = _rank_bullets(bullets, query_vec, top_k, query_model)
     shown = _select(
-        store, kind, _rank_chunks(candidates, query_vec, max_chunks, query_model),
+        store, kind,
+        _rank_chunks(candidates, query_vec, max_chunks, query_model, query=query),
         neighbour_window, token_budget,
     )
 
