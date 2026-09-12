@@ -114,11 +114,16 @@ class OpenAIProvider(BaseProvider):
                 id=model.id,
                 provider=self.name,
                 display_name=model.id,
-                capabilities=_classify(model.id),
+                capabilities=self._classify(model.id),
                 raw=model.model_dump(),
             )
             for model in page.data
         ]
+
+    def _classify(self, model_id: str) -> frozenset[Capability]:
+        """Instance hook so an OpenAI-compatible subclass (custom.py) can
+        classify ids from a catalogue that is not OpenAI's."""
+        return _classify(model_id)
 
     # -- 3. chat ----------------------------------------------------------
 

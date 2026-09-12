@@ -153,8 +153,6 @@ REJECTED = [
                  "not both", id="spec-and-provider-both-set"),
     pytest.param({Task.CHAT_FAST: (Candidate(spec="mercury-2", requires=CHAT),)},
                  "provider:model", id="spec-has-no-colon"),
-    pytest.param({Task.CHAT_FAST: (Candidate(spec="a:b:c", requires=CHAT),)},
-                 "more than one", id="spec-has-two-colons"),
     pytest.param({Task.CHAT_FAST: (Candidate(spec="mistral:large", requires=CHAT),)},
                  "unknown provider", id="pinned-vendor-not-registered"),
     pytest.param({Task.CHAT_FAST: (Candidate(spec="inception:", requires=CHAT),)},
@@ -326,10 +324,19 @@ def test_known_providers_matches_the_registry():
     where the two are reconciled. Without it, renaming a provider silently
     turns every route naming it into a skip.
     """
-    from agent.router.llm_provider import provider_names
-    from agent.router.mapping import KNOWN_PROVIDERS
+    from agent.router.llm_provider import builtin_provider_names, provider_names
+    from agent.router.mapping import KNOWN_PROVIDERS, known_providers
 
-    assert KNOWN_PROVIDERS == set(provider_names())
+    assert KNOWN_PROVIDERS == set(builtin_provider_names())
+    assert known_providers() >= set(provider_names())
+
+
+def test_a_model_id_may_carry_a_colon():
+    """Ollama tags every id ("llama3.2:latest"). Only the FIRST colon splits
+    provider from model, as every other reader already does."""
+    validate({**TASK_ROUTES, Task.CHAT_FAST: (Candidate(spec="inception:llama3.2:latest", requires=CHAT),)})
+    assert "not 'provider:model'" in problems_from(
+        {**TASK_ROUTES, Task.CHAT_FAST: (Candidate(spec="no-colon", requires=CHAT),)})
 
 
 def test_import_needs_no_credentials():

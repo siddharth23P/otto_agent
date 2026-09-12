@@ -20,6 +20,7 @@ import asyncio
 import functools
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
@@ -714,3 +715,383 @@ async def test_cached_tokens_are_shown_only_when_there_are_some(monkeypatch, tmp
         await pilot.pause()
 
         assert "cached 90.0k" in _panel_text(app)
+
+
+# --------------------------------------------------------------------------
+# The workspace browser (agent/cli/modals.py PathPicker, 2026-09-12)
+# --------------------------------------------------------------------------
+
+def _tree(app):
+    return app.screen.tree
+
+
+def _child_names(app) -> list[str]:
+    return [str(node.label) for node in _tree(app).root.children]
+
+
+@_async_test
+async def test_selecting_a_subdirectory_in_the_tree_sets_the_workspace(monkeypatch, tmp_path):
+    (tmp_path / "proj").mkdir()
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    app.session.workspace = tmp_path
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_workspace()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.WorkspacePrompt), "the browser")
+        await _until(pilot, lambda: _child_names(app) == ["proj"], "the tree to load")
+        _tree(app).focus()
+        await pilot.press("down")       # root row -> first child
+        await pilot.pause()
+        assert app.screen.query_one("#path", Input).value.endswith("proj"), "the Input follows the cursor"
+        await pilot.press("enter")
+        await _until(pilot, lambda: app.session.workspace == (tmp_path / "proj").resolve(),
+                     "the workspace to change")
+        assert not isinstance(app.screen, tui_mod.WorkspacePrompt)
+
+
+@_async_test
+async def test_typing_a_path_reroots_the_tree_without_committing(monkeypatch, tmp_path):
+    other = tmp_path / "other"
+    (other / "inner").mkdir(parents=True)
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    app.session.workspace = tmp_path
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_workspace()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.WorkspacePrompt), "the browser")
+        app.screen.query_one("#path", Input).value = str(other)
+        await _until(pilot, lambda: Path(_tree(app).path).resolve() == other.resolve(), "the tree to re-root")
+        await _until(pilot, lambda: _child_names(app) == ["inner"], "the new root to load")
+        assert app.session.workspace == tmp_path, "typing alone commits nothing"
+        await pilot.press("escape")
+        await _until(pilot, lambda: not isinstance(app.screen, tui_mod.WorkspacePrompt), "cancel")
+        assert app.session.workspace == tmp_path
+
+
+@_async_test
+async def test_hidden_up_and_home_change_what_the_tree_shows(monkeypatch, tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "src").mkdir()
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    app.session.workspace = tmp_path
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_workspace()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.WorkspacePrompt), "the browser")
+        await _until(pilot, lambda: _child_names(app) == ["src"], "dot-dirs hidden by default")
+        await pilot.press("ctrl+o")
+        await _until(pilot, lambda: _child_names(app) == [".git", "src"], "hidden shown")
+        await pilot.press("ctrl+r")
+        await _until(pilot, lambda: Path(_tree(app).path) == tmp_path.parent, "up one level")
+        await pilot.press("ctrl+g")
+        await _until(pilot, lambda: Path(_tree(app).path) == Path.home(), "home")
+        await pilot.press("escape")
+
+
+@_async_test
+async def test_the_browser_stops_its_own_submission(tmp_path):
+    escaped: list[str] = []
+
+    class Host(App):
+        def compose(self) -> ComposeResult:
+            yield Static("host")
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            escaped.append(event.value)
+
+    app = Host()
+    async with app.run_test() as pilot:
+        app.push_screen(tui_mod.WorkspacePrompt(tmp_path))
+        await pilot.pause()
+        app.screen.query_one("#path", Input).value = str(tmp_path)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+    assert escaped == []
+
+
+# --------------------------------------------------------------------------
+# Art and animation (agent/cli/art.py)
+# --------------------------------------------------------------------------
+
+@_async_test
+async def test_headless_shows_the_finished_banner_and_the_empty_state(monkeypatch, tmp_path):
+    from agent.cli import art
+
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert art.animations_enabled(app) is False
+        banner = app.query_one("#banner", Static).content
+        assert banner.plain.splitlines() == list(art.WORDMARK_SMALL)
+        assert app.query("#empty-state"), "an empty transcript is not blank"
+        app.message_box.value = "hi"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        assert not app.query("#empty-state"), "gone once there is a conversation"
+
+
+def _answer_headers(app) -> list[str]:
+    """The header line of every answer block, as plain text."""
+    return [w.content.renderables[0].plain for w in app.query("#transcript > .answer")]
+
+
+@_async_test
+async def test_the_final_flourish_settles_on_the_plain_bullet(monkeypatch, tmp_path):
+    from agent.cli import art
+
+    monkeypatch.setattr(tui_mod, "animations_enabled", lambda app: True)
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("the answer")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.message_box.value = "hi"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await _until(pilot, lambda: _answer_headers(app) and
+                     _answer_headers(app)[-1].startswith(f"{art.BULLET_ANSWER} final"),
+                     "the sparkle to settle", timeout=5.0)
+        block = app.query_one("#transcript Collapsible", Collapsible)
+        await _until(pilot, lambda: block.collapsed, "the sweep to finish", timeout=5.0)
+        assert "thought for" in block.title
+
+
+@_async_test
+async def test_messages_wear_their_roles(monkeypatch, tmp_path):
+    """No boxes: the person's line carries the `user` class, the answer the
+    `answer` class with a one-line header, and the notes between are `meta`
+    -- which is what the stylesheet keys its rules on."""
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("the answer")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.message_box.value = "hello there"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        users = [w for w in app.query("#transcript > .user")]
+        assert len(users) == 1 and "hello there" in users[0].content
+        assert len(_answer_headers(app)) == 1 and _answer_headers(app)[0].startswith("● final")
+        assert app.query("#transcript > .meta"), "the saved-to line is a meta line"
+        assert "otto" in app.query_one("#topbar", Static).content.columns[0]._cells[0].plain
+        hint = app.query_one("#hint", Static).content.plain
+        assert "solve →" in hint and "f2 setup" in hint
+
+
+@_async_test
+async def test_the_thinking_title_carries_the_mode_glyph(monkeypatch, tmp_path):
+    from agent.cli import art
+
+    def fake_stream(text, **kwargs):
+        yield {"agent": {"board": ["escalated to plan mode -- need steps"]}}
+        yield {"agent": {"board": ["plan: read_file -> ok"]}}
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.message_box.value = "go"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        block = app.query_one("#transcript Collapsible", Collapsible)
+        assert block.title.startswith(f"{art.MODE_GLYPHS['plan']} plan")
+        assert block.collapsed
+
+
+# --------------------------------------------------------------------------
+# Lessons from the palette
+# --------------------------------------------------------------------------
+
+@_async_test
+async def test_export_proposes_a_dated_default_and_runs_off_thread(monkeypatch, tmp_path):
+    from datetime import date
+
+    entered = threading.Event()
+    release = threading.Event()
+    exported: list = []
+
+    def fake_export(path):
+        exported.append(path)
+        entered.set()
+        release.wait(5)
+        return 2
+
+    monkeypatch.setattr(tui_mod, "export_lessons", fake_export)
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_export_lessons()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.PathPicker), "the save picker")
+        box = app.screen.query_one("#path", Input)
+        assert box.value.endswith(f"otto-lessons-{date.today():%Y-%m-%d}.json")
+        box.value = str(tmp_path / "bank.json")
+        await pilot.press("enter")
+        await asyncio.to_thread(entered.wait, 5)
+        app._post("ui still responsive")
+        await pilot.pause()
+        assert "ui still responsive" in _texts(app)
+        release.set()
+        await _until(pilot, lambda: any("exported 2 lesson(s)" in t for t in _texts(app)), "the report")
+    assert exported == [tmp_path / "bank.json"]
+
+
+@_async_test
+async def test_import_reports_kept_and_dropped(monkeypatch, tmp_path):
+    from agent.memory.lessons import ImportReport
+
+    src = tmp_path / "in.json"
+    src.write_text("[]")
+    monkeypatch.setattr(tui_mod, "import_lessons",
+                        lambda path: ImportReport(read=3, kept=2, dropped_duplicate=1))
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_import_lessons()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.PathPicker), "the file picker")
+        app.screen.query_one("#path", Input).value = str(src)
+        await pilot.press("enter")
+        await _until(pilot, lambda: any("kept 2, dropped 1 as duplicates" in t for t in _texts(app)),
+                     "the import report")
+
+
+@_async_test
+async def test_show_lessons_renders_the_bank(monkeypatch, tmp_path):
+    import io
+
+    from rich.console import Console
+    from agent.memory.lessons import Lesson
+
+    monkeypatch.setattr(tui_mod, "all_lessons",
+                        lambda: [Lesson("tests fail on import", "check the venv"),
+                                 Lesson("the file is huge", "read it in slices", "failed")])
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_show_lessons()
+        await _until(pilot, lambda: any(not isinstance(w.content, str) and "worked" in _render(w.content)
+                                        for w in app.query("#transcript > Static")), "the table")
+        table = [w.content for w in app.query("#transcript > Static") if "the file is huge" in _render(w.content)]
+        assert table and "failed" in _render(table[0])
+
+
+def _render(renderable) -> str:
+    import io
+
+    from rich.console import Console
+
+    buf = io.StringIO()
+    Console(file=buf, width=100, force_terminal=False).print(renderable)
+    return buf.getvalue()
+
+
+@_async_test
+async def test_motion_runs_while_a_turn_streams_and_settles_after(monkeypatch, tmp_path):
+    """With motion on: the status line walks the braille snake, the streaming
+    answer carries a blinking caret, the thinking title carries the dot
+    sweep, and all of it is gone once the answer lands."""
+    from agent.cli import art
+
+    monkeypatch.setattr(tui_mod, "animations_enabled", lambda app: True)
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_stream(text, **kwargs):
+        from agent.pipeline.progress import report
+        yield {"agent": {"board": ["solve: read_file x -> ok"]}}
+        report("partial", partial="FINAL: the answer so far")
+        started.set()
+        release.wait(5)
+        kwargs["usage"].record("gpt-5-mini", {"input_tokens": 1000, "output_tokens": 10})
+        yield _final("the answer")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.message_box.value = "go"
+        await pilot.press("enter")
+        await asyncio.to_thread(started.wait, 5)
+        await _until(pilot, lambda: app._answer is not None, "the streaming block")
+        await _until(pilot, lambda: art.CARET in app._answer.content.renderables[-1].plain
+                     or app._caret_on is False, "the caret to blink", timeout=5.0)
+        await pilot.pause()
+        status = app.query_one("#status", Static).content.plain
+        assert status[:2] != art.SPINNER[0] and all(0x2800 <= ord(c) <= 0x28FF for c in status[:2]), "snake, not spinner"
+        block = app.query_one("#transcript Collapsible", Collapsible)
+        await _until(pilot, lambda: "·" in block.title and "●" in block.title, "the dot sweep", timeout=5.0)
+
+        release.set()
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await _until(pilot, lambda: _answer_headers(app) and _answer_headers(app)[-1].startswith("● final"),
+                     "the answer to settle", timeout=5.0)
+        assert app._caret_timer is None and app._partial_text is None
+        await _until(pilot, lambda: app._shown_spend[0] == app.usage.total_tokens, "the odometer to land", timeout=5.0)
+        assert app._turn_tokens == [1010]
+        await _until(pilot, lambda: block.collapsed and "thought for" in block.title, "the title to settle", timeout=5.0)
+
+
+# --------------------------------------------------------------------------
+# Copying (agent/cli/clipboard.py, 2026-09-13)
+# --------------------------------------------------------------------------
+
+def _select_all_of(widget):
+    """A Selection spanning a whole widget, as a drag from its first to its
+    last character would produce."""
+    from textual.geometry import Offset
+    from textual.selection import Selection
+
+    return Selection(Offset(0, 0), Offset(10_000, 10_000))
+
+
+@_async_test
+async def test_an_answer_block_yields_its_words_when_selected(monkeypatch, tmp_path):
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("The **answer** is `42`.")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.message_box.value = "what is it"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+        answer = app.query_one("#transcript > .answer")
+        text, _ = answer.get_selection(_select_all_of(answer))
+        assert "final" in text and "The answer is 42." in text and "**" not in text
+        user = app.query_one("#transcript > .user")
+        assert user.get_selection(_select_all_of(user))[0] == "you what is it"
+        log = app.query_one("#transcript Collapsible RichLog")
+        assert log.get_selection(_select_all_of(log)) is None or isinstance(log.get_selection(_select_all_of(log))[0], str)
+
+
+@_async_test
+async def test_ctrl_c_copies_the_selection_without_borders(monkeypatch, tmp_path):
+    copied: list[str] = []
+    monkeypatch.setattr(tui_mod.clipboard, "copy", lambda app, text: copied.append(text) or "via test")
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("done")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        from rich import box
+        from rich.table import Table
+
+        table = Table(box=box.ROUNDED)
+        table.add_column("provider")
+        table.add_column("status")
+        table.add_row("inception", "ok")
+        app._post(table)
+        await pilot.pause()
+        block = list(app.query("#transcript > Static"))[-1]
+        app.screen.selections = {block: _select_all_of(block)}
+        await pilot.pause()
+        await pilot.press("ctrl+c")
+        await _until(pilot, lambda: copied, "the copy")
+        assert "inception" in copied[0] and "ok" in copied[0]
+        assert not any(ch in copied[0] for ch in "─│╭╮╰╯├┤")
+        assert app.screen.selections == {}, "selection cleared after copying"
+
+
+@_async_test
+async def test_ctrl_c_with_nothing_selected_copies_nothing(monkeypatch, tmp_path):
+    copied: list[str] = []
+    monkeypatch.setattr(tui_mod.clipboard, "copy", lambda app, text: copied.append(text) or "via test")
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        await pilot.pause()
+        assert copied == []
+        assert app.is_running
+
+
+@_async_test
+async def test_copy_last_answer_goes_through_every_route(monkeypatch, tmp_path):
+    copied: list[str] = []
+    monkeypatch.setattr(tui_mod.clipboard, "copy", lambda app, text: copied.append(text) or "via test")
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("raw answer")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.message_box.value = "go"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.press("ctrl+y")
+        await _until(pilot, lambda: copied == ["raw answer"], "the copy")

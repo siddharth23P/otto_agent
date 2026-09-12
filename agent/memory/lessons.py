@@ -334,24 +334,33 @@ def _parse(text: str) -> Lesson | None:
     return Lesson(**match.groupdict())
 
 
-def parse_distilled(reply: str, *, outcome_default: str = "worked") -> list[Lesson]:
-    """Lessons out of a distiller's reply, which is asked for as JSON.
+def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]:
+    """Every lesson in `text`, uncapped. The one parser behind both the
+    distiller's reply and an imported file.
 
-    Tolerant on purpose: a reply wrapped in a fence, or with prose around the
-    array, still yields its lessons. A distillation that fails to parse costs
-    a run's learning silently, and this is the cheapest place to be generous.
+    Tolerant on purpose: a bare JSON list, an object with a "lessons" key, a
+    fenced block, or prose around the array all yield their lessons. Entries
+    missing a cue or an action are dropped, not fatal.
     """
-    body = reply.strip()
+    body = (text or "").strip()
     fenced = re.search(r"```(?:json)?\s*(.+?)```", body, re.S)
     if fenced:
         body = fenced.group(1).strip()
-    start, end = body.find("["), body.rfind("]")
-    if start == -1 or end <= start:
-        return []
-    try:
-        items = json.loads(body[start:end + 1])
-    except (json.JSONDecodeError, ValueError):
-        return []
+    items = None
+    if body.startswith("{"):
+        try:
+            obj = json.loads(body)
+            items = obj.get("lessons") if isinstance(obj, dict) else None
+        except (json.JSONDecodeError, ValueError):
+            items = None
+    if items is None:
+        start, end = body.find("["), body.rfind("]")
+        if start == -1 or end <= start:
+            return []
+        try:
+            items = json.loads(body[start:end + 1])
+        except (json.JSONDecodeError, ValueError):
+            return []
 
     lessons: list[Lesson] = []
     for item in items if isinstance(items, list) else []:
@@ -366,8 +375,109 @@ def parse_distilled(reply: str, *, outcome_default: str = "worked") -> list[Less
             cue=cue[:MAX_LESSON_CHARS], action=action[:MAX_LESSON_CHARS],
             outcome="failed" if outcome.startswith("fail") else "worked",
         ))
-    return lessons[:MAX_PER_RUN]
+    return lessons
+
+
+def count_entries(text: str) -> int:
+    """How many entries a file CLAIMED, valid or not -- so an import report
+    can say how many it dropped as malformed."""
+    body = (text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(.+?)```", body, re.S)
+    if fenced:
+        body = fenced.group(1).strip()
+    try:
+        obj = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        start, end = body.find("["), body.rfind("]")
+        if start == -1 or end <= start:
+            return 0
+        try:
+            obj = json.loads(body[start:end + 1])
+        except (json.JSONDecodeError, ValueError):
+            return 0
+    if isinstance(obj, dict):
+        obj = obj.get("lessons")
+    return len(obj) if isinstance(obj, list) else 0
+
+
+def parse_distilled(reply: str, *, outcome_default: str = "worked") -> list[Lesson]:
+    """Lessons out of a distiller's reply, capped at MAX_PER_RUN. A run that
+    offers ten has not learned ten things (rule 2 in the module docstring)."""
+    return parse_lessons(reply, outcome_default=outcome_default)[:MAX_PER_RUN]
 
 
 def as_json(lessons) -> str:
     return json.dumps([asdict(lesson) for lesson in lessons], indent=2)
+
+
+# --------------------------------------------------------------------------
+# Moving a bank: export, import, clear
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ImportReport:
+    """What an import did. `dropped_duplicate` is the adjudication at work
+    -- the same near-duplicate rule a run's own lessons go through -- and
+    `disabled` means the bank is off or read-only, so nothing was written."""
+
+    read: int = 0
+    kept: int = 0
+    dropped_duplicate: int = 0
+    dropped_invalid: int = 0
+    disabled: bool = False
+
+    def summary(self) -> str:
+        if self.disabled:
+            return "lesson bank is off or read-only; nothing imported"
+        bits = [f"kept {self.kept}", f"dropped {self.dropped_duplicate} as duplicates"]
+        if self.dropped_invalid:
+            bits.append(f"{self.dropped_invalid} malformed")
+        return ", ".join(bits)
+
+
+def clear_bank() -> int:
+    """Delete every lesson. Returns how many there were. Not undoable."""
+    store = _bank()
+    if store is None:
+        return 0
+    before = len(store.chunk_hashes(KIND))
+    # Straight to the table: lessons are chunks like any other, and the store
+    # has no delete because nothing else in Otto ever needed one.
+    store._conn.execute("DELETE FROM chunks WHERE kind = ?", (KIND,))
+    store._conn.commit()
+    return before
+
+
+def export_lessons(path: Path) -> int:
+    """Write the whole bank to `path` as JSON. Returns how many."""
+    learned = all_lessons()
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(as_json(learned) + "\n")
+    return len(learned)
+
+
+def import_lessons(path: Path, *, replace: bool = False) -> ImportReport:
+    """Merge the lessons in `path` into the bank, through the same duplicate
+    adjudication a run's own lessons face. `replace` empties the bank first.
+
+    Raises ValueError for a file that cannot be read; a file with no lessons
+    in it is a report, not an error.
+    """
+    path = Path(path).expanduser()
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    lessons = parse_lessons(text)
+    claimed = count_entries(text)
+    if not learning_enabled():
+        return ImportReport(read=claimed, dropped_invalid=max(0, claimed - len(lessons)), disabled=True)
+    if replace:
+        clear_bank()
+    kept = record_lessons(lessons, max_per_run=len(lessons))
+    return ImportReport(
+        read=claimed, kept=len(kept),
+        dropped_duplicate=len(lessons) - len(kept),
+        dropped_invalid=max(0, claimed - len(lessons)),
+    )

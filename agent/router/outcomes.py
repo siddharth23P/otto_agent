@@ -301,3 +301,63 @@ def _overtakes(challenger: SeatRecord | None, incumbent: SeatRecord | None) -> b
         # that ordinary run-to-run variation does not shuffle the chain.
         return challenger.calls_per_run < incumbent.calls_per_run * 0.8
     return False
+
+
+# --------------------------------------------------------------------------
+# Moving the log between machines
+# --------------------------------------------------------------------------
+
+def export_records(path: Path) -> int:
+    """Every row as JSON. Returns how many."""
+    import json
+
+    rows = [{"task": r.task, "model_id": r.model_id, "runs": r.runs,
+             "approved": r.approved, "calls": r.calls} for r in records()]
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows, indent=2) + "\n")
+    return len(rows)
+
+
+def import_records(path: Path) -> int:
+    """Merge rows from `path` ADDITIVELY -- runs, approvals and calls are
+    summed onto whatever this machine already observed, which is the only
+    semantics consistent with `record()`. Honours `read_only()`. Returns how
+    many rows were merged."""
+    import json
+
+    if not _WRITES.get():
+        return 0
+    path = Path(path).expanduser()
+    try:
+        rows = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(rows, list):
+        raise ValueError(f"{path} does not hold a list of seat records")
+    conn = _connect()
+    if conn is None:
+        return 0
+    merged = 0
+    try:
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("task") or not row.get("model_id"):
+                continue
+            runs, approved, calls = (int(row.get(k) or 0) for k in ("runs", "approved", "calls"))
+            if runs <= 0:
+                continue
+            conn.execute(
+                "INSERT INTO seat_outcomes (task, model_id, runs, approved, calls) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(task, model_id) DO UPDATE SET "
+                "  runs = runs + ?, approved = approved + ?, calls = calls + ?",
+                (str(row["task"]), str(row["model_id"]), runs, approved, calls,
+                 runs, approved, calls),
+            )
+            merged += 1
+        conn.commit()
+    except sqlite3.Error as exc:
+        log.warning("could not import seat outcomes: %s", exc)
+    finally:
+        conn.close()
+    return merged

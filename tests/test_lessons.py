@@ -297,3 +297,80 @@ def test_the_contrast_names_what_a_generic_lesson_looks_like():
 
     assert "only the better attempt" in CONTRAST_NOTE
     assert "one aspect" in CONTRAST_NOTE
+
+
+# --------------------------------------------------------------------------
+# Moving a bank: export / import / clear (2026-09-12)
+# --------------------------------------------------------------------------
+
+def test_export_writes_the_whole_bank_as_json(bank, fake_embeddings, tmp_path):
+    L.record_lessons([_lesson("alpha situation"), _lesson("beta situation", outcome="failed")])
+    out = tmp_path / "out" / "lessons.json"
+
+    assert L.export_lessons(out) == 2
+    import json
+    data = json.loads(out.read_text())
+    assert [d["cue"] for d in data] == ["alpha situation", "beta situation"]
+    assert data[1]["outcome"] == "failed"
+
+
+def test_import_accepts_more_than_three_and_reports_duplicates(bank, fake_embeddings, tmp_path):
+    src = tmp_path / "in.json"
+    src.write_text(L.as_json([_lesson(f"situation number {i}") for i in range(5)]))
+
+    report = L.import_lessons(src)
+    assert (report.read, report.kept, report.dropped_duplicate) == (5, 5, 0)
+    assert len(L.all_lessons()) == 5
+
+    again = L.import_lessons(src)
+    assert (again.kept, again.dropped_duplicate) == (0, 5)
+    assert "dropped 5 as duplicates" in again.summary()
+
+
+def test_import_tolerates_fences_objects_and_junk_entries(bank, fake_embeddings, tmp_path):
+    src = tmp_path / "in.md"
+    src.write_text('here you go\n```json\n{"lessons": [{"cue": "a", "action": "b"}, {"cue": "no action"}, 3]}\n```\n')
+    report = L.import_lessons(src)
+    assert (report.read, report.kept, report.dropped_invalid) == (3, 1, 2)
+    assert "1 malformed" not in report.summary() and "2 malformed" in report.summary()
+
+
+def test_import_with_replace_empties_the_bank_first(bank, fake_embeddings, tmp_path):
+    L.record_lessons([_lesson("old situation")])
+    src = tmp_path / "in.json"
+    src.write_text(L.as_json([_lesson("new situation")]))
+    L.import_lessons(src, replace=True)
+    assert [l.cue for l in L.all_lessons()] == ["new situation"]
+
+
+def test_import_is_a_no_op_when_the_bank_is_read_only(bank, fake_embeddings, tmp_path):
+    src = tmp_path / "in.json"
+    src.write_text(L.as_json([_lesson("x situation")]))
+    with L.read_only():
+        report = L.import_lessons(src)
+    assert report.disabled and report.kept == 0
+    assert L.all_lessons() == []
+
+
+def test_an_unreadable_file_is_an_error_an_empty_one_is_a_report(bank, fake_embeddings, tmp_path):
+    with pytest.raises(ValueError):
+        L.import_lessons(tmp_path / "missing.json")
+    empty = tmp_path / "empty.json"
+    empty.write_text("[]")
+    assert L.import_lessons(empty) == L.ImportReport()
+
+
+def test_export_clear_import_round_trips(bank, fake_embeddings, tmp_path):
+    original = [_lesson("one situation"), _lesson("two situation", outcome="failed")]
+    L.record_lessons(original)
+    out = tmp_path / "bank.json"
+    L.export_lessons(out)
+    assert L.clear_bank() == 2 and L.all_lessons() == []
+    L.import_lessons(out)
+    assert L.all_lessons() == original
+
+
+def test_parse_distilled_still_caps_at_three():
+    reply = L.as_json([_lesson(f"s{i}") for i in range(6)])
+    assert len(L.parse_distilled(reply)) == 3
+    assert len(L.parse_lessons(reply)) == 6

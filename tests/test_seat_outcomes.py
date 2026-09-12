@@ -287,3 +287,32 @@ def test_just_inside_the_margin_is_still_a_tie(seat_log):
     _fill("reason", "model-b", runs=20, approved=11)                 # 55%
 
     assert _ids(o.reorder("reason", [A, B])) == [A.spec, B.spec]
+
+
+# --------------------------------------------------------------------------
+# Moving the log between machines (2026-09-12)
+# --------------------------------------------------------------------------
+
+def test_export_and_import_merge_additively(tmp_path):
+    from agent.router import outcomes as O
+    with O.bind_log(tmp_path / "a.db"):
+        O.record("reason", "m", approved=True, calls=3)
+        O.record("reason", "m", approved=False, calls=5)
+        assert O.export_records(tmp_path / "seats.json") == 1
+    with O.bind_log(tmp_path / "b.db"):
+        O.record("reason", "m", approved=True, calls=1)
+        assert O.import_records(tmp_path / "seats.json") == 1
+        (rec,) = O.records("reason")
+        assert (rec.runs, rec.approved, rec.calls) == (3, 2, 9)
+
+
+def test_import_honours_read_only_and_rejects_junk(tmp_path):
+    from agent.router import outcomes as O
+    (tmp_path / "junk.json").write_text('{"not": "a list"}')
+    with O.bind_log(tmp_path / "c.db"):
+        with pytest.raises(ValueError):
+            O.import_records(tmp_path / "junk.json")
+        (tmp_path / "ok.json").write_text('[{"task": "reason", "model_id": "m", "runs": 2, "approved": 1, "calls": 4}]')
+        with O.read_only():
+            assert O.import_records(tmp_path / "ok.json") == 0
+        assert O.records() == []

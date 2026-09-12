@@ -312,9 +312,33 @@ def test_base_is_configured_reads_the_env_without_constructing(monkeypatch):
 
 
 def test_requires_inception():
+    """Construction no longer raises (2026-09-12: the TUI has to be able to
+    open on a keyless machine and offer setup), but nothing resolves until
+    Inception is configured, and the message still names the variable."""
+    r = Router(catalogue=FakeCatalogue({}))
+    assert r.ready() is False
     with pytest.raises(AuthError) as exc:
-        Router(catalogue=FakeCatalogue({}))
+        r.resolve(Task.CHAT_FAST)
     assert "INCEPTION_API_KEY" in str(exc.value)
+
+
+def test_a_ready_router_says_so():
+    assert router().ready() is True
+
+
+def test_reset_all_reaches_every_live_router():
+    """nodes.py's module-level ROUTER is bound by name in four modules, so a
+    reload has to mutate every router in place rather than rebind one."""
+    cat_a = FakeCatalogue({"inception": [MERCURY_25]})
+    cat_b = FakeCatalogue({"inception": [MERCURY_25]})
+    a, b = Router(catalogue=cat_a), Router(catalogue=cat_b)
+    cat_a.data.pop("inception")
+    cat_b.data.pop("inception")
+    assert a.ready() and b.ready(), "snapshotted at construction"
+
+    Router.reset_all()
+
+    assert not a.ready() and not b.ready()
 
 
 def test_strict_is_keyword_only():
@@ -351,8 +375,10 @@ def test_a_provider_without_a_key_is_simply_not_usable():
 def test_inception_is_still_required():
     """It alone serves Endpoint.FIM/EDIT (mapping.py's INCEPTION_ONLY_ENDPOINTS),
     so a missing key there is a broken install, not a degraded one."""
+    r = Router(catalogue=FakeCatalogue({"anthropic": [MERCURY_25]}))
+    assert not r.ready()
     with pytest.raises(AuthError):
-        Router(catalogue=FakeCatalogue({"anthropic": [MERCURY_25]}))
+        r.resolve(Task.CHAT_FAST)
 
 
 def test_a_vendor_the_registry_does_not_know_can_never_become_usable():
@@ -616,9 +642,11 @@ class VanishingCatalogue(FakeCatalogue):
         self.data = {k: v for k, v in self.data.items() if k != "inception"}
 
 
-def test_reset_raises_when_inception_disappears():
+def test_reset_notices_when_inception_disappears():
     cat = VanishingCatalogue({"inception": [MERCURY_25]})
     r = Router(catalogue=cat)
 
+    r.reset()                      # re-snapshots; does not raise
+    assert not r.ready()
     with pytest.raises(AuthError):
-        r.reset()
+        r.resolve(Task.CHAT_FAST)

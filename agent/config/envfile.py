@@ -1,0 +1,76 @@
+"""Read and write the one `.env` otto loads (agent/cli/main.py).
+
+Until the setup screen existed, keys got into otto by somebody opening this
+file in an editor. This module is that edit, done by code: add or replace one
+`KEY=value` line, leave every other line -- comments included -- exactly as it
+was, and make the new value visible to the running process at the same time.
+
+python-dotenv's `set_key`/`unset_key` do the file half (they rewrite through a
+temporary file and `os.replace`, preserve mode, and replace in place rather
+than appending a duplicate). What this module adds is the environment half
+and the rule that no function here ever returns, logs or formats a secret --
+`set_value` hands back the MASKED form, and that is the only thing a caller
+needs to show.
+"""
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+from dotenv import set_key, unset_key
+
+#: The file agent/cli/main.py loads at import: the repository root's `.env`.
+#: One definition, imported by main.py, so the writer and the loader cannot
+#: drift apart.
+ENV_PATH: Path = Path(__file__).resolve().parents[2] / ".env"
+
+KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def masked(value: str | None) -> str:
+    """The display form of a secret: eight stars and the last four characters,
+    the same rule as `BaseProvider.masked_key`. "not set" for nothing."""
+    if not value:
+        return "not set"
+    tail = value[-4:] if len(value) >= 4 else ""
+    return f"{'*' * 8}{tail}"
+
+
+def present(key: str) -> bool:
+    """Whether the running process has a non-empty value for `key`."""
+    return bool(os.environ.get(key))
+
+
+def set_value(key: str, value: str, *, path: Path = ENV_PATH) -> str:
+    """Write `KEY=value` to `path` and into `os.environ`. Returns the masked
+    value, which is all a caller should ever display.
+
+    An empty value means "remove it" -- a blank `KEY=` line would read as set
+    to every `is_configured()` check that only asks for presence.
+    """
+    if not KEY_RE.match(key or ""):
+        raise ValueError(f"{key!r} is not a valid environment variable name")
+    value = (value or "").strip()
+    if not value:
+        unset_value(key, path=path)
+        return masked(None)
+    path = Path(path)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(mode=0o600)
+    set_key(str(path), key, value, quote_mode="auto")
+    os.environ[key] = value
+    return masked(value)
+
+
+def unset_value(key: str, *, path: Path = ENV_PATH) -> None:
+    """Remove `key` from `path` (if present) and from `os.environ`."""
+    if not KEY_RE.match(key or ""):
+        raise ValueError(f"{key!r} is not a valid environment variable name")
+    path = Path(path)
+    if path.exists():
+        # unset_key logs a warning and returns (None, key) when the key is
+        # absent; neither is an error for a caller that wants it gone.
+        unset_key(str(path), key)
+    os.environ.pop(key, None)

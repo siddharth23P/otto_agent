@@ -1,3 +1,4 @@
+import weakref
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from agent.router.llm_provider.temperature import apply_to_params
 from agent.router.llm_provider.base import AuthError, Capability, CapabilityNotSupported, ModelInfo, ProviderError
 from agent.router import outcomes as seat_outcomes
 from agent.router import health as provider_health
+from agent.router import overrides as route_overrides
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 
 @dataclass(frozen=True,slots=True)
@@ -136,6 +138,40 @@ def _observe(name: str, *, model: str, input: Any,
     yield None
 
 
+def select_candidate(pool: Sequence[ModelInfo], c: Candidate) -> ModelInfo | None:
+    """The model in `pool` that `c` names, or None.
+
+    Module-level rather than a Router method so agent/router/automap.py can
+    ask the same question of a detected pool without a router.
+    """
+    if c.spec is not None:
+        # A pin names one exact model, not a tier to search within -- once
+        # a vendor has two generations live at once (mercury-2 alongside
+        # mercury-2.5, say), matching by capability/name_contains/context
+        # like a query would could silently resolve a "pinned" candidate
+        # to the WRONG generation depending on which one sorts first under
+        # `prefer`. Match the id from the spec directly instead; `requires`
+        # still gates it, so a pin to a model that lost a capability fails
+        # loudly ("no model matched") rather than serving it anyway.
+        _, _, model_id = c.spec.partition(":")
+        return next(
+            (m for m in pool if m.id == model_id and c.requires <= m.capabilities),
+            None,
+        )
+    matches = [m for m in pool
+               if c.requires <= m.capabilities
+               and (c.name_contains is None
+                    or c.name_contains.lower() in m.id.lower())
+               and (c.min_context is None
+                    or (m.context_window or 0) >= c.min_context)]
+    if not matches:
+        return None
+    biggest = c.prefer is Preference.LARGEST_CONTEXT
+    return sorted(matches,
+                  key=lambda m: (m.context_window or 0, m.id),
+                  reverse=biggest)[0]
+
+
 class Router:
     """Every configured provider is usable (2026-09-11).
 
@@ -163,19 +199,45 @@ class Router:
 
     REQUIRED = "inception"
 
+    #: Every router constructed in this process, so a key added at runtime
+    #: (the TUI's setup screen, agent/router/reload.py) can re-snapshot ALL
+    #: of them -- agent/pipeline/nodes.py holds one as a module global that
+    #: four other modules bound by name, so rebinding is not an option and
+    #: mutating in place is the only reload that reaches everyone.
+    _LIVE: "weakref.WeakSet[Router]" = weakref.WeakSet()
+
     def _snapshot(self) -> None:
+        # No longer raises when Inception is missing (2026-09-12): construction
+        # happens at import time in nodes.py, and a raise there meant `otto
+        # tui` could not open on a machine with no keys -- which is exactly the
+        # machine that needs the setup screen. The requirement still holds,
+        # enforced by `require_ready()` at the first resolve and at the
+        # pipeline's entry points, with the same message as before.
         self._configured = tuple(p for p in provider_names() if self.catalogue.is_configured(p))
-        if self.REQUIRED not in self._configured:
-            raise AuthError("Otto requires Inception. Set INCEPTION_API_KEY in .env")
 
     def __init__(self, catalogue: Catalogue | None = None, *, strict: bool = False):
         self.catalogue = catalogue or RegistryCatalogue()
         self.strict = strict
         self._snapshot()
-        
+        Router._LIVE.add(self)
+
     def reset(self):
         self.catalogue.reset()
         self._snapshot()
+
+    @classmethod
+    def reset_all(cls) -> None:
+        """Re-snapshot every live router after keys or providers changed."""
+        for router in list(cls._LIVE):
+            router.reset()
+
+    def ready(self) -> bool:
+        """Whether the one provider otto cannot run without is configured."""
+        return self.REQUIRED in self._configured
+
+    def require_ready(self) -> None:
+        if not self.ready():
+            raise AuthError("Otto requires Inception. Set INCEPTION_API_KEY in .env")
 
     def _usable(self, provider: str) -> bool:
         return provider in self._configured
@@ -220,33 +282,8 @@ class Router:
         return model
 
     def _select(self, pool, c: Candidate) -> ModelInfo | None:
-        if c.spec is not None:
-            # A pin names one exact model, not a tier to search within -- once
-            # a vendor has two generations live at once (mercury-2 alongside
-            # mercury-2.5, say), matching by capability/name_contains/context
-            # like a query would could silently resolve a "pinned" candidate
-            # to the WRONG generation depending on which one sorts first under
-            # `prefer`. Match the id from the spec directly instead; `requires`
-            # still gates it, so a pin to a model that lost a capability fails
-            # loudly ("no model matched") rather than serving it anyway.
-            _, _, model_id = c.spec.partition(":")
-            return next(
-                (m for m in pool if m.id == model_id and c.requires <= m.capabilities),
-                None,
-            )
-        matches = [m for m in pool
-                if c.requires <= m.capabilities
-                and (c.name_contains is None
-                        or c.name_contains.lower() in m.id.lower())
-                and (c.min_context is None
-                        or (m.context_window or 0) >= c.min_context)]
-        if not matches:
-            return None
-        biggest = c.prefer is Preference.LARGEST_CONTEXT
-        return sorted(matches,
-                    key=lambda m: (m.context_window or 0, m.id),
-                    reverse=biggest)[0]
-        
+        return select_candidate(pool, c)
+
     def resolve(self, task: Task, *, only: str | None = None) -> RoutingDecision:
         """The first viable candidate, preferring one that is not cooling.
 
@@ -256,6 +293,7 @@ class Router:
         the second takes the chain as it stands. Cooldowns are a preference,
         never a prohibition.
         """
+        self.require_ready()
         try:
             return self._resolve(task, only=only, honour_cooldowns=True)
         except NoViableRoute as exc:
@@ -272,7 +310,13 @@ class Router:
         # observed each seat's model achieve. A no-op until a (task, model)
         # pair has enough runs behind it to be trusted, which is most of the
         # time -- see agent/router/outcomes.py for why the bar is where it is.
-        chain = seat_outcomes.reorder(task.value, declared)
+        # A pin the person set (agent/router/overrides.py) is never reordered
+        # or explored away: "use this model" means this model, and an
+        # evidence-based swap behind their back would make the pin a lie.
+        if declared and route_overrides.is_pin(task, declared[0]):
+            chain = list(declared)
+        else:
+            chain = seat_outcomes.reorder(task.value, declared)
         # `index` stays an index into the DECLARED chain, never into the tried
         # order. Everything that reads it -- the tree `otto route`
         # prints -- is asking "which candidate in mapping.py is this", and an

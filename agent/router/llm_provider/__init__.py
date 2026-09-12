@@ -49,7 +49,11 @@ __all__ = [
     "FALLBACK_MODEL_SPEC",
     "default_model_spec",
     "provider_names",
+    "builtin_provider_names",
     "provider_class",
+    "register_custom",
+    "unregister_custom",
+    "is_custom",
     "get_provider",
     "parse_spec",
     "get_chat_model",
@@ -85,13 +89,45 @@ def default_model_spec() -> str:
     return os.environ.get("OTTO_DEFAULT_MODEL") or FALLBACK_MODEL_SPEC
 
 
-def provider_names() -> tuple[str, ...]:
+#: Providers registered at runtime -- the custom OpenAI-compatible endpoints
+#: a person adds in the TUI's setup screen (agent/router/llm_provider/custom.py
+#: builds the class, agent/router/overrides.py registers it from
+#: ~/.otto/routes.json at startup). Kept apart from the static table so the
+#: built-ins stay importable by name and a removed endpoint leaves no trace.
+_CUSTOM: dict[str, type[BaseProvider]] = {}
+
+
+def builtin_provider_names() -> tuple[str, ...]:
     return tuple(_PROVIDER_MODULES)
+
+
+def provider_names() -> tuple[str, ...]:
+    return tuple(_PROVIDER_MODULES) + tuple(_CUSTOM)
+
+
+def is_custom(name: str) -> bool:
+    return name in _CUSTOM
+
+
+def register_custom(name: str, cls: type[BaseProvider]) -> None:
+    """Make `name` resolvable through provider_class()/get_provider().
+    Clears the caches, so a re-registered name is never served stale."""
+    if name in _PROVIDER_MODULES:
+        raise UnknownProvider(f"{name!r} is a built-in provider and cannot be replaced")
+    _CUSTOM[name] = cls
+    reset()
+
+
+def unregister_custom(name: str) -> None:
+    if _CUSTOM.pop(name, None) is not None:
+        reset()
 
 
 @lru_cache(maxsize=None)
 def provider_class(name: str) -> type[BaseProvider]:
     """Import and return a provider class by name."""
+    if name in _CUSTOM:
+        return _CUSTOM[name]
     try:
         module_path, attr = _PROVIDER_MODULES[name]
     except KeyError:

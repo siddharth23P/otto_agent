@@ -333,6 +333,10 @@ def run_pipeline(
     docstring's "Bounding that conversation memory". Both empty by default,
     so every existing single-turn caller is unaffected.
     """
+    # Fails here, at the entry point, rather than inside a graph node: a
+    # Router can now be constructed without Inception (so the TUI can open
+    # on a keyless machine and offer setup), but nothing may RUN without it.
+    ROUTER.require_ready()
     failures = ROUTER.prewarm()
     if failures:
         logger.warning("prewarm: %s", failures)
@@ -406,6 +410,10 @@ def run_pipeline_stream(
     re-binds this same session's MemoryStore itself, so recall_memory stays
     usable across a resume too.
     """
+    # Fails here, at the entry point, rather than inside a graph node: a
+    # Router can now be constructed without Inception (so the TUI can open
+    # on a keyless machine and offer setup), but nothing may RUN without it.
+    ROUTER.require_ready()
     failures = ROUTER.prewarm()
     if failures:
         logger.warning("prewarm: %s", failures)

@@ -54,6 +54,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
+from agent.cli.art import decorate_board_line
 from agent.cli.context import AppContext
 from agent.cli.doctor import health_table, router_view
 from agent.cli.models import models_table
@@ -410,7 +411,7 @@ def render_update(node: str, delta: dict, tally: Counter, sink: Callable[[object
 
     if node in _ROLE_NODES:
         for line in delta.get("board", []):
-            sink(f"[muted]{line}[/]")
+            sink(f"[muted]{decorate_board_line(line)}[/]")
         text = (delta.get("output") or "").strip()
         if text:
             if len(text) > 400:
@@ -419,5 +420,5 @@ def render_update(node: str, delta: dict, tally: Counter, sink: Callable[[object
         return
     if node == "evaluator":
         for line in delta.get("board", []):
-            sink(f"[muted]{line}[/]")
+            sink(f"[muted]{decorate_board_line(line)}[/]")
         return

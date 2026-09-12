@@ -1,7 +1,8 @@
 """Turn provider-layer exceptions into CLI errors.
 
-The router raises `AuthError` from `Router.__init__` (3.2) and
-`NoViableRoute` / `RoutingDegraded` from `resolve()`. Those are the right
+The router raises `AuthError` from `Router.require_ready()` (called by
+`resolve()` and the pipeline's entry points) and `NoViableRoute` /
+`RoutingDegraded` from `resolve()`. Those are the right
 exceptions for a library, but a CLI must never answer a user with a traceback:
 it buries the diagnosis and trains people to ignore stack traces.
 

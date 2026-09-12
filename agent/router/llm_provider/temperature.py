@@ -68,6 +68,23 @@ _BY_PROVIDER: dict[str, TemperaturePolicy] = {
 _BY_MODEL: dict[tuple[str, str], TemperaturePolicy] = {}
 
 
+def register_provider(
+    name: str,
+    policy: TemperaturePolicy = TemperaturePolicy(low=0.0, high=2.0),
+    fixed_patterns: tuple[re.Pattern, ...] = (re.compile(r"^(?:.*/)?o\d"),),
+) -> None:
+    """Give a custom OpenAI-compatible endpoint a temperature policy.
+
+    OpenAI's honoured range by default, plus OpenAI's own "the o-series takes
+    no temperature" rule -- prefix-aware, because an aggregator such as
+    OpenRouter serves those models as `openai/o3`. Nothing here has been
+    measured against a specific server; a person who knows better edits the
+    tables the same way they would for a built-in.
+    """
+    _BY_PROVIDER[name] = policy
+    _FIXED_TEMPERATURE_PATTERNS[name] = tuple(fixed_patterns)
+
+
 #: Field names a vendor may use to publish a model's own ceiling. Gemini
 #: reports `max_temperature` per model and it is NOT uniform -- most cap at 2,
 #: but several cap at 1, which a per-provider guess of 0-2 would overshoot.

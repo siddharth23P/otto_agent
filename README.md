@@ -16,6 +16,39 @@ somewhere else with `--workspace PATH`, or hand it no file access at all with
 `--no-workspace`. `/workspace` in the REPL and "Workspace…" in the TUI's
 command palette (ctrl+p) change it mid-session.
 
+## Setting it up
+
+`otto tui` opens the setup screen itself the first time it starts with no keys
+(or press **f2** / pick "Setup…" from the ctrl+p palette any time). Three tabs:
+
+1. **Providers** -- one row per vendor (`INCEPTION_API_KEY` is the one otto
+   cannot run without; `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+   are optional), plus any named OpenAI-compatible endpoint you add -- an
+   OpenRouter key, a remote vLLM, Ollama. A name `local` becomes
+   `LOCAL_API_KEY` and `LOCAL_BASE_URL`. Keys are written to the repository's
+   `.env` (the file otto already loads) and are only ever shown masked.
+   "Probe" makes a real call to each and lists what it serves.
+2. **Models** -- every model the configured providers list, with the
+   capabilities otto believes it has (chat, tools, vision, reasoning, ...).
+3. **Mapping** -- for each task seat (`chat_fast`, `reason`, `evaluate`,
+   `plan`, `summarize`, `vision`, `web`, `code_complete`, `code_edit`): what
+   resolves today, what auto-map proposes and why, and a picker to pin a
+   model yourself. Pins go to `~/.otto/routes.json`, sit at the head of the
+   shipped fallback chain, and apply to the running session at once.
+   `otto route reason` marks a pinned head with a star. "Pin a model for a
+   task…" in the palette is the same thing for one seat in two picks.
+
+The routing table in `agent/router/mapping.py` is still the measured default;
+`OTTO_IGNORE_ROUTES=1` makes a run use it untouched (evals do). `OTTO_NO_ANIMATION=1`
+turns the TUI's motion off without changing what it shows; "Change theme" in the
+palette picks any of Textual's built-in themes and `~/.otto/ui.json` remembers it
+(`OTTO_THEME` overrides). `ctrl+t` hides the sidebar. Drag to select any text
+on screen and `ctrl+c` copies it -- borders and table rules never come along, and
+it goes through both OSC 52 and a native command (`pbcopy`, `wl-copy`, `xclip`)
+so it works in macOS Terminal.app too. "Export lessons…" /
+"Import lessons…" (and `otto lessons --export/--import`) move what otto has
+learned between machines as JSON.
+
 What that boundary is worth, stated honestly: the file tools cannot touch
 anything outside the root, symlinks and `..` included, and that is enforced
 and tested. `execute_bash` cannot be confined the same way -- a shell reaches

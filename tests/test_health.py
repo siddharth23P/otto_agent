@@ -147,7 +147,7 @@ def _router(monkeypatch, chain):
     router = rr.Router.__new__(rr.Router)
     router.catalogue = type("C", (), {"models": lambda self, p: []})()
     router.strict = False
-    router._configured = ("v",)
+    router._configured = ("inception", "v")   # "inception" satisfies require_ready()
     return router, Task.CHAT_FAST
 
 

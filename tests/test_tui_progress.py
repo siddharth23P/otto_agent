@@ -35,9 +35,16 @@ def _shown(widget) -> str:
     line, a Panel for an answer -- so this flattens both rather than making
     each test know which it is looking at.
     """
+    import io
+
+    from rich.console import Console
+
     content = widget.content
-    inner = getattr(content, "renderable", content)
-    return str(getattr(inner, "markup", inner))
+    if isinstance(content, str):
+        return content
+    buf = io.StringIO()
+    Console(file=buf, width=120, force_terminal=False).print(content)
+    return buf.getvalue()
 
 
 def _onscreen(body) -> None:
@@ -111,7 +118,7 @@ def test_the_finished_answer_replaces_the_streamed_one():
     def body(app):
         before = len(app.transcript.children)
         app._show_partial_answer("partial")
-        app._settle_answer(Panel("done"))
+        app._settle_answer("done")
 
         assert len(app.transcript.children) == before + 1, "the stream was left behind"
         assert app._answer is None
@@ -123,7 +130,7 @@ def test_an_answer_that_never_streamed_still_gets_mounted():
     never reaches _show_partial_answer."""
     def body(app):
         before = len(app.transcript.children)
-        app._settle_answer(Panel("done"))
+        app._settle_answer("done")
         assert len(app.transcript.children) == before + 1
     _onscreen(body)
 
@@ -193,3 +200,22 @@ def test_escape_asks_the_run_to_stop():
 
     assert app._cancel.is_set()
     assert "stopping" in app._phase
+
+
+def test_the_status_line_shows_the_budget_meter_in_red_near_the_ceiling():
+    """The bar flips to red at the same fraction the run is told to wrap up
+    (agent/pipeline/budget.py WRAP_UP_FRACTION), so the colour and the
+    behaviour say the same thing."""
+    from agent.cli import art
+
+    def body(app):
+        app._turn_running = True
+        app._budget_max = 120
+        app._on_progress(t.Progress(kind="phase", text="working it out", calls=96))
+        app._draw_status()
+        content = app.query_one("#status").content
+        shown = _shown(app.query_one("#status"))
+        assert "96 calls" in shown
+        assert art.METER_FULL in content.plain
+        assert any(str(span.style) == "bold red" for span in content.spans)
+    _onscreen(body)

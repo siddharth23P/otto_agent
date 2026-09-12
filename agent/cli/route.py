@@ -6,6 +6,7 @@ from rich import box
 import typer
 
 from agent.cli.ui import err, out
+from agent.router import overrides as route_overrides
 from agent.router.mapping import TASK_ROUTES, Task
 from agent.router.outcomes import MIN_SAMPLES, records
 from agent.router.router import NoViableRoute, render
@@ -23,6 +24,8 @@ def route(ctx: typer.Context,
     out.print(_chain(task, d.skipped, d))
     out.print(_summary(d))
     _print_evidence(task)
+    for problem in route_overrides.last_problems():
+        err.print(f"[warn]{problem}[/]")
 
 
 def _print_evidence(task: Task) -> None:
@@ -48,13 +51,14 @@ def _chain(task, skipped, d) -> Tree:
     tree = Tree(f"[bold]{task.value}[/]")
     chosen = d.index if d else None
     for i, c in enumerate(TASK_ROUTES[task]):
+        pin = " (your pin)" if route_overrides.is_pin(task, c) else ""
         if chosen is not None and i == chosen:
-            tree.add(f"[ok]✓[/] [chosen][{i}] {d.provider}:{d.model.id}[/]")
+            tree.add(f"[ok]✓[/] [chosen][{i}] {d.provider}:{d.model.id}{pin}[/]")
         elif i < len(skipped):
             sk = skipped[i]
             tree.add(f"[bad]✗[/] [muted][{i}] {sk.target} — {sk.reason}[/]")
         else:
-            tree.add(f"[muted]·  [{i}] {render(c)} (not reached)[/]")
+            tree.add(f"[muted]·  [{i}] {render(c)}{pin} (not reached)[/]")
     return tree
 
 def _summary(d) -> Panel:
@@ -65,7 +69,9 @@ def _summary(d) -> Panel:
     t.add_row("endpoint", d.endpoint.value)
     t.add_row("context", f"{d.model.context_window:,}" if d.model.context_window else "—")
     t.add_row("params", ", ".join(f"{k}={v}" for k, v in d.params.items()) or "—")
-    if d.chosen_on_evidence:
+    if route_overrides.pinned_spec(d.task) and d.index == 0:
+        t.add_row("state", f"[chosen]pinned[/] in {route_overrides.routes_path()}")
+    elif d.chosen_on_evidence:
         t.add_row("state", f"[ok]chosen on observed results[/] — candidate {d.index}")
     elif d.fell_back:
         t.add_row("state", f"[warn]degraded — candidate {d.index}, {len(d.skipped)} skipped[/]")

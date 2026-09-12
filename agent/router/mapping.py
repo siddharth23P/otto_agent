@@ -332,6 +332,32 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
 }
 
 KNOWN_PROVIDERS = frozenset({"inception", "anthropic", "openai", "gemini"})
+
+#: Provider names added at runtime -- the custom OpenAI-compatible endpoints
+#: agent/router/overrides.py registers from ~/.otto/routes.json. A set this
+#: module owns rather than an import of the registry, so mapping.py stays
+#: importable with an empty environment and no I/O (its docstring's promise).
+_EXTRA_PROVIDERS: set[str] = set()
+
+
+def known_providers() -> frozenset[str]:
+    """Built-in vendors plus every custom endpoint registered so far."""
+    return KNOWN_PROVIDERS | frozenset(_EXTRA_PROVIDERS)
+
+
+def register_provider_name(name: str, *, params_like: str | None = "openai") -> None:
+    """Let `validate()` accept routes naming `name`. `params_like` copies
+    that vendor's accepted-parameter table, because a custom endpoint speaks
+    the OpenAI dialect and should be checked as strictly as OpenAI is."""
+    _EXTRA_PROVIDERS.add(name)
+    if params_like is not None and params_like in PARAMS_BY_PROVIDER:
+        PARAMS_BY_PROVIDER.setdefault(name, PARAMS_BY_PROVIDER[params_like])
+
+
+def unregister_provider_name(name: str) -> None:
+    _EXTRA_PROVIDERS.discard(name)
+    if name not in KNOWN_PROVIDERS:
+        PARAMS_BY_PROVIDER.pop(name, None)
 INCEPTION_ONLY_ENDPOINTS = frozenset({Endpoint.FIM, Endpoint.EDIT})
 ENDPOINT_CAPABILITY: dict[Endpoint, Capability] = {
     Endpoint.CHAT: Capability.CHAT,
@@ -451,25 +477,26 @@ def validate(routes: Mapping[Task, tuple[Candidate, ...]] = TASK_ROUTES) -> None
                         f"or it matches every model"
                     )
                 if c.provider is not None:
-                    if c.provider in KNOWN_PROVIDERS:
+                    if c.provider in known_providers():
                         provider = c.provider
                     else:
                         problems.append(
                             f"{where}: unknown provider {c.provider!r}; "
-                            f"known: {sorted(KNOWN_PROVIDERS)}"
+                            f"known: {sorted(known_providers())}"
                         )
             else:
+                # Split on the FIRST colon only. A model id may itself carry
+                # one -- Ollama tags every id ("llama3.2:latest") -- and every
+                # other reader here (Candidate.provider_name, Router._select,
+                # parse_spec, outcomes.spec_id) already partitions the same way.
                 provider, sep, model = c.spec.partition(":")
                 if not sep:
                     problems.append(f"{where}: spec {c.spec!r} is not 'provider:model'")
                     provider = None
-                elif ":" in model:
-                    problems.append(f"{where}: spec {c.spec!r} has more than one ':'")
-                    provider = None
-                elif provider not in KNOWN_PROVIDERS:
+                elif provider not in known_providers():
                     problems.append(
                         f"{where}: unknown provider {provider!r}; "
-                        f"known: {sorted(KNOWN_PROVIDERS)}"
+                        f"known: {sorted(known_providers())}"
                     )
                     provider = None
                 elif not model:

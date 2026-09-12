@@ -1,4 +1,3 @@
-from pathlib import Path
 from dotenv import load_dotenv
 from typing import Annotated
 import typer
@@ -11,8 +10,16 @@ import typer
 # importing every command module, which is too late for that first
 # Router() call -- it would always see an environment with no keys in it,
 # whatever's actually in .env.
-ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+from agent.config.envfile import ENV_PATH  # the one file the setup screen writes
+
 load_dotenv(ENV_PATH)
+
+# Also before anything below: ~/.otto/routes.json may name custom endpoints
+# and per-task pins, and the module-level Router() in agent.pipeline.nodes
+# snapshots which providers exist the moment it is imported.
+from agent.router.overrides import apply_at_startup  # noqa: E402
+
+apply_at_startup()
 
 from agent.cli.context import AppContext
 from agent.cli.errors import friendly
