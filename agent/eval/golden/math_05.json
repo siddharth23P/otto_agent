@@ -2,5 +2,5 @@
   "id": "math_05",
   "domain": "math",
   "prompt": "A fair coin is flipped 4 times. What is the probability of getting exactly 2 heads? Give the final answer as a decimal number.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\nassert any(abs(n - 0.375) < 1e-3 for n in nums), f'0.375 not found in {nums}'\nprint('OK')\n"
+  "checker": "answer_is(0.375, tol=0.001)\nprint('OK')\n"
 }

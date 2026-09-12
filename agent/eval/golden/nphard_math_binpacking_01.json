@@ -2,5 +2,5 @@
   "id": "nphard_math_binpacking_01",
   "domain": "math",
   "prompt": "Items of sizes [7, 3, 5, 9, 2, 8, 4, 6, 5, 3, 7, 1] must be packed into bins of capacity 15. What is the smallest number of bins that suffices? Give the final numeric answer. It must be the true minimum, not the result of a first-fit or greedy pass.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\n# branch and bound over all placements, decreasing-size order\nassert any(abs(n - 4.0) < 1e-6 for n in nums), f'4 not found in {nums}'\nprint('OK')\n"
+  "checker": "# 5 is what first-fit-decreasing needs here; the optimum is 4.\nanswer_is(4.0, decoys=[5.0])\nprint('OK')\n"
 }
