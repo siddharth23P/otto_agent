@@ -188,7 +188,11 @@ def _comparable(items: list, model: str) -> list:
 def _rank_bullets(bullets: list[Bullet], query_vec, top_k: int, model: str = "") -> list[Bullet]:
     embeddable = _comparable(bullets, model)
     if query_vec is None or not embeddable:
-        return bullets[-top_k:]  # fallback: most recent, unranked
+        # `bullets[-0:]` is the WHOLE list, not none of it -- Python has no
+        # negative zero. No caller passes 0 today, which is exactly why this
+        # is worth pinning: the day one does, the unranked fallback would
+        # quietly return everything instead of nothing.
+        return bullets[-top_k:] if top_k else []
     return sorted(
         embeddable, key=lambda b: cosine_similarity(query_vec, b.embedding), reverse=True,
     )[:top_k]
@@ -200,7 +204,8 @@ def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "
     a Python-level loop over cosine_similarity()."""
     embeddable = _comparable(chunks, model)
     if query_vec is None or not embeddable:
-        return chunks[-max_chunks:]  # fallback: most recent, unranked
+        # Same `[-0:]` trap as _rank_bullets above.
+        return chunks[-max_chunks:] if max_chunks else []
     matrix = np.stack([c.embedding for c in embeddable])
     norms = np.linalg.norm(matrix, axis=1) * (np.linalg.norm(query_vec) or 1.0)
     scores = (matrix @ query_vec) / np.where(norms == 0, 1.0, norms)

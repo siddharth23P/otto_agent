@@ -1056,6 +1056,13 @@ def _browse(body: str, allowed: tuple[str, ...], tool: str) -> ToolResult:
     op, argument = parsed
     if op in ("open", "click", "type", "find") and not argument:
         return _workspace_failure(tool, f"{op} needs something to act on")
+    # Checked HERE, before the driver script is built, so a refused URL never
+    # reaches the container. The agent chooses this URL and the agent reads web
+    # pages, so a page it already opened can steer the next request -- which is
+    # indirect prompt injection with a network call on the end of it. See
+    # agent/pipeline/browsing.py's check_url.
+    if op == "open" and (why := browsing.check_url(argument)):
+        return _workspace_failure(tool, why)
 
     limits = json.dumps({
         "chars": browsing.MAX_DIGEST_CHARS, "links": browsing.MAX_LINKS,

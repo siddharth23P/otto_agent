@@ -250,3 +250,19 @@ def test_recall_memory_asks_for_the_acting_read():
     from agent.pipeline import tools
 
     assert 'purpose="acting"' in inspect.getsource(tools.recall_memory)
+
+
+def test_asking_for_no_fallback_results_returns_none_of_them():
+    """`items[-0:]` is the WHOLE list, not none of it -- Python has no
+    negative zero. No caller passes 0 today, which is exactly why it is worth
+    pinning: the day one does, the unranked fallback would quietly return
+    everything instead of nothing."""
+    from types import SimpleNamespace
+
+    from agent.memory.retrieval import _rank_bullets, _rank_chunks
+
+    items = [SimpleNamespace(embedding=None, embedding_model=None) for _ in range(5)]
+
+    assert _rank_bullets(items, None, 0) == []
+    assert _rank_chunks(items, None, 0) == []
+    assert len(_rank_bullets(items, None, 2)) == 2

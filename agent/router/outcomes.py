@@ -289,9 +289,14 @@ def _overtakes(challenger: SeatRecord | None, incumbent: SeatRecord | None) -> b
     """Whether the candidate declared SECOND should be tried first."""
     if challenger is None or incumbent is None:
         return False
-    if challenger.approval_rate > incumbent.approval_rate + MIN_MARGIN:
+    # `>=`, not `>`. The docstring says the challenger has to be ahead BY
+    # MIN_MARGIN, and at exactly that margin a strict `>` sent it to the tie
+    # branch below instead -- so "ahead by ten points" did not overtake while
+    # "ahead by ten points and a hair" did. Nothing in the numbers justifies
+    # that line falling between them.
+    if challenger.approval_rate >= incumbent.approval_rate + MIN_MARGIN:
         return True
-    if abs(challenger.approval_rate - incumbent.approval_rate) <= MIN_MARGIN:
+    if abs(challenger.approval_rate - incumbent.approval_rate) < MIN_MARGIN:
         # Same result, measurably cheaper. A fifth fewer calls per run, so
         # that ordinary run-to-run variation does not shuffle the chain.
         return challenger.calls_per_run < incumbent.calls_per_run * 0.8

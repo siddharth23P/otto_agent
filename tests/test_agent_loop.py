@@ -1067,3 +1067,86 @@ def test_a_malformed_delegation_says_what_was_wrong(monkeypatch):
 
     assert any("first line must be a mode" in str(m.content)
                for sent in fake.seen for m in sent)
+
+
+# --------------------------------------------------------------------------
+# What a mode switch must not carry, and what it must
+# --------------------------------------------------------------------------
+
+def test_an_escalating_switch_forgets_that_a_tool_was_already_held():
+    """The gate's memory belongs to the conversation it was recorded in.
+
+    `confirmed` says "this target has been held once, let the reissue
+    through". That is only true while the model can REMEMBER being asked. An
+    escalating switch wipes the transcript back to the seed, so the model that
+    arrives next has no record of the hold -- and would have found the gate
+    already satisfied and run the irreversible call unchecked.
+
+    Holding the same target twice costs one exchange. Not holding it costs the
+    thing the gate exists for.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    messages = [SystemMessage("prompt"), HumanMessage("TASK: do it")]
+    seed = list(messages)
+    confirmed = {"execute_bash:rm -rf /data"}
+
+    pn._switch_mode(messages, "solve", mode="summarize", swaps=0,
+                    did_work=True, mode_log=[], calls=0, seed=seed,
+                    confirmed=confirmed)
+
+    assert confirmed == set(), "the gate would have been skipped after the wipe"
+
+
+def test_a_de_escalating_switch_keeps_it():
+    """Nothing was wiped, so the model still remembers being asked and a
+    second hold would be pure tax."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    messages = [SystemMessage("prompt"), HumanMessage("TASK: do it")]
+    confirmed = {"execute_bash:rm -rf /data"}
+
+    pn._switch_mode(messages, "summarize", mode="solve", swaps=0,
+                    did_work=True, mode_log=[], calls=0, seed=list(messages),
+                    confirmed=confirmed)
+
+    assert confirmed == {"execute_bash:rm -rf /data"}
+
+
+def test_the_plan_survives_switching_back_to_solve():
+    """`plan` mode's own guidance says to "switch back and carry the steps out
+    yourself". `solve` is the deepest mode, so switching back always escalates,
+    and escalating wipes the transcript -- which destroyed the plan at the
+    moment it was needed. Nothing else held it: `context` is only written by
+    ask_user and the checklist is fixed at run start."""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    plan = "1. read config.yaml\n2. change the timeout\n3. run the tests"
+    messages = [SystemMessage("prompt"), HumanMessage("TASK: fix it"),
+                AIMessage(f"FINAL:\n{plan}")]
+    seed = messages[:2]
+
+    pn._switch_mode(messages, "solve", mode="plan", swaps=1, did_work=True,
+                    mode_log=[], calls=5, seed=seed, confirmed=set())
+
+    carried = "\n".join(pn._content_text(m.content) for m in messages)
+    assert "change the timeout" in carried, "the plan was thrown away"
+
+
+def test_what_is_carried_is_bounded():
+    """One message, not the whole conversation. Escalation exists to drop the
+    weaker model's account of getting somewhere."""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    messages = [SystemMessage("p"), HumanMessage("TASK: t")]
+    seed = list(messages)
+    for i in range(20):
+        messages.append(AIMessage(f"step {i} " + "x" * 500))
+
+    pn._switch_mode(messages, "solve", mode="plan", swaps=1, did_work=True,
+                    mode_log=[], calls=5, seed=seed, confirmed=set())
+
+    carried = "\n".join(pn._content_text(m.content) for m in messages)
+    assert "step 19" in carried
+    assert "step 0 " not in carried
+    assert len(carried) < 20 * 500
