@@ -308,14 +308,25 @@ _TOOL_BODY_HINT = (
     "recall_memory: a search query. "
     "code_map: `define <name>`, `uses <name>`, `imports <module>` or "
     "`outline <path>` -- exact names, Python only. "
+    # "-- the conversation carries on" used to trail this line. AGENT_PROMPT
+    # already says it two sentences earlier, at more length ("The conversation
+    # carries over: everything above stays, and you keep every tool"), and
+    # this block's job is the body format rather than the semantics.
     "switch_mode: one word from " + "|".join(mode_names()) + ", optionally why "
-    "after it -- the conversation carries on. "
+    "after it. "
     "delegate: that same word, then one bounded job. It runs on that mode's "
     "model with none of this conversation and reports back. "
-    # The WHEN of asking used to live here too, and it is said again by
-    # MUTATION_GATE_NOTE at the moment it applies -- which is where a model
-    # can act on it. This block's job is what goes in the body.
-    "ask_user: a question, optionally then `CHOICES: a | b`."
+    # The WHEN of asking used to live here at length, and the case for asking
+    # is said again by MUTATION_GATE_NOTE at the moment it applies -- which is
+    # where a model can act on it. What was missing was the case for NOT
+    # asking, and its absence was not theoretical: with the work finished and
+    # the person having said "done" and then "nothing else", the agent asked
+    # "would you like anything else?" once more. A courtesy question is not a
+    # blocked one, and nothing here had ever said so. One sentence, kept in
+    # this block rather than added to _DIAGNOSTIC_HABITS, whose comment
+    # records a fifth item erasing the four above it.
+    "ask_user: a question, optionally `CHOICES: a | b` -- only when you cannot "
+    "proceed without the answer, never about work you have already finished."
 )
 
 #: Which standing tools change things, named from the registry rather than
@@ -1011,7 +1022,7 @@ def _summarise_action(tool_name: str, body: str, result) -> str:
 
 
 def _tool_loop(llm, messages: list, actions: list[str] | None = None,
-               *, max_iterations: int | None = None) -> str:
+               *, max_iterations: int | None = None, asked: int = 0) -> str:
     """Run the shared ACTION/FINAL tool-calling loop -- every role node AND
     the evaluator drive their conversation through this one function. A
     role node's FINAL body IS its candidate answer; the evaluator's FINAL
@@ -1085,6 +1096,17 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
             # Not a normal tool -- see NeedsUserInput's own docstring for
             # why this has to unwind all the way out rather than being
             # just another TOOL_DISPATCH entry.
+            if asked >= MAX_USER_QUESTIONS:
+                # ...unless the turn has spent its asks. Then it IS just a
+                # tool call that came back refused, and the loop carries on
+                # rather than the run ending -- MAX_USER_QUESTIONS. No
+                # MAX_REFUSED_ASKS guard needed here the way _agent_loop
+                # needs one: this loop is always run with a real iteration
+                # ceiling, so being refused every time costs it that ceiling
+                # and no more.
+                messages.append(AIMessage(text))
+                messages.append(HumanMessage(ASK_BUDGET_SPENT.format(asked=asked)))
+                continue
             question, choices = _parse_ask_user_body(body)
             raise NeedsUserInput(question or "(no question given)", choices)
         if problem := _action_problem(tool_name, body, dispatch):
@@ -1461,6 +1483,95 @@ class Verdict:
 #: whole budget re-reading the same answer.
 MAX_REJECTIONS = 2
 
+#: How many times ONE turn may stop and ask the person something.
+#:
+#: Nothing bounded this. A rejection loop is capped by MAX_REJECTIONS and a
+#: tool loop by MAX_TOOL_ITERATIONS, but a run could pause, be answered, and
+#: pause again without limit -- and did, in two separate live sessions. The
+#: second is the one this constant is sized against: the work was finished,
+#: the person had said "done" and then "nothing else", and the agent asked
+#: "would you like anything else?" again anyway. Asking is the only thing the
+#: agent does that spends somebody ELSE'S attention, which is the argument for
+#: bounding it harder than anything it spends on its own.
+#:
+#: Three, not one: a genuinely underspecified task can need a second question
+#: once the first answer opens something up, and a hard cap of one would push
+#: the agent into bundling unrelated questions into a single unanswerable one.
+#: Past the cap the ask is REFUSED rather than the run ended -- see
+#: ASK_BUDGET_SPENT, which hands the loop a way forward instead of a wall.
+MAX_USER_QUESTIONS = int(os.environ.get("OTTO_MAX_USER_QUESTIONS", "3"))
+
+#: Answers that mean "stop asking me things", matched WHOLE and exactly.
+#:
+#: The live failure: the person answered "done", was asked again, answered
+#: "nothing else", and was asked again. Both answers said the same thing and
+#: neither changed what happened next.
+#:
+#: What a match does is deliberately asymmetric, because the two halves carry
+#: different risk. Spending the turn's remaining asks is unconditional and
+#: safe: somebody who says "nothing else" has said they are finished being
+#: interrupted, and the worst a false match can do is make the agent settle
+#: the rest itself -- which is what ASK_BUDGET_SPENT already asks of it.
+#: FINISHING is only ever advised, never forced, because a false match there
+#: would cut a real task short.
+#:
+#: Whole-answer matches only. A substring test would fire on "no, use the
+#: second file", and an answer that carries any other content is an answer
+#: to the question rather than a request to stop. Bare "yes"/"no" are
+#: deliberately absent: `CHOICES: yes | no` is the commonest question shape
+#: there is, and reading a genuine "no" as "stop" would break far more than
+#: this fixes.
+_CLOSING_ANSWERS = frozenset((
+    "done", "all done", "finished", "we are done", "we're done", "were done",
+    "that is all", "that's all", "thats all", "no thanks", "no thank you",
+    "nothing", "nothing else", "nothing more", "nothing further",
+    "everything is done", "everything's done", "everythings done",
+    "stop", "no more", "no more questions", "quit",
+))
+
+
+def _is_closing_answer(text: str) -> bool:
+    """Does this answer say "stop asking", and nothing else?"""
+    return " ".join(str(text or "").lower().split()).strip(".!, ") in _CLOSING_ANSWERS
+
+
+#: Added to the answer spliced back into the loop when _is_closing_answer.
+#: Advice, not a gate -- see _CLOSING_ANSWERS on why only the asking half is
+#: enforced.
+CLOSING_ANSWER_NOTE = (
+    "That reads as: stop asking. You have no questions left this turn. "
+    "Unless something you were actually asked for is still undone, give your "
+    "FINAL now with what you have."
+)
+
+#: How many times ONE `_agent_loop` may be refused an ask before it hands over
+#: what it has.
+#:
+#: `_agent_loop` runs `while max_iterations is None or iteration < ...` and the
+#: agent node passes None, so the only thing that ends it is an answer, a
+#: pause, or the budget. Refusing the ask without this would turn a model that
+#: asks on every reply into a loop that spends a whole run's model calls being
+#: told no -- the pause it used to unwind through was, accidentally, what
+#: bounded it. Two, so a model that asks once more and then complies is not
+#: cut off for it.
+MAX_REFUSED_ASKS = 2
+
+#: What a loop is told INSTEAD of pausing, once it has spent the cap above.
+#:
+#: Not a refusal on its own. An enforcement study that blocked 94% of
+#: non-compliant actions still finished under 5% of tasks safely, because the
+#: agent routed around the block by inventing what it had been denied -- the
+#: same reasoning as MUTATION_GATE_NOTE, which is why this names the way
+#: forward (decide, then SAY you decided) rather than only naming the wall.
+ASK_BUDGET_SPENT = (
+    "You have already asked {asked} question(s) this turn, which is the "
+    "limit -- asking again is not available.\n\n"
+    "Settle it yourself from what you already have, and state in your FINAL "
+    "which way you settled it and why, so it can be corrected. If the work is "
+    "actually done, finish: whether anything ELSE is wanted is not your "
+    "question to ask."
+)
+
 #: Ceiling on each piece of evidence handed to the evaluator. Two-ended, like
 #: agent/pipeline/tools.py's own clip, for the same reason: the start says what
 #: was attempted and the end says how it came out, and keeping only the head
@@ -1684,6 +1795,9 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     #: and nothing run, and it is allowed to say that once.
     ledger = Ledger()
     asked_for_proof = False
+    #: Asks refused because the TURN is out of them (MAX_REFUSED_ASKS). Local
+    #: to this loop run, unlike state's `asks` which spans the whole turn.
+    refused_asks = 0
     iteration = 0
     llm = ROUTER.chat_model(MODES[mode].task)
 
@@ -1748,6 +1862,26 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
         dead_replies = 0
 
         if tool_name == "ask_user":
+            asked = state.get("asks") or 0
+            if asked >= MAX_USER_QUESTIONS:
+                # The turn has spent its asks -- MAX_USER_QUESTIONS. Refused
+                # like any other unavailable tool, so the loop carries on
+                # with a way forward instead of pausing a fourth time.
+                if text:
+                    messages.append(AIMessage(text))
+                messages.append(HumanMessage(ASK_BUDGET_SPENT.format(asked=asked)))
+                refused_asks += 1
+                if refused_asks >= MAX_REFUSED_ASKS:
+                    # It has been told twice and is still asking. Hand over
+                    # what there is rather than spend the run on it --
+                    # MAX_REFUSED_ASKS.
+                    logger.warning(
+                        "agent loop: still asking after %d refusals -- handing "
+                        "over what it has", refused_asks,
+                    )
+                    return output, "dead", mode
+                iteration += 1
+                continue
             # Write the question into the transcript BEFORE unwinding. The
             # agent node persists `messages` on its way out to the ask_user
             # node, so a transcript that does not contain the question comes
@@ -2107,10 +2241,13 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
         # asks again -- see AgentState.user_answer.
         answered = state.get("user_answer")
         if answered:
+            closing = (
+                "\n\n" + CLOSING_ANSWER_NOTE if _is_closing_answer(answered) else ""
+            )
             messages.append(HumanMessage(
                 f"THE USER ANSWERED:\n{answered}\n\n"
                 "That answers the question you just asked. Carry on with the "
-                "task from here -- do not ask it again."
+                "task from here -- do not ask it again." + closing
             ))
         feedback = state.get("feedback") or ""
         if feedback:
@@ -2407,7 +2544,8 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     ) if part)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     try:
-        reply = _tool_loop(llm, messages, max_iterations=MAX_EVALUATOR_ITERATIONS)
+        reply = _tool_loop(llm, messages, max_iterations=MAX_EVALUATOR_ITERATIONS,
+                           asked=state.get("asks") or 0)
     except NeedsUserInput as exc:
         # Seventh refinement (module docstring): the evaluator itself got
         # stuck judging something and needs the person's input to settle
@@ -2557,11 +2695,22 @@ def ask_user(state: AgentState) -> Command[Literal["agent", "evaluator"]]:
     prior = state.get("context") or ""
     qa = f'you asked: "{question}"\nthe user answered: "{answer}"'
     role = state.get("asking_role") or "agent"
+    asked = (state.get("asks") or 0) + 1
+    if _is_closing_answer(answer):
+        # "done", "nothing else" -- the person has said they are finished
+        # being interrupted, so the turn has no asks left whatever it had
+        # before (_CLOSING_ANSWERS).
+        asked = max(asked, MAX_USER_QUESTIONS)
     update = {
         "context": f"{prior}\n\n{qa}" if prior else qa,
         "pending_question": None,
         "pending_choices": None,
         "asking_role": None,
+        # Counted HERE rather than where the question was raised, so what the
+        # cap measures is pauses a person actually sat through --
+        # MAX_USER_QUESTIONS. A question raised and then lost to a provider
+        # error cost nobody anything and should not spend the budget.
+        "asks": asked,
         "board": [f"you answered -- {role} is carrying on"],
     }
     # ...and, for the loop only, into `user_answer` as well. The evaluator

@@ -104,6 +104,12 @@ class AgentState(TypedDict):
     #: answer. `context` is still written too, because that is what the
     #: evaluator (which rebuilds from state, not from a transcript) reads.
     user_answer: str | None
+    #: How many times THIS TURN has stopped and waited for the person --
+    #: incremented by ask_user() as each pause is answered, reset to 0 by
+    #: run.py's `_initial` at the top of every turn. Both loops refuse to
+    #: ask past nodes.py's MAX_USER_QUESTIONS, which is the only bound on
+    #: the one thing the agent does that spends somebody else's time.
+    asks: int
     #: One compact line per tool call any role has made, across the WHOLE
     #: run -- "solver: write_file main.c.rs -> ok (56 lines)",
     #: "solver: execute_bash rustc main.c.rs -> exit 1: error[E0433]...".
