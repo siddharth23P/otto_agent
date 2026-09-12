@@ -215,3 +215,63 @@ def test_no_marker_keeps_the_directory_it_had():
     out, cwd = sb._split_marker("plain output", "/testbed")
 
     assert (out, cwd) == ("plain output", "/testbed")
+
+
+# --------------------------------------------------------------------------
+# Two bugs this harness shipped with, each caught by a control run
+# --------------------------------------------------------------------------
+
+def test_a_coloured_summary_is_still_read():
+    """astropy's own setup.cfg turns pytest colour on, so the status no longer
+    starts the line and the node id has an escape in the middle of it. Both
+    halves of the pattern miss, every test reads as not-passed, and the
+    harness reported 0 of 141 passing on a repository where nothing was
+    wrong -- which is exactly what two instances scored before the escapes
+    were stripped."""
+    coloured = (
+        "\x1b[32mPASSED\x1b[0m astropy/io/fits/tests/test_connect.py::"
+        "\x1b[1mTestSingleTable::test_simple\x1b[0m"
+    )
+
+    assert sb.parse_report(coloured) == {
+        "astropy/io/fits/tests/test_connect.py::TestSingleTable::test_simple": "PASSED"
+    }
+
+
+def test_colour_is_also_asked_not_to_happen():
+    """Stripping copes; --color=no avoids. Both, because a project can force
+    colour back on from its own config and then only the stripping saves it."""
+    assert "--color=no" in sb.TEST_COMMAND
+
+
+def test_an_instance_with_no_arm64_build_falls_back(monkeypatch):
+    """Upstream publishes arm64 for only part of the set -- of six instances
+    tried at random, two had one and four did not. Without the fallback the
+    harness reports "pull access denied" for two thirds of the benchmark and
+    calls it a harness error."""
+    monkeypatch.setattr(sb.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(sb, "_manifest_exists", lambda image: False)
+
+    image, emulated = sb.resolve_image("django__django-10097")
+    assert ".x86_64." in image
+    assert emulated
+
+
+def test_an_arm64_build_is_preferred_when_it_exists(monkeypatch):
+    monkeypatch.setattr(sb.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(sb, "_manifest_exists", lambda image: True)
+
+    image, emulated = sb.resolve_image("astropy__astropy-12907")
+    assert ".arm64." in image
+    assert not emulated
+
+
+def test_an_x86_host_never_probes_for_arm64(monkeypatch):
+    """The probe costs a registry round trip per instance. On x86 there is
+    nothing to fall back FROM, so it is pure latency."""
+    monkeypatch.setattr(sb.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(sb, "_manifest_exists",
+                        lambda image: pytest.fail("probed on an x86 host"))
+
+    image, emulated = sb.resolve_image("django__django-10097")
+    assert ".x86_64." in image and not emulated
