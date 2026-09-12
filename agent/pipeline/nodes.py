@@ -9,12 +9,24 @@ overhead. Mean score went 0.54 to 0.62 on the measured tasks.
 
 WHAT A RUN DOES, in order.
 
-1. `_criteria` writes down what a correct answer must contain, FROM THE TASK
+1. `_rubric` writes down what a correct answer must contain, FROM THE TASK
    ALONE, before any attempt exists. Its own call, its own prompt. This is the
    only information in the whole judgment the actor did not produce, and it is
    why the evaluator is worth its calls: self-refinement without external
    information measures at -2.5% to 0% over five turns, where the same models
    reach 90-98% given an external checklist.
+
+   The same call decides whether there is a task here at all. A greeting has
+   no criteria, because it makes no claim to check -- and everything below
+   this line exists to make a claim trustworthy. So `NO TASK` comes back
+   instead of criteria, and the run answers in ONE further call
+   (`_chat_reply`, on the cheapest chat seat) and stops: two model calls for
+   the turn, and no loop, no judge, no lesson. Live, before this, "hi otto!"
+   cost 13 model calls and about five minutes -- handed no
+   task by a prompt that tells it to run something that would fail if the task
+   were not done, the loop invented one, and wrote a test file to disk to have
+   something to verify. A real task pays nothing for this: the decision comes
+   out of a call that was already the first thing a run did.
 
 2. `_agent_loop` runs one conversation until it answers, pauses, or runs out
    of budget. The protocol is text -- `ACTION:` then `CODE:` -- not native
@@ -456,7 +468,39 @@ RUBRIC_PROMPT = (
     "question that must be answered. Make them independent -- overlapping "
     "criteria double-count one mistake. Fewer is better.\n\n"
     "Do not write criteria about style, effort or presentation. Nothing else "
-    "in your reply, no preamble."
+    "in your reply, no preamble.\n\n"
+    "NOT EVERY MESSAGE IS A TASK. A greeting, thanks, a goodbye, small talk, "
+    "or a question about you or about this conversation asks for nothing to "
+    "be found out, worked out, changed or produced -- there is nothing in it "
+    "to check. Reply with the single line `NO TASK` and no criteria. Be strict "
+    "about this: if answering would mean reading a file, running a command, "
+    "searching, computing, or knowing anything about this machine or the "
+    "world, it is a task and you write criteria for it."
+)
+
+#: The whole reply to a turn that asked for no work.
+#:
+#: Everything the pipeline does after this point exists to make a CLAIM
+#: trustworthy: criteria to judge against, a loop that gathers evidence, a
+#: judge that re-checks it, a lesson distilled from the friction. A greeting
+#: makes no claim, so all of it is overhead -- and not cheap overhead. Live,
+#: "hi otto!" cost 13 model calls and about five minutes: the agent loop read
+#: a prompt that tells it to run something that would fail if the task were
+#: not done, and, having been handed no task, invented one -- four greps
+#: across the workspace, a test file written to disk, a shell script to run
+#: it, and a judgment on the result. The answer was "Hi! I'm Otto -- what can
+#: I help you with today?"
+#:
+#: So this is the whole of the fast path: one further call on the cheapest
+#: chat seat, no tools, no judge, no lesson -- two model calls for the turn
+#: against thirteen. What decides between the two paths is the rubric call
+#: that was happening anyway -- see `_rubric`.
+CHAT_PROMPT = (
+    "You are otto, an engineer's assistant with a shell and a workspace. "
+    "What follows is not a task -- nobody has asked you to find anything out "
+    "or change anything. Answer it directly, as yourself, in a sentence or "
+    "two. Do not describe what you could do, do not offer a plan, and do not "
+    "start work nobody asked for."
 )
 
 EVALUATOR_PROMPT = (
@@ -2214,7 +2258,7 @@ def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
     return want, swaps + 1, False
 
 
-def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
+def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end__"]]:
     """The one working node. Everything the four specialists did, in one
     conversation that is never thrown away.
 
@@ -2249,10 +2293,40 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
     # attempt at satisfying them, so this is still a checklist written from
     # the request rather than from a candidate answer.
     checklist = state.get("checklist")
+    conversational = False
     if checklist is None or redirected:
-        checklist = _new_checklist(
-            _criteria(ROUTER.chat_model(Task.EVALUATE), _requested(state))
-        )
+        rubric = _rubric(ROUTER.chat_model(Task.EVALUATE), _requested(state))
+        checklist = _new_checklist(rubric.criteria)
+        conversational = rubric.conversational
+
+    # Nothing was asked for, so there is nothing to verify, judge or learn
+    # from: answer and stop. One further call, against the thirteen a greeting
+    # cost live (see CHAT_PROMPT), and the decision came free with the rubric
+    # call above, so a real task pays nothing for this path existing.
+    #
+    # Fresh turns only. A run that is resuming already has work behind it --
+    # an answer to a question it asked, or an evaluator's rejection to fix --
+    # and "this message asks for nothing" is not true of the turn just because
+    # it is true of the sentence.
+    if conversational and not resuming:
+        try:
+            reply = _chat_reply(state, task_text)
+        except ProviderError as exc:
+            logger.info("the chat fast path failed, running the task path: %s", exc)
+            reply = ""
+        if reply:
+            return Command(
+                update={
+                    "node": "agent",
+                    "output": reply,
+                    "final_output": reply,
+                    "checklist": checklist,
+                    "board": ["otto answered without starting a task"],
+                    **({"model_calls": spent.calls}
+                       if (spent := current_budget()) else {}),
+                },
+                goto=END,
+            )
 
     if resuming:
         messages = [
@@ -2445,7 +2519,31 @@ def _requested(state: AgentState) -> str:
     )
 
 
-def _criteria(llm, task_text: str) -> list[str]:
+#: What the rubric call says when the message asked for no work at all.
+#: Matched on the line, not searched for anywhere in the reply, so a criterion
+#: that happens to contain the words cannot switch the run onto the fast path.
+_NO_TASK = "NO TASK"
+
+
+@dataclass(frozen=True, slots=True)
+class Rubric:
+    """What one rubric call comes back with.
+
+    `conversational` is not a second call and not a classifier bolted on in
+    front of the graph -- it is the same call, answering the question it was
+    always implicitly answering. "What would a correct answer have to contain"
+    has no answer for a greeting, and a rubric call that says so is telling
+    the run something it currently throws away.
+    """
+
+    criteria: list[str]
+    #: The message asked for nothing to be found out, changed or produced.
+    #: False whenever the call failed, so a provider hiccup can only ever cost
+    #: the run its criteria -- never route a real task to a one-line reply.
+    conversational: bool = False
+
+
+def _rubric(llm, task_text: str) -> Rubric:
     """Phase one: the rubric, from the task alone.
 
     A separate call on purpose. Criteria written while looking at an answer
@@ -2463,8 +2561,49 @@ def _criteria(llm, task_text: str) -> list[str]:
         ])
     except ProviderError as exc:
         logger.warning("rubric generation failed, judging without one: %s", exc)
-        return []
-    return _parse_rubric(reply)
+        return Rubric([])
+    criteria = _parse_rubric(reply)
+    # Both halves required. A reply that says NO TASK *and* lists criteria has
+    # contradicted itself, and the safe reading of a contradiction is that
+    # there is work here -- the fast path skips the judge, so it is the one
+    # place in this graph where being wrong is not recoverable by a rejection.
+    conversational = not criteria and any(
+        line.strip().upper().startswith(_NO_TASK) for line in reply.splitlines()
+    )
+    return Rubric(criteria, conversational)
+
+
+def _criteria(llm, task_text: str) -> list[str]:
+    """The criteria alone, for a caller that has no use for the rest -- the
+    evaluator, when it was driven directly and the loop never wrote one."""
+    return _rubric(llm, task_text).criteria
+
+
+def _chat_reply(state: AgentState, task_text: str) -> str:
+    """The fast path's one call: answer a message that asked for no work.
+
+    On the cheap chat seat rather than the loop's reasoning seat, because
+    nothing here has to be worked out -- and the seat the loop runs on is the
+    single most expensive thing a turn can touch.
+
+    Returns "" if it produced nothing, and lets a provider failure out. Both
+    send the caller back to the ordinary pipeline: a fast path that can fail a
+    turn is worse than no fast path.
+    """
+    conversation = _conversation_so_far(state)
+    body = "\n\n".join(part for part in (
+        f"CONVERSATION SO FAR:\n{conversation}" if conversation else "",
+        f"THEY SAID:\n{task_text}",
+    ) if part)
+    messages = [
+        SystemMessage(CHAT_PROMPT),
+        # Same two notes the loop opens with. "where am I working" and "what
+        # can you see" are exactly the kind of thing asked conversationally,
+        # and answering them needs no tool -- just the note.
+        *(SystemMessage(extra) for extra in (workspace_note(), render_note()) if extra),
+        HumanMessage(body),
+    ]
+    return _call(ROUTER.chat_model(Task.CHAT_FAST), messages).strip()
 
 
 def _record_seat(state: AgentState, *, approved: bool) -> None:
