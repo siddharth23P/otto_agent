@@ -1639,6 +1639,19 @@ class Verdict:
     blocked: bool
 
 
+#: Stands in for a verdict the judge never rendered.
+#:
+#: Addressed to the agent, because the agent is what reads it, and it asks
+#: for the one thing that makes a second attempt differ from the first: an
+#: answer with its own check attached. A judge that ran out of its own tool
+#: budget trying to build that check is the case this exists for.
+NO_VERDICT_NOTE = (
+    "the judge ran out of its own budget before it reached a verdict, so "
+    "this is not a finding about your answer. Do not rewrite the answer. "
+    "Give it again with the check attached: the command you ran and what it "
+    "printed, so the next judgment does not have to build one."
+)
+
 #: How many rejections a run may collect before the answer stands anyway.
 #: Judgment is worth paying for; judgment without a bound is a way to spend a
 #: whole budget re-reading the same answer.
@@ -2842,6 +2855,19 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end
     # rendered a real verdict is not evidence the answer is fine.
     verdict = _parse_verdict(reply)
     approve, reason = verdict.approved, verdict.reason
+    if not approve and not reason.strip():
+        # A rejection with nothing in it is worse than no rejection at all.
+        # `feedback` is the only thing that makes the agent's next pass differ
+        # from its last one, and an empty string leaves the rebuilt transcript
+        # byte-identical -- so the agent re-sent the same bytes, got the same
+        # answer, and the judge failed the same way, three times, until
+        # MAX_REJECTIONS stopped it. Measured on one golden item: nine model
+        # calls, three of them the identical 8-character reply.
+        #
+        # This is what an exhausted _tool_loop returns: "" when it never
+        # rendered a verdict at all. Saying so, and asking for the one thing
+        # that would make the next attempt checkable, is what breaks the tie.
+        reason = NO_VERDICT_NOTE
     # The audit is the ONLY thing that may move a record's status. An
     # executor's claim about its own work is not evidence, which is the whole
     # separation the state layer exists for.

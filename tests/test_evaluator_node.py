@@ -499,3 +499,35 @@ def test_a_retrying_judge_does_not_pay_for_the_rubric_again(monkeypatch):
     pn.evaluator(_state(node="agent", output="an answer", judge_errors=1))
 
     assert tried == [], "the retry bought the same refusal over again"
+
+
+def test_a_rejection_with_nothing_in_it_still_says_something(monkeypatch):
+    """`feedback` is the only thing that makes the agent's next pass differ
+    from its last. An empty one leaves the rebuilt transcript byte-identical,
+    so the agent re-sent the same bytes, produced the same answer, and the
+    judge failed the same way -- three times, until MAX_REJECTIONS stopped
+    it. Measured on one golden item: nine model calls, three of them the
+    identical 8-character reply.
+
+    "" is exactly what an exhausted _tool_loop returns when it never rendered
+    a verdict at all."""
+    monkeypatch.setattr(pn, "_tool_loop", lambda *a, **kw: "")
+
+    result = pn.evaluator(_state(node="agent", output="5"))
+
+    assert result.goto == "agent"
+    assert result.update["feedback"].strip(), "the retry was given nothing to change"
+    assert "not a finding about your answer" in result.update["feedback"]
+
+
+def test_a_real_rejection_keeps_its_own_words(monkeypatch):
+    """The note stands in for a missing verdict, never over a real one."""
+    monkeypatch.setattr(
+        pn, "_tool_loop",
+        lambda *a, **kw: "FINAL:\nMET: 1/3\nAPPROVE: no\nWHY: it never ran the tests",
+    )
+
+    result = pn.evaluator(_state(node="agent", output="5"))
+
+    assert "never ran the tests" in result.update["feedback"]
+    assert pn.NO_VERDICT_NOTE not in result.update["feedback"]

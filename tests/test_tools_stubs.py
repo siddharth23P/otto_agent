@@ -45,15 +45,36 @@ def test_execute_bash_times_out_on_a_hanging_command():
     assert not result.ok
 
 
-def test_web_search_without_a_key_degrades_instead_of_crashing():
+def test_web_search_without_a_key_degrades_instead_of_crashing(monkeypatch):
     """No ANTHROPIC_API_KEY means the WEB route has no viable candidate -- and
     it deliberately has no fallback, because a model with no web access would
     answer from memory while looking like a search. That must reach the tool
-    loop as an ordinary failed call, not as an exception."""
+    loop as an ordinary failed call, not as an exception.
+
+    The failure is forced here rather than assumed. This test used to just
+    call web_search and expect it to fail, which made it a test of whoever
+    last touched the .env: it passed for months because the key on this
+    machine was out of credit, and turned red the hour one was added. A test
+    that only holds while something else is broken is not testing anything.
+    """
+    def no_route(task):
+        raise ProviderError("no viable model for web")
+
+    monkeypatch.setattr(pt._get_router(), "chat_model", no_route)
+
     result = web_search("what shipped in Python 3.14")
 
     assert not result.ok
     assert "web_search failed" in result.stderr
+
+
+def test_web_search_actually_searches_when_it_is_configured():
+    """The other half, and the one the old test made unreachable: with a
+    working route this returns a real answer, not a degraded one."""
+    result = web_search("what is the capital of France")
+
+    assert result.ok, result.stderr
+    assert "Paris" in result.stdout
 
 
 def test_web_search_refuses_an_empty_query():
