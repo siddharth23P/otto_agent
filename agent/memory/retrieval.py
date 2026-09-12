@@ -110,6 +110,12 @@ FALLOFF_RATIO = 0.85
 #: cap it replaced.
 MIN_CHUNKS = 3
 
+#: How many chunks the second hop may add. Small: it is reaching for evidence
+#: the question does not mention, which is exactly the material that is
+#: valuable when it is right and noise when it is wrong. Three is enough for
+#: the two-hop questions the benchmark actually contains.
+MAX_SECOND_HOP = 3
+
 #: How many chunks either side of each selected chunk to include (see the
 #: module docstring). 2 means "the two turns before and the two after".
 #:
@@ -216,7 +222,8 @@ def _rank_bullets(bullets: list[Bullet], query_vec, top_k: int, model: str = "")
     )[:top_k]
 
 
-def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "") -> list[Chunk]:
+def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "",
+                 *, second_hop: bool = False) -> list[Chunk]:
     """Every compacted chunk is a candidate here, so this is the one step that
     scales with session length -- hence the single matrix product rather than
     a Python-level loop over cosine_similarity()."""
@@ -230,6 +237,53 @@ def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "
     order = np.argsort(-scores)[:max_chunks]
     keep = _before_the_falloff(scores[order])
     return [embeddable[i] for i in order[:keep]]
+
+
+def _second_hop(candidates: list[Chunk], primary: list[Chunk], room: int) -> list[Chunk]:
+    """Rank again against what the first pass FOUND, not against the query.
+
+    This is the multi-hop case, and it is why that category is the weakest one
+    the memory benchmark measures -- 82% against 91% overall. A question whose
+    answer needs two pieces of evidence only matches the FIRST of them: the
+    second matches the answer to the first hop, which does not appear in the
+    question at all. Ranking against the query alone cannot reach it however
+    many chunks it returns.
+
+    Costs nothing. Every chunk already carries a stored embedding, so the
+    second pass is one more matrix product against a vector already in memory
+    -- no model call, no network, no query rewriting.
+
+    Held to the same falloff bar as the first pass, and capped by whatever room
+    the first pass left.
+
+    NOTHING CALLS THIS. It was written for issue #22 and measured, and it did
+    not work:
+
+        multi-hop recall   82%  ->  82%     (no change, n=44)
+        overall recall     91%  ->  91%
+        text per query   2,318  ->  3,209   (+38%)
+
+    So it costs more and finds nothing extra. The reasoning still looks right
+    -- a multi-hop question's second piece of evidence really does match the
+    first hop's ANSWER rather than the question -- which is why it stays here
+    rather than being deleted. What it suggests is that the anchor is wrong:
+    ranking against the top chunk's whole embedding finds chunks similar to
+    that chunk, which in a self-similar stream is its neighbours, and those
+    were already being returned by the neighbour window. A working version
+    needs an anchor that represents what the question still LACKS, not what it
+    already found.
+    """
+    seen = {c.hash for c in primary}
+    pool = [c for c in candidates if c.hash not in seen and c.embedding is not None]
+    if not pool or room <= 0:
+        return []
+    anchor = primary[0].embedding
+    matrix = np.stack([c.embedding for c in pool])
+    norms = np.linalg.norm(matrix, axis=1) * (np.linalg.norm(anchor) or 1.0)
+    scores = (matrix @ anchor) / np.where(norms == 0, 1.0, norms)
+    order = np.argsort(-scores)[:room]
+    keep = min(_before_the_falloff(scores[order]), MAX_SECOND_HOP)
+    return [pool[i] for i in order[:keep]]
 
 
 def _before_the_falloff(ranked_scores) -> int:

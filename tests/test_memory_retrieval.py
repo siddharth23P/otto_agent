@@ -340,7 +340,7 @@ def test_the_ceiling_still_binds():
 
     from agent.memory.retrieval import _rank_chunks
 
-    items = [SimpleNamespace(embedding=np.array([1.0, 0.0]), embedding_model="m")
-             for _ in range(50)]
+    items = [SimpleNamespace(embedding=np.array([1.0, 0.0]), embedding_model="m",
+                             hash=f"h{i}") for i in range(50)]
 
     assert len(_rank_chunks(items, np.array([1.0, 0.0]), 5, "m")) <= 5

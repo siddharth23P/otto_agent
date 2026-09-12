@@ -72,9 +72,9 @@ def test_one_tool_call_and_an_answer_costs_four_model_calls(monkeypatch):
 
     So: same total as the old graph, spent on checking instead of routing."""
     model, final = _run(monkeypatch, [
-        "ACTION: execute_python\nCODE:\nprint(2 + 2)",   # 1, work
-        "FINAL:\nthe answer is 4",                        # 2, work
-        "- the sum is correct",                            # 3, the rubric
+        "- the sum is correct",                            # 1, the rubric
+        "ACTION: execute_python\nCODE:\nprint(2 + 2)",   # 2, work
+        "FINAL:\nthe answer is 4",                        # 3, work
         "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked it",
     ])
 
@@ -87,9 +87,9 @@ def test_overhead_stays_flat_as_the_work_grows(monkeypatch):
     node boundaries and their router decisions; now the judgment is still one
     call, however long the work runs."""
     model, final = _run(monkeypatch, [
+        "- the work is done",                              # the rubric
         *["ACTION: execute_python\nCODE:\nprint(1)"] * 10,
         "FINAL:\ndone",
-        "- the work is done",
         "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: ok",
     ])
 
@@ -120,10 +120,10 @@ def test_a_mode_swap_costs_one_call_rather_than_a_node_boundary(monkeypatch):
     prompt, and the tool conversation thrown away. It is one appended message
     now, and the swap request itself is the only call it costs."""
     model, final = _run(monkeypatch, [
-        "ACTION: execute_python\nCODE:\nprint(1)",        # 1
-        "ACTION: switch_mode\nCODE:\nplan",                # 2, the swap
-        "FINAL:\nplanned and done",                        # 3
-        "- the work is done",                               # 4, rubric
+        "- the work is done",                               # 1, rubric
+        "ACTION: execute_python\nCODE:\nprint(1)",        # 2
+        "ACTION: switch_mode\nCODE:\nplan",                # 3, the swap
+        "FINAL:\nplanned and done",                        # 4
         "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: ok",
     ])
 
@@ -166,10 +166,10 @@ def test_model_calls_counts_the_judgment_too(monkeypatch):
     model, final = _run(
         monkeypatch,
         [
-            "ACTION: execute_python\nCODE:\nprint(1)",      # 1
-            "FINAL:\ndone",                                  # 2
-            "ACTION: execute_python\nCODE:\nprint(1)",      # 3, the judge checks
-            "FINAL:\nAPPROVE: yes\nWHY: verified",           # 4
+            "- the work is done",                             # 1, the rubric
+            "ACTION: execute_python\nCODE:\nprint(1)",      # 2
+            "FINAL:\ndone",                                  # 3
+            "FINAL:\nAPPROVE: yes\nWHY: verified",           # 4, the judge
         ],
         budget=Budget(max_model_calls=40),
     )
@@ -212,9 +212,9 @@ def test_learning_costs_exactly_one_call_at_the_end_of_a_run(monkeypatch):
     model, _ = _run(
         monkeypatch,
         [
+            "- the sum is correct",
             "ACTION: execute_python\nCODE:\nprint(2 + 2)",
             "FINAL:\nthe answer is 4",
-            "- the sum is correct",
             "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked it",
             '[{"cue": "arithmetic is asked for", "action": "run it", "outcome": "worked"}]',
         ],
@@ -228,9 +228,9 @@ def test_a_run_with_nowhere_to_learn_does_not_pay_for_learning(monkeypatch):
     """Checked before the call, not after. Distilling lessons and then
     discarding them is the worst of both."""
     model, _ = _run(monkeypatch, [
+        "- the sum is correct",
         "ACTION: execute_python\nCODE:\nprint(2 + 2)",
         "FINAL:\nthe answer is 4",
-        "- the sum is correct",
         "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked it",
     ])
 
@@ -245,9 +245,9 @@ def test_the_learning_call_lands_in_the_reported_cost(monkeypatch):
     _, final = _run(
         monkeypatch,
         [
+            "- the sum is correct",
             "ACTION: execute_python\nCODE:\nprint(2 + 2)",
             "FINAL:\nthe answer is 4",
-            "- the sum is correct",
             "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked it",
             '[{"cue": "arithmetic is asked for", "action": "run it"}]',
         ],
@@ -256,3 +256,71 @@ def test_the_learning_call_lands_in_the_reported_cost(monkeypatch):
     )
 
     assert final["model_calls"] == 5
+
+
+# --------------------------------------------------------------------------
+# A turn with no task in it
+# --------------------------------------------------------------------------
+#
+# Reported from real use: "hi" and "hello" taking minutes and 11-20 model
+# calls. Reproduced on "thanks, that's helpful" -- 22 calls and 263 seconds,
+# answering `1|Problem to solve|No problem to solve`. The criteria call found
+# nothing to check, the judge measured a chatty reply against criteria that did
+# not exist, rejected it, and the loop restarted. Twice.
+#
+# Measured after, three clean trials on the same prompt: 3 calls, 26 seconds,
+# every time.
+
+def test_a_turn_with_nothing_to_check_skips_the_judge_and_the_lesson(monkeypatch):
+    """An empty checklist is the criteria call saying there was no task. The
+    two calls are the rubric and the answer."""
+    model, final = _run(monkeypatch, [
+        "NONE",                       # 1, the rubric: nothing to check
+        "FINAL:\nI'm well, thanks!",  # 2, the answer
+    ], learning=True)
+
+    assert model.calls == 2
+    assert final["final_output"] == "I'm well, thanks!"
+
+
+def test_a_real_task_still_pays_for_verification(monkeypatch):
+    """The fix must not buy speed by skipping verification on real work. This
+    is the control: same path, one criterion, and the judge runs."""
+    model, final = _run(monkeypatch, [
+        "- the sum is correct",
+        "FINAL:\n4",
+        "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: checked",
+    ])
+
+    assert model.calls == 3
+    assert final["final_output"] == "4"
+
+
+def test_a_run_that_died_is_still_judged(monkeypatch):
+    """"No criteria" and "no answer" are different problems, and only one of
+    them is a conversation. A run that could not produce a usable reply goes
+    to the evaluator even with an empty checklist."""
+    model, _ = _run(monkeypatch, [
+        "NONE",
+        "not a parseable reply at all",
+        "still not parseable",
+        "nor this",
+    ])
+
+    assert model.calls > 2, "a dead run skipped the judge"
+
+
+def test_the_conversational_note_is_only_added_when_there_is_no_task():
+    """One line, added only when the run has already established there is
+    nothing to verify, so a task that merely looks chatty never sees it."""
+    seeded = pn._seed_transcript({"messages": [HumanMessage("hi")]}, "hi", [])
+    body = "\n".join(pn._content_text(m.content) for m in seeded)
+    assert "this is conversation, not a task" in body
+
+    with_task = pn._seed_transcript(
+        {"messages": [HumanMessage("fix it")]}, "fix it",
+        [{"text": "it works", "status": "pending", "evidence": ""}],
+    )
+    assert "this is conversation" not in "\n".join(
+        pn._content_text(m.content) for m in with_task
+    )

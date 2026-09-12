@@ -443,7 +443,10 @@ RUBRIC_PROMPT = (
     "question that must be answered. Make them independent -- overlapping "
     "criteria double-count one mistake. Fewer is better.\n\n"
     "Do not write criteria about style, effort or presentation. Nothing else "
-    "in your reply, no preamble."
+    "in your reply, no preamble.\n\n"
+    "If the message asks for nothing that could be checked -- a greeting, a "
+    "thank-you, an acknowledgement, small talk -- reply with exactly NONE and "
+    "no criteria. That is a normal answer, not a failure to understand."
 )
 
 EVALUATOR_PROMPT = (
@@ -551,6 +554,25 @@ CONTRAST_NOTE = (
     "contrast: what the weaker attempt did, and what the better one did "
     "instead. A lesson that describes only the better attempt is the generic "
     "kind nobody can act on."
+)
+
+#: Added when the criteria call found nothing to check -- a greeting, a
+#: thank-you, an acknowledgement.
+#:
+#: The prompt above is written for tasks: find out what is true, do the work,
+#: confirm it holds. Handed "hello, how are you?", an agent following it looks
+#: for work to do. Measured on a clean session, that was four model calls and
+#: 48 seconds to produce "I'm doing well, thank you!" -- the judge and the
+#: lesson were already being skipped by then, and this is the rest of the bill.
+#:
+#: Deliberately not a separate prompt or a separate path. One line, added only
+#: when the run has already established there is nothing to verify, so a task
+#: that merely looks chatty never sees it.
+CONVERSATION_NOTE = (
+    "There is nothing to check here -- this is conversation, not a task. "
+    "Answer it directly in your next reply with FINAL:, briefly and like a "
+    "person. Do not use a tool, do not look anything up, and do not go "
+    "looking for work to do."
 )
 
 #: The whole agent, in one prompt.
@@ -1320,6 +1342,7 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
         f"TASK:\n{task_text}",
         _lessons_block(task_text),
         _render_checklist(checklist),
+        CONVERSATION_NOTE if checklist == [] else "",
     ) if part)
 
     note = render_note()
@@ -2082,7 +2105,7 @@ def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
     return want, swaps + 1, False
 
 
-def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
+def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end__"]]:
     """The one working node. Everything the four specialists did, in one
     conversation that is never thrown away.
 
@@ -2192,6 +2215,24 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
         "final": "otto has an answer",
         "dead": "otto could not produce a usable reply and is handing over what it has",
     }[why]
+    if not checklist and why == "final":
+        # Nothing to verify, so nothing downstream runs.
+        #
+        # The criteria call is the first thing a turn does, and an empty
+        # checklist is it saying there was no task in the message. Running the
+        # rest anyway is how "thanks, that's helpful" cost 22 model calls and
+        # 263 seconds: the judge measured a chatty reply against criteria that
+        # did not exist, rejected it, and the loop retried twice. The answer it
+        # finally produced was "1|Problem to solve|No problem to solve".
+        #
+        # Only on a clean `final`. A run that died or ran out still goes to the
+        # evaluator, because "no criteria" and "no answer" are different
+        # problems and only one of them is a conversation.
+        return Command(
+            update=carry(node="agent", output=output, final_output=output,
+                         feedback="", board=["otto answered"]),
+            goto=END,
+        )
     return Command(
         update=carry(node="agent", output=output, feedback="", board=[board]),
         goto="evaluator",
