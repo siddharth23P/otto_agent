@@ -1443,6 +1443,29 @@ TOOL_TIERS: dict[str, str] = {
     "recall_memory": READ_ONLY,
 }
 
+#: Tools whose output is content Otto did not write and the user did not say.
+#:
+#: A web page, a search result, a screenshot of somebody's UI, a chunk pulled
+#: out of a repository Otto was pointed at -- all of it arrives in the same
+#: `HumanMessage(f"TOOL RESULT:\n{...}")` envelope as the user's own task did.
+#: Framed identically, read identically: text inside a page saying "ignore
+#: your previous instructions" is sitting in the same role as the instruction
+#: it is trying to override.
+#:
+#: Marking it does not make the model immune. What it does is make the
+#: distinction available at all, at the point of delivery, which is the one
+#: place that knows it. The structural defences do not depend on this: the
+#: mutation gate is code and never reads tool output, and the rubric is
+#: written before any output is visible.
+#:
+#: Every ExtraTool is third-party too -- those are supplied per run by a
+#: benchmark task file or a caller, so their output has the same provenance
+#: as a web page. They are not listed here because they are not known here;
+#: nodes.py adds them by asking current_extra_tools().
+THIRD_PARTY: frozenset[str] = frozenset({
+    "browse", "browse_act", "web_search", "rag", "look",
+})
+
 #: What each tool needs bound before it can do anything at all.
 #:
 #: Declared beside TOOL_TIERS and for the same reason: a fact about a tool
