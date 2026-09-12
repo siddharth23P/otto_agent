@@ -1688,6 +1688,48 @@ def _keep_evicted(text: str) -> bool:
     return True
 
 
+#: Asked when a run has spent its budget without producing an answer.
+#:
+#: The run-level budget already tells the loop to wrap up at 80% -- see
+#: agent/pipeline/budget.py's WRAP_UP_NOTE -- and this is what happens when
+#: that did not take. Deliberately blunt, and deliberately not asking for more
+#: work: the one thing left worth doing is writing down what is already known.
+OUT_OF_BUDGET_NOTE = (
+    "You are out of budget and this is your last reply. Do not call another "
+    "tool. Answer now with FINAL: and the best answer you can give from what "
+    "you already have -- partial is fine, and say what is uncertain. An "
+    "incomplete answer somebody can read beats no answer at all."
+)
+
+
+def _answer_from_what_is_here(llm, messages: list) -> str:
+    """One last call, to turn a spent run into a readable answer.
+
+    Costs one model call on exactly the runs that were going to report
+    nothing, which is the cheapest possible place to spend one. Failures here
+    return "" -- the same nothing the caller already had -- so this can never
+    make the outcome worse than it was.
+    """
+    try:
+        reply = _call(llm, [*messages, HumanMessage(OUT_OF_BUDGET_NOTE)])
+    except Exception as exc:  # noqa: BLE001 -- a spent run must not also raise
+        logger.info("could not salvage an answer from a spent run: %s", exc)
+        return ""
+    kind, _, body = _parse_worker_reply(reply)
+    if kind == "final":
+        return _strip_code_fence(body)
+    if kind == "action":
+        # A TOOL CALL IS NOT AN ANSWER. Returning the raw reply here would put
+        # "ACTION: execute_bash\nCODE:\n..." in front of the person as the
+        # result of their run -- the ACTION-protocol leak this loop has a rule
+        # against, reintroduced by the one path that exists to salvage
+        # something. It asked for an answer and got another tool call, so
+        # there is no answer, and "" is the honest report.
+        return ""
+    # Prose that simply forgot the marker is still an answer somebody can read.
+    return reply.strip()
+
+
 def _transcript_size(messages: list) -> int:
     return sum(len(_content_text(m.content)) for m in messages)
 
@@ -1737,6 +1779,18 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
 
         if budget is not None:
             if budget.spent():
+                # Out of budget with nothing to show is the worst outcome
+                # available, and until now it was a common one: the loop
+                # returned "" and the run reported nothing at all. One more
+                # call buys an answer from what it already has.
+                #
+                # This is the half that was missing under per-turn rationing.
+                # Dividing a budget across turns turned one mediocre answer
+                # into nine empty ones precisely because a stretch that ran
+                # out ended with nothing; nothing can be rationed into a loop
+                # that fails this way.
+                if not output:
+                    output = _answer_from_what_is_here(llm, messages)
                 return output, "budget", mode
             note = budget.wrap_up_once()
             if note:

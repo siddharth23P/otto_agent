@@ -266,7 +266,10 @@ def test_a_spent_budget_ends_the_run_rather_than_handing_on(monkeypatch):
         result = pn.agent(_state())
 
     assert result.goto == END
-    assert result.update["model_calls"] == 3
+    # Four, not three: a run that spent its budget without producing an answer
+    # now pays one more call to write down what it has, because reporting
+    # nothing is the worst outcome available. See OUT_OF_BUDGET_NOTE.
+    assert result.update["model_calls"] == 4
     assert "final_output" in result.update
 
 
@@ -1252,3 +1255,70 @@ def test_the_loop_settles_the_checklist_as_it_goes():
 
     source = inspect.getsource(pn._agent_loop)
     assert "_note_evidence(checklist, actions)" in source
+
+
+# --------------------------------------------------------------------------
+# A spent run answers with what it has
+# --------------------------------------------------------------------------
+
+def test_a_run_that_runs_out_still_produces_an_answer(monkeypatch):
+    """Out of budget with nothing to show is the worst outcome available, and
+    it used to be a common one: the loop returned "" and the run reported
+    nothing. One more call buys an answer from what it already has."""
+    fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 3
+                     + ["FINAL:\npartial, but here is what I found"])
+    _install(monkeypatch, fake)
+
+    with bind_budget(Budget(max_model_calls=3)):
+        result = pn.agent(_state())
+
+    assert result.update["final_output"] == "partial, but here is what I found"
+
+
+def test_the_salvage_never_hands_back_a_tool_call_as_the_answer():
+    """Returning the raw reply would put "ACTION: execute_bash..." in front of
+    the person as the result of their run -- the ACTION-protocol leak this
+    loop has a rule against, reintroduced by the one path that exists to
+    salvage something."""
+    class _Action:
+        def stream(self, messages):
+            from langchain_core.messages import AIMessageChunk
+            yield AIMessageChunk(content="ACTION: execute_bash\nCODE:\nls")
+
+    assert pn._answer_from_what_is_here(_Action(), []) == ""
+
+
+def test_prose_that_forgot_the_marker_is_still_an_answer():
+    class _Prose:
+        def stream(self, messages):
+            from langchain_core.messages import AIMessageChunk
+            yield AIMessageChunk(content="I found three files and two of them parse.")
+
+    answer = pn._answer_from_what_is_here(_Prose(), [])
+
+    assert "three files" in answer
+
+
+def test_a_failure_while_salvaging_leaves_the_run_no_worse():
+    """It returns the same nothing the caller already had, so this path can
+    never make the outcome worse than it was."""
+    class _Broken:
+        def stream(self, messages):
+            raise RuntimeError("provider down")
+
+    assert pn._answer_from_what_is_here(_Broken(), []) == ""
+
+
+def test_a_run_that_already_answered_pays_nothing_extra(monkeypatch):
+    """The salvage fires only when there is no answer. A run that finished
+    normally must not be charged for it."""
+    fake = _Scripted(["FINAL:\nthe answer"])
+    _install(monkeypatch, fake)
+
+    with bind_budget(Budget(max_model_calls=20)):
+        result = pn.agent(_state())
+
+    # Goes to the judge with an answer in hand, rather than ending on a
+    # salvage -- `output`, not `final_output`, which the evaluator sets.
+    assert result.update["output"] == "the answer"
+    assert result.update["model_calls"] <= 3
