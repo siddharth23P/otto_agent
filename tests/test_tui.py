@@ -265,6 +265,18 @@ def _texts(app) -> list[str]:
             for c in (w.content for w in app.query("#transcript > Static"))]
 
 
+def _panel_text(app) -> str:
+    """The token panel's Rich table, rendered to plain text so a test can read
+    what a person would see rather than the dict behind it."""
+    import io
+
+    from rich.console import Console
+
+    buf = io.StringIO()
+    Console(file=buf, width=32, force_terminal=False).print(app.usage_panel.content)
+    return buf.getvalue()
+
+
 @_async_test
 async def test_a_second_enter_mid_turn_starts_no_second_run(monkeypatch, tmp_path):
     """The reported symptom: the same message posted twice, and an older
@@ -527,3 +539,178 @@ async def test_scoring_does_not_block_the_ui_thread(monkeypatch, tmp_path):
         {"name": "user_feedback", "value": 1.0, "data_type": "NUMERIC",
          "trace_id": "trace-abc", "comment": "good"}
     ]
+
+
+# --------------------------------------------------------------------------
+# The token panel (agent/pipeline/usage.py, UsagePanel). The ledger is the
+# APP's, handed to every turn and every resume as an argument -- the worker
+# thread that consumes the stream cannot see a contextvar the UI thread set,
+# which is the same trap the workspace test above exists for.
+# --------------------------------------------------------------------------
+
+@_async_test
+async def test_the_apps_ledger_is_the_one_the_pipeline_records_into(monkeypatch, tmp_path):
+    passed: list = []
+
+    def fake_stream(text, **kwargs):
+        passed.append(kwargs.get("usage"))
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        assert passed == [app.usage]
+
+
+@_async_test
+async def test_the_panel_shows_what_a_turn_spent(monkeypatch, tmp_path):
+    def fake_stream(text, **kwargs):
+        # Stand in for _call, which is what records in a real run.
+        kwargs["usage"].record("us.anthropic.claude-sonnet-4-20250514-v1:0",
+                               {"input_tokens": 41000, "output_tokens": 1200})
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        assert "nothing yet" in _panel_text(app)
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+
+        shown = _panel_text(app)
+        assert "claude-sonnet-4" in shown, "the model that answered is named"
+        assert "42.2k" in shown, "its tokens are totalled"
+
+
+@_async_test
+async def test_the_panel_is_cumulative_across_turns(monkeypatch, tmp_path):
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("m", {"input_tokens": 1000, "output_tokens": 0})
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        for _ in range(3):
+            app.message_box.value = "again"
+            await pilot.press("enter")
+            await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+
+        assert app.usage.calls == 3
+        assert app.usage.total_tokens == 3000
+
+
+@_async_test
+async def test_a_model_that_reports_no_tokens_is_not_shown_as_zero(monkeypatch, tmp_path):
+    # "said nothing" and "cost nothing" have to look different, or the panel
+    # quietly lies about any provider that does not report usage.
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("quiet-model", None)
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+
+        shown = _panel_text(app)
+        assert "quiet-model" in shown
+        assert "--" in shown
+
+
+@_async_test
+async def test_the_panel_can_be_hidden_to_give_the_transcript_its_columns(monkeypatch, tmp_path):
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("x")]))
+    async with app.run_test() as pilot:
+        assert app.usage_panel.display
+        await pilot.press("ctrl+t")
+        assert not app.usage_panel.display
+        await pilot.press("ctrl+t")
+        assert app.usage_panel.display
+
+
+@_async_test
+async def test_a_new_session_starts_the_panel_at_nothing(monkeypatch, tmp_path):
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("m", {"input_tokens": 500, "output_tokens": 5})
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        assert app.usage.total_tokens == 505
+
+        app.action_new_session()
+        await _until(pilot, lambda: not app._turn_running, "the reset to finish")
+        await pilot.pause()
+
+        assert app.usage.total_tokens == 0
+        assert "nothing yet" in _panel_text(app)
+
+
+@_async_test
+async def test_the_panel_shows_what_a_turn_cost(monkeypatch, tmp_path):
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("gpt-5-mini",
+                               {"input_tokens": 1_000_000, "output_tokens": 0})
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+
+        shown = _panel_text(app)
+        assert "$0.25" in shown, "1M input tokens at that model's own rate"
+        # A cost with no date on it invites more trust than a static rate
+        # table can earn (agent/pipeline/pricing.py).
+        assert "est. at" in shown
+
+
+@_async_test
+async def test_an_unpriced_model_makes_the_total_say_it_is_short(monkeypatch, tmp_path):
+    # Not the same as showing a smaller number and hoping. A total missing
+    # somebody's share has to be readable as a floor.
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("gpt-5-mini", {"input_tokens": 1000, "output_tokens": 10})
+        kwargs["usage"].record("mercury-2.5", {"input_tokens": 9000, "output_tokens": 500})
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+
+        shown = _panel_text(app)
+        assert "unpriced" in shown
+        assert "mercury-2.5" in shown  # still listed, with its tokens
+
+
+@_async_test
+async def test_cached_tokens_are_shown_only_when_there_are_some(monkeypatch, tmp_path):
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("claude-haiku-4-5", {
+            "input_tokens": 100_000, "output_tokens": 500,
+            "input_token_details": {"cache_read": 90_000},
+        })
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        assert "cached" not in _panel_text(app)
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+
+        assert "cached 90.0k" in _panel_text(app)

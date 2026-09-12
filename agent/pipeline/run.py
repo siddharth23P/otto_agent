@@ -110,6 +110,7 @@ from agent.pipeline.budget import bind_budget, current_budget, default_budget
 from agent.memory.store import MemoryStore
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
 from agent.pipeline.state import AgentState
+from agent.pipeline.usage import UsageLedger, bind_usage, current_usage
 from agent.pipeline.workspace import bind_workspace
 
 logger = logging.getLogger(__name__)
@@ -318,6 +319,7 @@ def _graph_thread_id(session_id: str) -> str:
 def run_pipeline(
     text: str, *, session_id: str, history: Sequence[BaseMessage] = (),
     memory_context: str = "", workspace: str | None = None,
+    usage: UsageLedger | None = None,
 ) -> AgentState:
     """Prewarm, invoke, score, return the finished AgentState.
 
@@ -345,8 +347,9 @@ def run_pipeline(
     # spend without limit. `current_budget() or default_budget()` keeps a
     # harness's own budget when there is one.
     budget = current_budget() or default_budget()
+    ledger = usage or current_usage() or UsageLedger()
 
-    with bind_budget(budget), bind_store(store), _workspace_binding(workspace):
+    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -381,6 +384,7 @@ def run_pipeline(
 def run_pipeline_stream(
     text: str, *, session_id: str, history: Sequence[BaseMessage] = (),
     memory_context: str = "", workspace: str | None = None,
+    usage: UsageLedger | None = None,
 ):
     """Same prewarm, tracing and scoring as run_pipeline(), but yields each
     graph update as it happens (`stream_mode="updates"`) instead of
@@ -418,7 +422,11 @@ def run_pipeline_stream(
     # harness's own budget when there is one.
     budget = current_budget() or default_budget()
 
-    with bind_budget(budget), bind_store(store), _workspace_binding(workspace):
+    # The caller's ledger when it has one (the TUI keeps one per SESSION,
+    # so its panel is cumulative across turns and resumes), otherwise a
+    # throwaway -- agent/pipeline/usage.py.
+    ledger = usage or current_usage() or UsageLedger()
+    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -443,6 +451,7 @@ def run_pipeline_stream(
 
 def resume_pipeline_stream(
     answer, *, thread_id: str, session_id: str, workspace: str | None = None,
+    usage: UsageLedger | None = None,
 ):
     """Continue a run that paused on an `{"__ask__": ...}` event (either
     run_pipeline_stream()'s or a previous resume_pipeline_stream()'s) --
@@ -473,7 +482,11 @@ def resume_pipeline_stream(
     # harness's own budget when there is one.
     budget = current_budget() or default_budget()
 
-    with bind_budget(budget), bind_store(store), _workspace_binding(workspace):
+    # The caller's ledger when it has one (the TUI keeps one per SESSION,
+    # so its panel is cumulative across turns and resumes), otherwise a
+    # throwaway -- agent/pipeline/usage.py.
+    ledger = usage or current_usage() or UsageLedger()
+    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,

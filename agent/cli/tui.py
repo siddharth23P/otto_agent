@@ -160,9 +160,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from rich.console import RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.console import Group
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Collapsible, Footer, Header, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
@@ -175,6 +177,8 @@ from agent.cli.shell import (
 )
 from agent.cli.ui import THEME
 from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
+from agent.pipeline.pricing import PRICES_AS_OF, format_cost
+from agent.pipeline.usage import UsageLedger
 from agent.router.mapping import Task
 from agent.router.router import NoViableRoute
 
@@ -319,14 +323,158 @@ class AskUserModal(ModalScreen[str]):
 # The app
 # --------------------------------------------------------------------------
 
+def _thousands(n: int) -> str:
+    """1234567 -> "1.23M". A token count is read for its ORDER, and a panel 28
+    columns wide has no room for the digits that do not change the reading."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+#: Dot-separated segments that are routing, not identity. Named explicitly
+#: rather than matched by shape: a rule like "drop everything before the last
+#: dot" reads "gemini-2.5-flash" as "5-flash", which is how this was first
+#: written and what its test caught.
+_ID_PREFIXES = frozenset((
+    "us", "eu", "apac", "global",
+    "anthropic", "openai", "google", "meta", "mistral", "cohere",
+    "amazon", "bedrock", "azure", "inception",
+))
+
+
+def _short_model(name: str) -> str:
+    """The part of a model id a person reads.
+
+    Vendor ids carry a region, a vendor, and a date stamp that are identical
+    on every row of a 34-column panel -- width spent distinguishing nothing.
+    "us.anthropic.claude-sonnet-4-20250514-v1:0" is "claude-sonnet-4" to
+    anybody looking at this.
+    """
+    tail = str(name or "").split("/")[-1]
+    segments = tail.split(".")
+    while len(segments) > 1 and segments[0].lower() in _ID_PREFIXES:
+        segments.pop(0)
+    tail = ".".join(segments)
+
+    parts = tail.split("-")
+    while len(parts) > 2 and (
+        (parts[-1].isdigit() and len(parts[-1]) >= 6)          # a date stamp
+        or (parts[-1].startswith("v") and parts[-1][1:].isdigit())
+        or parts[-1].endswith(":0")                            # a bedrock suffix
+    ):
+        parts.pop()
+    return "-".join(parts) or tail or "unknown"
+
+
+class UsagePanel(Static):
+    """What this session has spent, per model, down the right-hand side.
+
+    Reads a `UsageLedger` (agent/pipeline/usage.py) the app owns and hands to
+    every turn, so it is cumulative across turns and across an ask_user pause
+    without anything here having to add snapshots up.
+
+    A Static holding a Rich Table rather than a DataTable: nothing here is
+    selectable, sortable or scrollable, and Static sizes to its renderable
+    instead of reserving rows it has not got (the same reasoning as the module
+    docstring's Static-vs-RichLog note).
+    """
+
+    # Height fixed to the row rather than `auto`. Textual measures an auto
+    # height by asking the renderable for one, and a Rich renderable inside a
+    # Static has no `get_height` -- which fails as an AttributeError deep in
+    # the compositor rather than as a layout warning.
+    DEFAULT_CSS = """
+    UsagePanel { width: 34; height: 1fr; padding: 0 1; border: round $panel-lighten-2; }
+    """
+
+    def __init__(self, ledger: UsageLedger) -> None:
+        super().__init__(id="usage")
+        self._ledger = ledger
+
+    def on_mount(self) -> None:
+        # The widget's OWN border carries the title -- a Rich Panel inside it
+        # would be a second frame drawn inside the first.
+        self.border_title = "tokens"
+        self.refresh_usage()
+
+    def refresh_usage(self) -> None:
+        """Redraw from the ledger. UI thread only -- a worker goes through
+        `call_from_thread`, like everything else that touches the tree."""
+        self.update(self._table())
+
+    # NOT `_render`. `Widget._render` is Textual's own internal hook and it
+    # returns a Visual; overriding it with a Rich renderable makes the
+    # compositor call `render_strips` on a Rich object, which fails several
+    # frames deep with no hint that a name was shadowed.
+    def _table(self) -> RenderableType:
+        snap = self._ledger.snapshot()
+        if not snap["models"]:
+            # Text, not a markup string: Static.update() with a bare str is
+            # handed on as a Visual and fails in the compositor on this
+            # Textual version. Everything else this returns is Rich.
+            return Text("nothing yet", style="dim")
+
+        # ONE left-aligned column, not a table. Four facts per model -- id,
+        # requests, tokens, dollars -- do not fit across the ~30 usable
+        # columns this panel has, and a Table.grid makes it worse rather than
+        # better: the model id sets the first column's width, so every number
+        # beside it truncates into uselessness ("225.…", "$0.0"). Tried both.
+        # Stacking the facts under the name needs no column agreement at all.
+        lines: list[RenderableType] = []
+        for row in snap["models"]:
+            # "--", not "0". A model that reported no usage, or that nothing
+            # has a rate for, has to look different from one that genuinely
+            # cost nothing -- usage.py's `reported`, pricing.py's absences.
+            tokens = _thousands(row["total_tokens"]) if row["reported"] else "--"
+            cost = format_cost(row["cost"])
+            lines.append(Text(_short_model(row["model"]), style="bold"))
+            lines.append(Text(f"  {row['calls']} req · {tokens} · {cost}", style="dim"))
+
+        lines.append(Text(""))
+        total = Text(f"total {snap['calls']} req · ", style="bold")
+        total.append(_thousands(snap["total_tokens"]), style="bold")
+        lines.append(total)
+
+        # A total missing somebody's share says so, rather than presenting a
+        # short number as the whole bill.
+        money = Text(format_cost(snap["cost"]), style="bold")
+        if not snap["fully_priced"]:
+            money.append("+", style="bold yellow")
+            money.append("  some models unpriced", style="yellow dim")
+        lines.append(money)
+
+        lines.append(Text(
+            f"in {_thousands(snap['input_tokens'])} · "
+            f"out {_thousands(snap['output_tokens'])}", style="dim"))
+        if snap["cached_input_tokens"]:
+            # Only when there is some. On a vendor with no prompt caching this
+            # would be a permanent zero taking up a line.
+            lines.append(Text(
+                f"cached {_thousands(snap['cached_input_tokens'])}", style="dim"))
+
+        # The date is not decoration. These are list prices read off a page on
+        # one day and never re-checked (agent/pipeline/pricing.py), and a cost
+        # with no date on it invites more trust than this can earn.
+        lines.append(Text(f"est. at {PRICES_AS_OF} rates", style="dim"))
+        return Group(*lines)
+
+
 class OttoApp(App):
     TITLE = "otto"
     BINDINGS = [
         ("ctrl+n", "new_session", "New session"),
         ("ctrl+y", "copy_last", "Copy last answer"),
+        # The panel is 34 columns that the transcript does not get. Worth it
+        # while you are watching spend, not worth it on an 80-column terminal
+        # reading a long answer -- so it is a toggle rather than a decision
+        # made once for everybody.
+        ("ctrl+t", "toggle_usage", "Tokens"),
     ]
     DEFAULT_CSS = """
-    #transcript { height: 1fr; }
+    #body { height: 1fr; }
+    #transcript { width: 1fr; height: 1fr; }
     #transcript Collapsible { padding: 0; }
     .thinking-log { height: auto; max-height: 16; }
     """
@@ -354,10 +502,19 @@ class OttoApp(App):
         #: there is no window between the check and the set for a second
         #: Enter to slip through.
         self._turn_running = False
+        #: One ledger for the SESSION, handed to every turn and every resume
+        #: (agent/pipeline/usage.py), so the panel is cumulative by
+        #: construction rather than by adding per-turn snapshots up. Cleared
+        #: with the session by `action_new_session`.
+        self.usage = UsageLedger()
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield VerticalScroll(id="transcript")
+        # The transcript keeps `id="transcript"` and everything that queries
+        # for it is unchanged -- this only puts a sibling beside it.
+        with Horizontal(id="body"):
+            yield VerticalScroll(id="transcript")
+            yield UsagePanel(self.usage)
         yield Input(placeholder=self.IDLE_PLACEHOLDER, id="message-input")
         yield Footer()
 
@@ -378,6 +535,16 @@ class OttoApp(App):
         # tool refuses: which directory otto is pointed at decides what every
         # answer this session can possibly be.
         self._post(f"[dim]{describe_workspace(self.session.workspace)}[/]")
+
+    @property
+    def usage_panel(self) -> "UsagePanel":
+        return self.query_one("#usage", UsagePanel)
+
+    def _refresh_usage(self) -> None:
+        """UI-thread redraw of the token panel. The worker calls this through
+        `call_from_thread` after each graph update, which is often enough to
+        watch a turn spend and rare enough to cost nothing."""
+        self.usage_panel.refresh_usage()
 
     @property
     def transcript(self) -> VerticalScroll:
@@ -478,6 +645,8 @@ class OttoApp(App):
         yield SystemCommand("Copy last answer", "Copy the raw final answer to your clipboard", self.action_copy_last)
         yield SystemCommand("Workspace…", "Show or change the directory otto may read and write", self.action_workspace)
         yield SystemCommand("New session", "Clear history, start fresh", self.action_new_session)
+        yield SystemCommand("Toggle tokens", "Show or hide the token usage panel",
+                            self.action_toggle_usage)
 
     # ---- actions behind those commands --------------------------------
 
@@ -593,6 +762,10 @@ class OttoApp(App):
 
         self.push_screen(WorkspacePrompt(self.session.workspace), done)
 
+    def action_toggle_usage(self) -> None:
+        panel = self.usage_panel
+        panel.display = not panel.display
+
     def action_new_session(self) -> None:
         if self._turn_running:
             # Resetting mid-turn would swap the session (and its memory
@@ -610,6 +783,11 @@ class OttoApp(App):
         try:
             self.session.reset()
             self._last_output = None
+            # The panel says "this session", so a new session starts it at
+            # nothing. Cleared in place rather than rebound: the widget holds
+            # the same object the turns record into.
+            self.usage.by_model.clear()
+            self.call_from_thread(self._refresh_usage)
             self.call_from_thread(self._post, "[dim]new session[/]")
         finally:
             self.call_from_thread(self._set_busy, False)
@@ -665,6 +843,7 @@ class OttoApp(App):
             stream = run_pipeline_stream(
                 text, session_id=self.session.session_id, history=history,
                 memory_context=memory_context, workspace=self.session.workspace_arg(),
+                usage=self.usage,
             )
             while stream is not None:
                 next_stream = None
@@ -688,6 +867,7 @@ class OttoApp(App):
                             answer, thread_id=ask["thread_id"],
                             session_id=self.session.session_id,
                             workspace=self.session.workspace_arg(),
+                            usage=self.usage,
                         )
                         break
                     if "__final__" in update:
@@ -712,14 +892,20 @@ class OttoApp(App):
                     node, delta = next(iter(update.items()))
                     steps += 1
                     self.call_from_thread(render_update, node, delta, tally, thinking_log.write)
+                    self.call_from_thread(self._refresh_usage)
                 stream = next_stream
         except Exception as exc:  # a provider error mid-turn must not crash the app
             self.call_from_thread(self._post, f"[red]{type(exc).__name__}: {exc}[/]")
         finally:
-            # Both in one finally: a turn that died on a provider error still
-            # has to hand the session back, or the message box stays disabled
-            # and the app looks hung for the rest of its life.
+            # All three in one finally: a turn that died on a provider error
+            # still has to hand the session back, or the message box stays
+            # disabled and the app looks hung for the rest of its life -- and
+            # it still spent tokens getting there. The per-update refresh
+            # above is what makes the panel move DURING a turn; this is what
+            # makes it right at the end of one, including a turn whose only
+            # event was its own answer.
             self.call_from_thread(self._close_thinking, block, steps)
+            self.call_from_thread(self._refresh_usage)
             self.call_from_thread(self._set_busy, False)
 
 
