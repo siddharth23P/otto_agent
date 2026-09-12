@@ -23,6 +23,7 @@ import typer
 from typing_extensions import Annotated
 
 from agent.cli.ui import err, out
+from agent.eval import failures
 from agent.memory.lessons import bind_bank, read_only
 from agent.memory.store import MemoryStore
 from agent.router.outcomes import bind_log
@@ -93,6 +94,18 @@ def _summary(outcomes: list, claw=None) -> dict:
     #: to anything. Carried in the JSON as well as printed, because the JSON is
     #: what gets pasted into a comparison months later.
     summary["is_evidence"] = summary["trials"] >= MIN_TRIALS_FOR_EVIDENCE
+
+    # What KIND of failure, and what the tools cost -- agent/eval/failures.py,
+    # read off the action lines every run already produced, with no model
+    # call. A score says something got worse; "38% of the failures changed no
+    # files at all" says where to look.
+    failed = {o.task_id: getattr(o, "actions", None)
+              for o in scored if not o.passed}
+    if failed:
+        summary["failures"] = failures.summarise(failed)
+    summary["tool_cost"] = failures.total_tool_cost(
+        getattr(o, "actions", None) for o in scored
+    ).to_dict()
 
     repeated = [o for o in scored if len(o.trials) > 1]
     if repeated and claw is not None:
@@ -369,6 +382,30 @@ def _print_summary(report: dict, out_dir: Path, split: str) -> None:
             f"pass@{k} {s['mean_pass_at_k']:.3f}  "
             f"mean spread {s['score_spread']:.3f}"
         )
+    kinds = (s.get("failures") or {}).get("failures_by_kind") or {}
+    if kinds:
+        total_failed = s.get("tasks", 0) - s.get("passed", 0)
+        out.print(
+            "failures by kind: "
+            + "  ".join(f"{kind} {count}" for kind, count in kinds.items())
+            + f"  (of {total_failed} failed)"
+        )
+    cost = s.get("tool_cost") or {}
+    if cost.get("calls"):
+        # Per SEAT is the half that answers the question: Otto routes across
+        # four vendors and several capability tiers, and model strength is
+        # what decides whether an agent manages a seventeen-tool menu at all.
+        busiest = "  ".join(f"{tool} {n}" for tool, n in
+                            list(cost["by_tool"].items())[:5])
+        out.print(
+            f"tools: {cost['calls']} calls, {cost['failures']} failed  |  "
+            f"busiest: {busiest}"
+        )
+        out.print(
+            "per seat: "
+            + "  ".join(f"{seat} {n}" for seat, n in cost["by_seat"].items())
+        )
+
     grading = report["grading"]
     out.print(
         f"grading: {grading['otto_grading_path']} / claw {grading['claw_eval_revision'] or '?'} "
