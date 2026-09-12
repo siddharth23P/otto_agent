@@ -775,7 +775,12 @@ def list_files(body: str) -> ToolResult:
     for path in sorted(root.rglob("*")):
         if any(part in _LISTING_SKIP for part in path.relative_to(root).parts):
             continue
-        entries.append(str(path.relative_to(base)) + ("/" if path.is_dir() else ""))
+        # `as_posix`, not `str`: the remote branch above lists through `find`
+        # and always returns forward slashes, so a local listing on Windows
+        # would describe the same tree in a different vocabulary from the
+        # containerised one -- and the agent types these paths back into
+        # read_file and edit_file.
+        entries.append(path.relative_to(base).as_posix() + ("/" if path.is_dir() else ""))
         if len(entries) > _MAX_LIST_ENTRIES:
             entries.append(f"... (truncated at {_MAX_LIST_ENTRIES} entries)")
             break

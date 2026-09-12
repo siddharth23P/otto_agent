@@ -123,7 +123,12 @@ class _Walker(ast.NodeVisitor):
 
 
 def index_file(path: Path, root: Path) -> FileIndex:
-    relative = str(path.relative_to(root))
+    # Forward slashes on every platform. A path here is an identifier the
+    # model reads and types back -- `outline agent/pipeline/nodes.py` -- and
+    # it is compared against import paths and test node ids, both of which are
+    # POSIX by construction. Handing back a backslash on Windows makes the
+    # same file two different keys depending on the machine.
+    relative = path.relative_to(root).as_posix()
     index = FileIndex(path=relative)
     try:
         source = path.read_text(encoding="utf-8", errors="replace")
