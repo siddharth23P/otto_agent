@@ -375,6 +375,109 @@ async def test_a_failing_turn_still_hands_the_session_back(monkeypatch, tmp_path
 
 
 @_async_test
+async def test_the_workspace_reaches_the_pipeline_and_the_screen(monkeypatch, tmp_path):
+    """A session's workspace has to arrive as run_pipeline_stream's own
+    argument, not as a contextvar the CLI thread set -- the worker thread that
+    consumes the stream cannot see that one."""
+    passed: list = []
+
+    def fake_stream(text, **kwargs):
+        passed.append(kwargs.get("workspace"))
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    app.session.workspace = tmp_path
+    async with app.run_test() as pilot:
+        assert any(str(tmp_path) in t for t in _texts(app)), "say it up front"
+        app.message_box.value = "fix the tests"
+        await pilot.press("enter")
+        for _ in range(60):
+            await pilot.pause()
+            if not app._turn_running:
+                break
+        assert passed == [str(tmp_path)]
+
+
+@_async_test
+async def test_changing_the_workspace_is_refused_mid_turn(monkeypatch, tmp_path):
+    """A running turn already handed its workspace to the pipeline, so a
+    change now would take effect next turn while appearing to take effect on
+    this one."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_stream(text, **kwargs):
+        started.set()
+        release.wait(5)
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    app.session.workspace = tmp_path
+    async with app.run_test() as pilot:
+        app.message_box.value = "go"
+        await pilot.press("enter")
+        await asyncio.to_thread(started.wait, 5)
+        await pilot.pause()
+
+        app.action_workspace()
+        await pilot.pause()
+        assert not isinstance(app.screen, tui_mod.WorkspacePrompt)
+        assert any("a turn is still running" in t for t in _texts(app))
+        assert app.session.workspace == tmp_path
+
+        release.set()
+        for _ in range(40):
+            await pilot.pause()
+            if not app._turn_running:
+                break
+
+
+@_async_test
+async def test_the_workspace_prompt_opens_and_closes_file_access(monkeypatch, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    app.session.workspace = tmp_path
+    async with app.run_test() as pilot:
+        app.action_workspace()
+        await pilot.pause()
+        assert isinstance(app.screen, tui_mod.WorkspacePrompt)
+        # Pre-filled with the current root, so "one level over" is an edit.
+        assert app.screen.query_one(Input).value == str(tmp_path)
+        app.screen.query_one(Input).value = str(other)
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+        assert app.session.workspace == other.resolve()
+
+        app.action_workspace()
+        await pilot.pause()
+        app.screen.query_one(Input).value = "off"
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+        assert app.session.workspace is None
+        assert any("file tools are off" in t for t in _texts(app))
+
+
+@_async_test
+async def test_a_bad_workspace_path_is_reported_and_changes_nothing(monkeypatch, tmp_path):
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    app.session.workspace = tmp_path
+    async with app.run_test() as pilot:
+        app.action_workspace()
+        await pilot.pause()
+        app.screen.query_one(Input).value = str(tmp_path / "projcts")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+        assert app.session.workspace == tmp_path
+        assert any("does not exist" in t for t in _texts(app))
+        assert not (tmp_path / "projcts").exists()
+
+
+@_async_test
 async def test_scoring_does_not_block_the_ui_thread(monkeypatch, tmp_path):
     """create_score/flush are Langfuse network calls; on the event loop they
     freeze the app. The score must be posted from a worker, against the

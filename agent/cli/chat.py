@@ -32,6 +32,8 @@ touches history at all.
 """
 
 from collections import Counter
+from pathlib import Path
+from typing import Annotated, Optional
 
 import typer
 from langchain_core.messages import AIMessage, HumanMessage
@@ -39,7 +41,10 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from agent.cli.output import save_final
-from agent.cli.shell import Session, build_prompt_session, dispatch, render_update
+from agent.cli.shell import (
+    Session, build_prompt_session, describe_workspace, dispatch, render_update,
+    resolve_workspace,
+)
 from agent.cli.ui import err, out
 from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
 from agent.pipeline.state import AgentState
@@ -82,6 +87,7 @@ def _run_turn(s: Session, text: str, prompt_session) -> None:
 
     stream = run_pipeline_stream(
         text, session_id=s.session_id, history=history, memory_context=memory_context,
+        workspace=s.workspace_arg(),
     )
     while stream is not None:
         next_stream = None
@@ -90,8 +96,16 @@ def _run_turn(s: Session, text: str, prompt_session) -> None:
                 ask = update["__ask__"]
                 answer = _ask_user(prompt_session, ask["question"], ask["choices"])
                 out.print(f"[bold]you[/] {answer}")
+                # Breaking out leaves this generator suspended at its yield,
+                # INSIDE bind_budget/bind_store/bind_workspace, so their
+                # contextvar tokens are reset whenever the GC happens to get
+                # to it -- from whatever context is running then, which is not
+                # the one that set them. close() unwinds it here, now, on this
+                # thread, which is the only place the resets are valid.
+                stream.close()
                 next_stream = resume_pipeline_stream(
                     answer, thread_id=ask["thread_id"], session_id=s.session_id,
+                    workspace=s.workspace_arg(),
                 )
                 break
             if "__final__" in update:
@@ -117,10 +131,22 @@ def _run_turn(s: Session, text: str, prompt_session) -> None:
             err.print(f"[muted]saved to {path}[/]")
 
 
-def chat(ctx: typer.Context) -> None:
+WORKSPACE_HELP = (
+    "Directory otto's file tools may read and write. Defaults to the current "
+    "directory. See agent/pipeline/workspace.py for what this grants."
+)
+NO_WORKSPACE_HELP = "Give otto no file access at all. Wins over --workspace."
+
+
+def chat(
+    ctx: typer.Context,
+    workspace: Annotated[Optional[Path], typer.Option("--workspace", "-w", help=WORKSPACE_HELP)] = None,
+    no_workspace: Annotated[bool, typer.Option("--no-workspace", help=NO_WORKSPACE_HELP)] = False,
+) -> None:
     """Talk to the pipeline."""
-    s = Session(ctx=ctx.obj)
+    s = Session(ctx=ctx.obj, workspace=resolve_workspace(workspace, no_workspace))
     err.print("[muted]otto:pipeline[/]")
+    err.print(f"[muted]{describe_workspace(s.workspace)}[/]")
     err.print("[muted]/help for commands[/]")
 
     prompt_session = build_prompt_session()

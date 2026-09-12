@@ -77,10 +77,26 @@ up. Each half gets its own Langfuse observation rather than one span held
 open across however long a person takes to answer -- tagged the same way
 (session_id, "pipeline" in the tags) so both halves of one externally
 visible turn are still easy to find together.
+
+A `workspace` for every entry point (2026-09-12, design call: "we need
+filesystem management so we can use it to write code and work on already
+implemented codebases"). Binding a workspace was already possible and only
+agent/eval/'s harnesses did it, each wrapping its OWN `with
+bind_workspace(...)` around the call below. That worked for them and left
+`otto chat`/`otto tui` with no way to reach it, because a contextvar set on
+the CLI's thread is not visible inside a generator consumed on a Textual
+worker thread. So the binding moves in here, next to `bind_budget` and
+`bind_store`, which exist for exactly the same reason: a run-scoped fact the
+graph cannot be handed as an argument has to be bound where the graph actually
+runs. `workspace=None` is the old behaviour and stays the default, so the
+harnesses' own outer `bind_workspace` still wins for their calls (nesting
+unwinds correctly -- workspace.py's contract) and no single-turn caller
+changes.
 """
 import logging
 import uuid
 from collections.abc import Sequence
+from contextlib import nullcontext
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
@@ -94,6 +110,7 @@ from agent.pipeline.budget import bind_budget, current_budget, default_budget
 from agent.memory.store import MemoryStore
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
 from agent.pipeline.state import AgentState
+from agent.pipeline.workspace import bind_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +283,21 @@ def _stream_events(app_stream, graph_thread_id: str):
         yield (ask, True) if ask is not None else (payload, False)
 
 
+def _workspace_binding(workspace: str | None):
+    """`bind_workspace(workspace)`, or nothing at all when the caller named none.
+
+    Deliberately NOT `bind_workspace(None)`. That is an explicit "this run has
+    no workspace", and it sets the contextvar, which CLOBBERS an outer binding
+    -- exactly what agent/eval/'s harnesses depend on, each wrapping its own
+    `with bind_workspace(scratch)` around the call below and passing no
+    `workspace=` argument at all. Adding the parameter without this would have
+    silently taken file access away from both benchmark harnesses while every
+    test they have kept passing, because none of them asserts on the binding.
+    A test does now (tests/test_workspace_session.py), and it caught this.
+    """
+    return bind_workspace(workspace) if workspace is not None else nullcontext()
+
+
 def _graph_thread_id(session_id: str) -> str:
     """A fresh LangGraph checkpoint thread for THIS turn only.
 
@@ -280,7 +312,8 @@ def _graph_thread_id(session_id: str) -> str:
 
 
 def run_pipeline(
-    text: str, *, session_id: str, history: Sequence[BaseMessage] = (), memory_context: str = "",
+    text: str, *, session_id: str, history: Sequence[BaseMessage] = (),
+    memory_context: str = "", workspace: str | None = None,
 ) -> AgentState:
     """Prewarm, invoke, score, return the finished AgentState.
 
@@ -309,7 +342,7 @@ def run_pipeline(
     # harness's own budget when there is one.
     budget = current_budget() or default_budget()
 
-    with bind_budget(budget), bind_store(store):
+    with bind_budget(budget), bind_store(store), _workspace_binding(workspace):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -342,7 +375,8 @@ def run_pipeline(
 
 
 def run_pipeline_stream(
-    text: str, *, session_id: str, history: Sequence[BaseMessage] = (), memory_context: str = "",
+    text: str, *, session_id: str, history: Sequence[BaseMessage] = (),
+    memory_context: str = "", workspace: str | None = None,
 ):
     """Same prewarm, tracing and scoring as run_pipeline(), but yields each
     graph update as it happens (`stream_mode="updates"`) instead of
@@ -380,7 +414,7 @@ def run_pipeline_stream(
     # harness's own budget when there is one.
     budget = current_budget() or default_budget()
 
-    with bind_budget(budget), bind_store(store):
+    with bind_budget(budget), bind_store(store), _workspace_binding(workspace):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -403,7 +437,9 @@ def run_pipeline_stream(
     yield {"__final__": final, "__trace_id__": trace_id}
 
 
-def resume_pipeline_stream(answer, *, thread_id: str, session_id: str):
+def resume_pipeline_stream(
+    answer, *, thread_id: str, session_id: str, workspace: str | None = None,
+):
     """Continue a run that paused on an `{"__ask__": ...}` event (either
     run_pipeline_stream()'s or a previous resume_pipeline_stream()'s) --
     module docstring, "Pausing for a person mid-run". `thread_id` is that
@@ -433,7 +469,7 @@ def resume_pipeline_stream(answer, *, thread_id: str, session_id: str):
     # harness's own budget when there is one.
     budget = current_budget() or default_budget()
 
-    with bind_budget(budget), bind_store(store):
+    with bind_budget(budget), bind_store(store), _workspace_binding(workspace):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
