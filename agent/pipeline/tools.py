@@ -1443,6 +1443,72 @@ TOOL_TIERS: dict[str, str] = {
     "recall_memory": READ_ONLY,
 }
 
+#: What each tool needs bound before it can do anything at all.
+#:
+#: Declared beside TOOL_TIERS and for the same reason: a fact about a tool
+#: belongs next to the tool, so the next one added says its own preconditions
+#: instead of being discovered missing.
+#:
+#: These are not preferences. Each value is read off the tool's own first
+#: refusal -- `rag` says "no workspace is bound", `look` says "no container is
+#: bound" -- so the table cannot drift from the behaviour without a test
+#: noticing.
+ANYWHERE = "anywhere"
+NEEDS_CONTAINER = "container"
+NEEDS_WORKSPACE = "workspace_only"
+NEEDS_EITHER = "workspace_or_container"
+
+TOOL_NEEDS: dict[str, str] = {
+    "execute_python": ANYWHERE,
+    "execute_bash": ANYWHERE,
+    "web_search": ANYWHERE,
+    "complete_code": ANYWHERE,
+    "predict_edit": ANYWHERE,
+    "recall_memory": ANYWHERE,
+    # Each of these checks the command runner first and falls back to the
+    # workspace, so either one is enough.
+    "read_file": NEEDS_EITHER,
+    "write_file": NEEDS_EITHER,
+    "edit_file": NEEDS_EITHER,
+    "list_files": NEEDS_EITHER,
+    "view_image": NEEDS_EITHER,
+    # A browser and a screen live in the container; there is no local path.
+    "browse": NEEDS_CONTAINER,
+    "browse_act": NEEDS_CONTAINER,
+    "look": NEEDS_CONTAINER,
+    "look_act": NEEDS_CONTAINER,
+    # Both index files on this machine and have no remote branch.
+    "rag": NEEDS_WORKSPACE,
+    "code_map": NEEDS_WORKSPACE,
+}
+
+
+def reachable_tools() -> dict[str, str]:
+    """The standing tools that could actually do something in this run.
+
+    Used to decide what the PROMPT advertises. It is deliberately NOT used to
+    filter `dispatch_table()`: a model that names a tool left out of the menu
+    still reaches it and still gets that tool's own refusal, exactly as today.
+    That is what makes this free -- being wrong about reachability costs the
+    same as being right about it does now, so there is no new failure mode and
+    no extra round trip.
+    """
+    has_workspace = current_workspace() is not None
+    has_container = current_command_runner() is not None
+    live = {}
+    for name, tier in TOOL_TIERS.items():
+        need = TOOL_NEEDS.get(name, ANYWHERE)
+        if need == ANYWHERE:
+            live[name] = tier
+        elif need == NEEDS_CONTAINER and has_container:
+            live[name] = tier
+        elif need == NEEDS_WORKSPACE and has_workspace:
+            live[name] = tier
+        elif need == NEEDS_EITHER and (has_workspace or has_container):
+            live[name] = tier
+    return live
+
+
 #: One parsed index per workspace, keyed by path and by what the tree looked
 #: like when it was built. Rebuilt when a Python file's size or mtime changes,
 #: which is cheap to check and catches every edit the agent itself makes --

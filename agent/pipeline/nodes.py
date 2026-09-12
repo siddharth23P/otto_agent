@@ -94,6 +94,7 @@ from agent.pipeline.state import AgentState
 from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
 from agent.pipeline.tools import (
+    reachable_tools,
     MUTATING, READ_ONLY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
 )
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
@@ -295,29 +296,59 @@ _TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user", "switch_mode", "delegate"))
 #: execute_python takes code, web_search and rag take a query -- saying so
 #: costs tokens and tells the model nothing it did not already know from the
 #: tool's name.
-_TOOL_BODY_HINT = (
-    "read_file: a path, optionally `path:START-END`. "
-    "list_files: a directory. "
-    "write_file: the path on the FIRST line, the file's whole content after "
-    "it -- no separator, no JSON. "
-    "edit_file: the path, then a line `---OLD---`, the exact text to replace, "
-    "a line `---NEW---`, the replacement. "
-    "complete_code: code, optionally `---SUFFIX---` then trailing code. "
-    "predict_edit: code only, no instruction. "
-    "recall_memory: a search query. "
-    "code_map: `define <name>`, `uses <name>`, `imports <module>` or "
-    "`outline <path>` -- exact names, Python only. "
-    # Both take a mode name, so both are said once. This line is now the ONLY
-    # place the mode names appear in AGENT_PROMPT -- tests/test_prompt_tool_sync.py
-    # asserts the prompt offers every mode, and it reads them from here.
+#: Per tool, so the menu can be composed from what this run can reach. Wording
+#: is unchanged from when this was one string -- the split is mechanical.
+_BODY_HINTS: dict[str, str] = {
+    "read_file": "read_file: a path, optionally `path:START-END`.",
+    "list_files": "list_files: a directory.",
+    "write_file": ("write_file: the path on the FIRST line, the file's whole "
+                   "content after it -- no separator, no JSON."),
+    "edit_file": ("edit_file: the path, then a line `---OLD---`, the exact "
+                  "text to replace, a line `---NEW---`, the replacement."),
+    "complete_code": ("complete_code: code, optionally `---SUFFIX---` then "
+                      "trailing code."),
+    "predict_edit": "predict_edit: code only, no instruction.",
+    "recall_memory": "recall_memory: a search query.",
+    "code_map": ("code_map: `define <name>`, `uses <name>`, "
+                 "`imports <module>` or `outline <path>` -- exact names, "
+                 "Python only."),
+}
+
+#: The two mode-changing tools share a line, because both take a mode name.
+#: This is the ONLY place the mode names appear in AGENT_PROMPT --
+#: tests/test_prompt_tool_sync.py asserts the prompt offers every mode and
+#: reads them from here.
+_MODE_TOOL_HINT = (
     "switch_mode / delegate: one word from " + "|".join(mode_names())
     + ". The second also takes one bounded job after it, and runs with none "
-    "of this conversation. "
-    # The WHEN of asking used to live here too, and it is said again by
-    # MUTATION_GATE_NOTE at the moment it applies -- which is where a model
-    # can act on it. This block's job is what goes in the body.
-    "ask_user: a question, optionally then `CHOICES: a | b`."
+    "of this conversation."
 )
+_SWITCH_ONLY_HINT = "switch_mode: one word from " + "|".join(mode_names()) + "."
+
+#: The WHEN of asking lives in MUTATION_GATE_NOTE, at the moment it applies --
+#: which is where a model can act on it. This block's job is what goes in the
+#: body.
+_ASK_HINT = "ask_user: a question, optionally then `CHOICES: a | b`."
+
+
+def _body_hint(live, *, may_delegate: bool = True) -> str:
+    """The CODE: body shapes for the tools this run can actually reach.
+
+    Tools with no hint are omitted on purpose: execute_bash takes a command
+    and web_search takes a query, and saying so costs characters to tell the
+    model what the name already told it.
+    """
+    parts = [_BODY_HINTS[name] for name in _BODY_HINTS if name in live]
+    parts.append(_MODE_TOOL_HINT if may_delegate else _SWITCH_ONLY_HINT)
+    parts.append(_ASK_HINT)
+    return " ".join(parts)
+
+
+def _tool_menu(live, *, may_delegate: bool = True) -> str:
+    """The `ACTION: <a|b|c>` enumeration, from what this run can reach."""
+    loop_tools = ("ask_user", "switch_mode", "delegate") if may_delegate \
+        else ("ask_user", "switch_mode")
+    return "|".join((*live, *loop_tools))
 
 #: Which standing tools change things, named from the registry rather than
 #: typed out, so the next tool added to a mutating tier says so by itself.
@@ -338,13 +369,27 @@ _MUTATING_TOOLS = tuple(
     name for name, tier in TOOL_TIERS.items() if tier != READ_ONLY
 )
 
-#: The ACTION/CODE protocol, assembled once for every prompt that offers tools.
-_ACTION_BLOCK = (
-    "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<"
-    + _TOOL_BODY_HINT
-    + ">\nand you will be shown the result, then you can continue. "
-    + ", ".join(_MUTATING_TOOLS) + " cannot be undone. "
-)
+def _action_block(live, *, may_delegate: bool = True) -> str:
+    """The ACTION/CODE protocol, for the tools this run can reach."""
+    mutating = [n for n in _MUTATING_TOOLS if n in live]
+    warning = (", ".join(mutating) + " cannot be undone. ") if mutating else ""
+    return (
+        "reply with exactly\nACTION: <" + _tool_menu(live, may_delegate=may_delegate)
+        + ">\nCODE:\n<" + _body_hint(live, may_delegate=may_delegate)
+        + ">\nand you will be shown the result, then you can continue. "
+        + warning
+    )
+
+
+#: The maximal block -- everything reachable, delegation included. The
+#: baseline the prompt cap is measured against.
+#:
+#: NOTE for anyone embedding a composed block in a prompt that is later
+#: `.format()`-ed, as EVALUATOR_PROMPT is: a `{` or `}` in any body hint would
+#: be read as a format field and raise. There are none today, which is what
+#: makes this a trap rather than a bug -- tests/test_prompt_tool_sync.py holds
+#: it that way.
+_ACTION_BLOCK = _action_block(TOOL_DISPATCH)
 
 _DIAGNOSTIC_HABITS = (
     "Four habits, whatever the task:\n"
@@ -478,7 +523,10 @@ EVALUATOR_PROMPT = (
     "back.\n\n"
     "You may check ONE thing with a tool if a criterion genuinely cannot be "
     "settled from what you were shown: "
-    + _ACTION_BLOCK +
+    # No `delegate`: `_tool_loop`, which the evaluator runs in, refuses it.
+    # It has been advertised here since the mode refactor, so a judge could
+    # name a tool it would then be told does not exist.
+    + _action_block(TOOL_DISPATCH, may_delegate=False) +
     "When you are done, reply with exactly\nFINAL:\n"
     "MET: the number of criteria met, then / then the number of criteria\n"
     "BLOCKED: yes or no -- whether anything unmet was outside the agent's "
@@ -593,24 +641,55 @@ CONVERSATION_NOTE = (
 #: system-inspection commands from 17 to 0. Length is not free on this model,
 #: so the budget freed by de-duplicating the protocol is the budget that pays
 #: for the mode machinery.
-AGENT_PROMPT = (
-    "You are an engineer with a shell, working a task end to end: find out "
-    "what is true, do the work, and confirm it actually holds.\n\n"
-    + _DIAGNOSTIC_HABITS + _MINIMALITY_LADDER +
-    # The mode NAMES and "the conversation carries over" were both said again
-    # here, having already been said in _TOOL_BODY_HINT. Neither block knew
-    # the other existed, because one is derived and one is prose.
-    "You work in a MODE -- how you think and which model you run on. You "
-    "start in " + DEFAULT_MODE + ". Switch when the KIND of work changes, not "
-    "to restate what you are doing; the conversation carries over and you "
-    "keep every tool.\n\n"
-    + _ACTION_BLOCK +
-    "One tool call per reply.\n\n"
-    "Before you finish, run something that would FAIL if the task were not "
-    "done, and read what it prints. An explanation is not evidence. When you "
-    "have seen it work, reply with exactly\nFINAL:\n<the answer itself -- the "
-    "numbers, the names, the decision -- not a description of what you did>"
-)
+def compose_agent_prompt(live=None, *, may_delegate: bool = True) -> str:
+    """The agent prompt, offering only what this run can actually reach.
+
+    Composed ONCE PER RUN, at the seed -- never per turn. Index 0 of the
+    message list has to stay byte-identical across a run: `_seed_transcript`
+    rebuilds it on resume and expects the same string, and a system message
+    that changed between calls would defeat every vendor's prefix cache.
+
+    The saving is real but uneven, because it is a fact about what is BOUND
+    rather than about the task:
+
+        chat turn / otto eval   6 of 17 tools reachable   -534 chars
+        delegated child         6, and no delegate        -669
+        terminal-bench          15 (container only)       -123
+        SWE-bench, Claw-Eval    17 (workspace + container)   0
+
+    Claw-Eval saves nothing, and that is worth stating plainly because I
+    previously claimed the opposite: a run there binds both a workspace and a
+    container, so all seventeen genuinely are reachable. The earlier
+    observation that T136 called only task-injected tools was about what that
+    run CHOSE, not about what it could have called.
+    """
+    live = TOOL_DISPATCH if live is None else live
+    return (
+        "You are an engineer with a shell, working a task end to end: find "
+        "out what is true, do the work, and confirm it actually holds.\n\n"
+        + _DIAGNOSTIC_HABITS + _MINIMALITY_LADDER +
+        # The mode NAMES and "the conversation carries over" were both said
+        # again here, having already been said in the tool hints. Neither
+        # block knew the other existed, because one is derived and one is
+        # prose.
+        "You work in a MODE -- how you think and which model you run on. You "
+        "start in " + DEFAULT_MODE + ". Switch when the KIND of work changes, "
+        "not to restate what you are doing; the conversation carries over and "
+        "you keep every tool.\n\n"
+        + _action_block(live, may_delegate=may_delegate)
+        + "One tool call per reply.\n\n"
+        "Before you finish, run something that would FAIL if the task were "
+        "not done, and read what it prints. An explanation is not evidence. "
+        "When you have seen it work, reply with exactly\nFINAL:\n<the answer "
+        "itself -- the numbers, the names, the decision -- not a description "
+        "of what you did>"
+    )
+
+
+#: The maximal prompt: everything reachable, nothing filtered. What the
+#: character cap is measured against, and what a caller gets if it does not
+#: say which tools are live.
+AGENT_PROMPT = compose_agent_prompt()
 
 
 #: Fed back inside _tool_loop when a reply has neither ACTION: nor FINAL:
@@ -1349,7 +1428,10 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
     ) if part)
 
     note = render_note()
-    messages: list = [SystemMessage(AGENT_PROMPT)]
+    # Composed here, once, from what this run can actually reach -- and NOT
+    # recomposed per turn: the resume branch rebuilds this same string and a
+    # system message that changed between calls would defeat prefix caching.
+    messages: list = [SystemMessage(compose_agent_prompt(reachable_tools()))]
     if note:
         messages.append(SystemMessage(note))
     messages.append(HumanMessage(body))
@@ -2011,7 +2093,11 @@ def _delegate(state: AgentState, body: str, *, actions: list[str],
             returncode=1,
         )
 
-    child: list = [SystemMessage(AGENT_PROMPT)]
+    # `may_delegate=False`, matching the loop this child actually runs in.
+    # It was advertised `delegate` and then refused it at the dispatch -- a
+    # tool it could name, could not use, and paid an exchange to discover.
+    child: list = [SystemMessage(compose_agent_prompt(reachable_tools(),
+                                                      may_delegate=False))]
     if note := render_note():
         child.append(SystemMessage(note))
     child.append(HumanMessage(DELEGATE_CONTRACT.format(instruction=instruction.strip())))
@@ -2189,7 +2275,10 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
         checklist = _new_checklist(_criteria(ROUTER.chat_model(Task.EVALUATE), task_text))
 
     if resuming:
-        messages = [SystemMessage(AGENT_PROMPT), *(
+        # The same composition the seed used. Both read `reachable_tools()`
+        # and the bindings do not change inside a run, so the rebuilt prompt
+        # is byte-identical -- which is what the stored transcript assumes.
+        messages = [SystemMessage(compose_agent_prompt(reachable_tools())), *(
             [SystemMessage(render_note())] if render_note() else []
         ), *stored]
         feedback = state.get("feedback") or ""
