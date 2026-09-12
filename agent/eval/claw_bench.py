@@ -73,6 +73,7 @@ from agent.pipeline.toolkit import (
     ExtraTool, bind_extra_tools, json_body, validate_against,
 )
 from agent.pipeline.tools import ToolResult
+from agent.eval.failure_kinds import classify
 from agent.pipeline.workspace import bind_workspace
 
 logger = logging.getLogger(__name__)
@@ -554,6 +555,11 @@ class TaskOutcome:
     #: cannot distinguish a real gain from judge variance, and completion is
     #: LLM-judged for 260 of the 300 tasks.
     trials: list = field(default_factory=list)
+    #: What SHAPE this run's failure took, read from the action record at no
+    #: cost. A score says something got worse; these say what broke. See
+    #: agent/eval/failure_kinds.py -- an injected fault was localised 64.8% of
+    #: the time from a structured trace against 13.0% from the outcome alone.
+    failure_kinds: list = field(default_factory=list)
 
 
 def _final_text(state: dict | None) -> str:
@@ -632,6 +638,7 @@ def run_one(
     history: list = []
     turn_text = prompt
     checklist: list = []
+    action_lines: list = []
     model_calls = 0
 
     with tempfile.TemporaryDirectory(prefix="otto-claw-") as scratch:
@@ -658,6 +665,7 @@ def run_one(
                             turn_text, max_steps=task.environment.max_turns * 3,
                         )
                         turns += len(actions)
+                        action_lines = list(actions)
                     else:
                         state = run_pipeline(turn_text, session_id=session_id, history=history)
                         answer = _final_text(state)
@@ -668,6 +676,9 @@ def run_one(
                         # what it answered, but not what it was being held to.
                         # Cost two blind re-runs on T136 before it went in.
                         checklist = (state or {}).get("checklist") or []
+                        # Kept for agent/eval/failure_kinds.py, which reads the
+                        # SHAPE of a failure out of what the run already wrote.
+                        action_lines = list((state or {}).get("actions") or ())
                         model_calls = (state or {}).get("model_calls") or model_calls
                     if answer:
                         recorder.text("assistant", answer)
@@ -731,6 +742,8 @@ def run_one(
     return trace_path, {
         "checklist": checklist,
         "model_calls": model_calls,
+        "action_lines": action_lines,
+        "answer": answer,
         "tool_calls": recorder.tool_calls,
         "wall_time_s": wall,
         "error": error,
@@ -972,6 +985,12 @@ def _run_task_once(
         outcome.error = meta["error"]
     outcome.checklist = meta.get("checklist") or []
     outcome.model_calls = meta.get("model_calls") or 0
+    outcome.failure_kinds = classify(
+        actions=meta.get("action_lines"),
+        checklist=outcome.checklist,
+        answer=meta.get("answer") or "",
+        resolved=outcome.passed,
+    )
     return outcome
 
 

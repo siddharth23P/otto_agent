@@ -23,6 +23,7 @@ import typer
 from typing_extensions import Annotated
 
 from agent.cli.ui import err, out
+from agent.eval.failure_kinds import DESCRIPTIONS, summarise
 from agent.memory.lessons import bind_bank, read_only
 from agent.memory.store import MemoryStore
 from agent.router.outcomes import bind_log
@@ -58,6 +59,9 @@ def _summary(outcomes: list, claw=None) -> dict:
         # change that doubles spend for a tenth of a point reads as a win.
         "mean_model_calls": round(sum(o.model_calls for o in scored) / n, 2),
         "total_model_calls": sum(o.model_calls for o in scored),
+        # What BROKE, not just how much. Two revisions with the same mean
+        # score and different failure profiles are two different systems.
+        "failure_kinds": summarise([o.failure_kinds for o in scored]),
     }
 
     repeated = [o for o in scored if len(o.trials) > 1]
@@ -266,6 +270,8 @@ def _run_tasks(claw, tasks, outcomes, *, out_dir, cfg, judge, architecture,
             f"completion={outcome.completion:.2f} service-tools={outcome.tool_calls} "
             f"actions={outcome.agent_actions} calls={outcome.model_calls} "
             f"{outcome.wall_time_s:.0f}s{spread}{detail}"
+            + (f"  [{', '.join(outcome.failure_kinds)}]"
+               if outcome.failure_kinds else "")
         )
 
 
@@ -290,6 +296,7 @@ def _build_report(outcomes, claw, *, architecture, tag, split, trials,
                 "communication": o.communication, "safety": o.safety,
                 "tool_calls": o.tool_calls, "agent_actions": o.agent_actions,
                 "checklist": o.checklist, "model_calls": o.model_calls,
+                "failure_kinds": o.failure_kinds,
                 "trials": o.trials,
                 "wall_time_s": o.wall_time_s, "error": o.error,
             }
@@ -317,6 +324,11 @@ def _print_summary(report: dict, out_dir: Path, split: str) -> None:
             f"pass@{k} {s['mean_pass_at_k']:.3f}  "
             f"mean spread {s['score_spread']:.3f}"
         )
+    kinds = s.get("failure_kinds") or {}
+    if kinds:
+        out.print("what broke: " + ", ".join(
+            f"{DESCRIPTIONS.get(k, k)} ({n})" for k, n in kinds.items()
+        ))
     grading = report["grading"]
     out.print(
         f"grading: {grading['otto_grading_path']} / claw {grading['claw_eval_revision'] or '?'} "
