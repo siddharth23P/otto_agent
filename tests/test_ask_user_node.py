@@ -201,6 +201,30 @@ def test_ask_user_appends_onto_existing_context_rather_than_replacing_it(monkeyp
     assert "recursive" in result.update["context"]
 
 
+def test_ask_user_hands_the_answer_back_to_the_loop(monkeypatch):
+    # The bug this exists for: agent() resumes from `transcript`, which is
+    # the one place ask_user does NOT write, so the loop came back from the
+    # pause with the prompt that had just produced the question and asked it
+    # again. `user_answer` is what carries the reply into that transcript.
+    monkeypatch.setattr(pn, "interrupt", lambda payload: "8x8")
+
+    result = pn.ask_user(_state(asking_role="agent"))
+
+    assert result.update["user_answer"] == "8x8"
+
+
+def test_ask_user_does_not_hand_the_answer_to_the_loop_when_the_evaluator_asked(monkeypatch):
+    # The evaluator rebuilds its prompt from state (`context`) on every run,
+    # so it needs nothing here -- and setting it would leave an answer to the
+    # EVALUATOR's question sitting in state for the loop to splice into its
+    # own conversation as a reply to something it never asked.
+    monkeypatch.setattr(pn, "interrupt", lambda payload: "yes")
+
+    result = pn.ask_user(_state(asking_role="evaluator"))
+
+    assert "user_answer" not in result.update
+
+
 def test_ask_user_clears_all_three_pending_fields(monkeypatch):
     monkeypatch.setattr(pn, "interrupt", lambda payload: "yes")
 
@@ -293,3 +317,90 @@ def test_a_real_graph_run_pauses_on_ask_user_and_resumes_via_command(monkeypatch
     assert final_state["pending_question"] is None
     assert final_state["asking_role"] is None
     assert not queue  # every scripted reply was actually consumed, in order
+
+
+def test_the_resumed_loop_actually_sees_the_answer_it_paused_for(monkeypatch):
+    """The regression this whole pair of fields exists for.
+
+    Live-tested failure: otto asked "what can I help you with?", the person
+    answered, and otto asked the identical question again -- six times over,
+    every answer ignored. The cause was not the pause machinery (which works)
+    but what came back from it: agent() rebuilds its conversation from
+    `transcript` on resume, the Q&A was written only into `context`, and so
+    the second run got a prompt byte-identical to the one that had just
+    produced the question. A scripted queue of replies cannot catch that --
+    the fake answers differently on call two whatever it was shown -- so this
+    asserts on the MESSAGES the model was handed, not on the run's output.
+    """
+    import uuid
+
+    seen: list[list[str]] = []
+
+    class _Recording(_FakeModel):
+        def stream(self, messages):
+            seen.append([str(m.content) for m in messages])
+            yield from super().stream(messages)
+
+    queue = [
+        "- an 8-queens solution is produced",
+        "ACTION: ask_user\nCODE:\nhow many queens?",
+        "FINAL:\n8-queens solution here",
+        "FINAL:\nAPPROVE: yes\nWHY: looks right",
+    ]
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: _Recording(queue.pop(0)))
+
+    config = {
+        "configurable": {"thread_id": f"test:{uuid.uuid4().hex}"},
+        "recursion_limit": pn._RECURSION_SAFETY_NET,
+    }
+    list(pn.app.stream(_initial_state("solve N queens with brute force"), config,
+                       stream_mode="updates"))
+    before = len(seen)
+    list(pn.app.stream(pn.Command(resume="exactly 8 queens please"), config,
+                       stream_mode="updates"))
+
+    resumed = seen[before]
+    assert any("exactly 8 queens please" in m for m in resumed), (
+        "the resumed loop was never shown the answer it paused for"
+    )
+    assert any("how many queens" in m for m in resumed), (
+        "the resumed loop was never shown the question it had asked"
+    )
+
+
+def test_the_answer_is_not_replayed_into_the_next_run_of_the_loop(monkeypatch):
+    # `user_answer` is consumed, not accumulated: once spliced into the
+    # transcript it must be cleared, or an evaluator rejection would send the
+    # loop back in with the same "THE USER ANSWERED" block appended a second
+    # time, below its own later work.
+    import uuid
+
+    seen: list[list[str]] = []
+
+    class _Recording(_FakeModel):
+        def stream(self, messages):
+            seen.append([str(m.content) for m in messages])
+            yield from super().stream(messages)
+
+    queue = [
+        "- an 8-queens solution is produced",
+        "ACTION: ask_user\nCODE:\nhow many queens?",
+        "FINAL:\nfirst attempt",
+        "FINAL:\nAPPROVE: no\nWHY: no board was printed",
+        "FINAL:\nsecond attempt with a board",
+        "FINAL:\nAPPROVE: yes\nWHY: looks right",
+    ]
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: _Recording(queue.pop(0)))
+
+    config = {
+        "configurable": {"thread_id": f"test:{uuid.uuid4().hex}"},
+        "recursion_limit": pn._RECURSION_SAFETY_NET,
+    }
+    list(pn.app.stream(_initial_state("solve N queens with brute force"), config,
+                       stream_mode="updates"))
+    list(pn.app.stream(pn.Command(resume="exactly 8 queens please"), config,
+                       stream_mode="updates"))
+
+    assert not queue  # the run really did go all the way through the rejection
+    retry = seen[-2]  # the loop's second post-answer run, after the rejection
+    assert sum("exactly 8 queens please" in m for m in retry) == 1

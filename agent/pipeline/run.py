@@ -128,6 +128,7 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = (), memory_context: 
         "pending_question": None,
         "pending_choices": None,
         "asking_role": None,
+        "user_answer": None,
         # The agent loop's own conversation, carried across node returns
         # (agent/pipeline/state.py). None means "not started" -- the loop seeds
         # it on its first entry and hands back the version it finished with.
