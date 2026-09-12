@@ -367,3 +367,15 @@ def test_a_failed_rubric_call_does_not_demote_a_task_to_chatter(monkeypatch):
 def test_a_rubric_that_ran_and_found_nothing_still_means_no_task():
     """The other half of the same distinction."""
     assert pn._parse_rubric("this is just a greeting") == []
+
+
+def test_a_failed_rubric_call_does_not_skip_the_judge():
+    """The second site with the same conflation, and the more expensive one:
+    `not checklist` read None as "nothing to verify" and returned straight to
+    END. A dead rubric call skipped verification entirely, on every run, and
+    each one still reported itself finished."""
+    import inspect
+
+    source = inspect.getsource(pn.agent)
+    assert 'if checklist == [] and why == "final"' in source
+    assert 'if not checklist and why' not in source

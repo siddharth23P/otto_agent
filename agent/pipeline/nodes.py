@@ -2408,7 +2408,7 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
         "final": "otto has an answer",
         "dead": "otto could not produce a usable reply and is handing over what it has",
     }[why]
-    if not checklist and why == "final":
+    if checklist == [] and why == "final":
         # Nothing to verify, so nothing downstream runs.
         #
         # The criteria call is the first thing a turn does, and an empty
@@ -2417,6 +2417,11 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
         # 263 seconds: the judge measured a chatty reply against criteria that
         # did not exist, rejected it, and the loop retried twice. The answer it
         # finally produced was "1|Problem to solve|No problem to solve".
+        #
+        # `== []` and not `not checklist`: None means the criteria call FAILED
+        # and is not evidence of anything. Read as falsy, one dead provider key
+        # skipped verification on every run in the batch and the runs still
+        # reported themselves finished.
         #
         # Only on a clean `final`. A run that died or ran out still goes to the
         # evaluator, because "no criteria" and "no answer" are different
