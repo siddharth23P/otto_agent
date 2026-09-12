@@ -503,8 +503,129 @@ def test_a_turn_cannot_pause_more_than_the_cap_however_many_times_it_tries(monke
     while "__interrupt__" in updates[-1]:
         pauses += 1
         assert pauses <= pn.MAX_USER_QUESTIONS, "the turn paused past its cap"
-        updates = list(pn.app.stream(pn.Command(resume="nothing else"), config,
+        # Deliberately NOT a closing answer -- this test is about the cap
+        # holding when the person keeps engaging, not about _CLOSING_ANSWERS
+        # (which has its own tests, and would end this after one pause).
+        updates = list(pn.app.stream(pn.Command(resume="keep going"), config,
                                      stream_mode="updates"))
 
     assert pauses == pn.MAX_USER_QUESTIONS
     assert pn.app.get_state(config).values["asks"] == pn.MAX_USER_QUESTIONS
+
+
+# --------------------------------------------------------------------------
+# _CLOSING_ANSWERS -- "done", "nothing else". The live failure was that both
+# of those were said, one after the other, and neither changed what happened
+# next.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("answer", [
+    "done", "nothing else", "that's all", "Nothing else.", "  ALL DONE  ",
+    "everything's done", "no thanks", "stop", "nothing more",
+])
+def test_these_answers_mean_stop_asking(answer):
+    assert pn._is_closing_answer(answer)
+
+
+@pytest.mark.parametrize("answer", [
+    # Bare yes/no are deliberately absent: `CHOICES: yes | no` is the
+    # commonest question shape there is.
+    "no", "yes",
+    # Anything carrying other content is an answer, not a request to stop.
+    "no, use the second file", "done with the first one, now do the second",
+    "nothing else matters for the schema", "8", "",
+])
+def test_these_answers_do_not_mean_stop_asking(answer):
+    assert not pn._is_closing_answer(answer)
+
+
+def test_a_closing_answer_spends_the_rest_of_the_turns_questions(monkeypatch):
+    monkeypatch.setattr(pn, "interrupt", lambda payload: "nothing else")
+
+    result = pn.ask_user(_state(asks=0))
+
+    assert result.update["asks"] == pn.MAX_USER_QUESTIONS
+
+
+def test_an_ordinary_answer_only_spends_the_one_question(monkeypatch):
+    monkeypatch.setattr(pn, "interrupt", lambda payload: "use rust")
+
+    result = pn.ask_user(_state(asks=0))
+
+    assert result.update["asks"] == 1
+
+
+def test_a_closing_answer_never_gives_asks_back(monkeypatch):
+    # max(), not assignment -- a turn already over the cap must not be handed
+    # a question back by saying "done".
+    monkeypatch.setattr(pn, "interrupt", lambda payload: "done")
+
+    result = pn.ask_user(_state(asks=pn.MAX_USER_QUESTIONS + 2))
+
+    assert result.update["asks"] == pn.MAX_USER_QUESTIONS + 3
+
+
+def test_saying_done_ends_the_turn_instead_of_being_asked_again(monkeypatch):
+    """The reported failure, end to end.
+
+    The agent asks on every reply. The person answers "done" to the first
+    question, and that has to be the last question -- previously it was asked
+    again, and again.
+    """
+    import uuid
+
+    queue = ["- the request is answered"]
+    monkeypatch.setattr(
+        pn.ROUTER, "chat_model",
+        lambda *a, **kw: _FakeModel(
+            queue.pop(0) if queue else "ACTION: ask_user\nCODE:\nanything else?"
+        ),
+    )
+
+    config = {
+        "configurable": {"thread_id": f"test:{uuid.uuid4().hex}"},
+        "recursion_limit": pn._RECURSION_SAFETY_NET,
+    }
+    initial = _initial_state("say hi")
+    initial["asks"] = 0
+
+    pauses = 0
+    updates = list(pn.app.stream(initial, config, stream_mode="updates"))
+    while "__interrupt__" in updates[-1]:
+        pauses += 1
+        assert pauses == 1, "it asked again after being told the work was done"
+        updates = list(pn.app.stream(pn.Command(resume="done"), config,
+                                     stream_mode="updates"))
+
+    assert pauses == 1
+
+
+def test_the_loop_is_told_the_answer_was_a_closing_one(monkeypatch):
+    # The asking half is enforced; the FINISHING half is advice the loop sees
+    # in its own conversation (_CLOSING_ANSWERS on why only one is a gate).
+    import uuid
+
+    seen: list[list[str]] = []
+
+    class _Recording(_FakeModel):
+        def stream(self, messages):
+            seen.append([str(m.content) for m in messages])
+            yield from super().stream(messages)
+
+    queue = [
+        "- the request is answered",
+        "ACTION: ask_user\nCODE:\nanything else?",
+        "FINAL:\nall finished",
+        "FINAL:\nAPPROVE: yes\nWHY: fine",
+    ]
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: _Recording(queue.pop(0)))
+
+    config = {
+        "configurable": {"thread_id": f"test:{uuid.uuid4().hex}"},
+        "recursion_limit": pn._RECURSION_SAFETY_NET,
+    }
+    list(pn.app.stream(_initial_state("say hi"), config, stream_mode="updates"))
+    before = len(seen)
+    list(pn.app.stream(pn.Command(resume="nothing else"), config, stream_mode="updates"))
+
+    assert any("stop asking" in m for m in seen[before])

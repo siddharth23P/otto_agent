@@ -1501,6 +1501,49 @@ MAX_REJECTIONS = 2
 #: ASK_BUDGET_SPENT, which hands the loop a way forward instead of a wall.
 MAX_USER_QUESTIONS = int(os.environ.get("OTTO_MAX_USER_QUESTIONS", "3"))
 
+#: Answers that mean "stop asking me things", matched WHOLE and exactly.
+#:
+#: The live failure: the person answered "done", was asked again, answered
+#: "nothing else", and was asked again. Both answers said the same thing and
+#: neither changed what happened next.
+#:
+#: What a match does is deliberately asymmetric, because the two halves carry
+#: different risk. Spending the turn's remaining asks is unconditional and
+#: safe: somebody who says "nothing else" has said they are finished being
+#: interrupted, and the worst a false match can do is make the agent settle
+#: the rest itself -- which is what ASK_BUDGET_SPENT already asks of it.
+#: FINISHING is only ever advised, never forced, because a false match there
+#: would cut a real task short.
+#:
+#: Whole-answer matches only. A substring test would fire on "no, use the
+#: second file", and an answer that carries any other content is an answer
+#: to the question rather than a request to stop. Bare "yes"/"no" are
+#: deliberately absent: `CHOICES: yes | no` is the commonest question shape
+#: there is, and reading a genuine "no" as "stop" would break far more than
+#: this fixes.
+_CLOSING_ANSWERS = frozenset((
+    "done", "all done", "finished", "we are done", "we're done", "were done",
+    "that is all", "that's all", "thats all", "no thanks", "no thank you",
+    "nothing", "nothing else", "nothing more", "nothing further",
+    "everything is done", "everything's done", "everythings done",
+    "stop", "no more", "no more questions", "quit",
+))
+
+
+def _is_closing_answer(text: str) -> bool:
+    """Does this answer say "stop asking", and nothing else?"""
+    return " ".join(str(text or "").lower().split()).strip(".!, ") in _CLOSING_ANSWERS
+
+
+#: Added to the answer spliced back into the loop when _is_closing_answer.
+#: Advice, not a gate -- see _CLOSING_ANSWERS on why only the asking half is
+#: enforced.
+CLOSING_ANSWER_NOTE = (
+    "That reads as: stop asking. You have no questions left this turn. "
+    "Unless something you were actually asked for is still undone, give your "
+    "FINAL now with what you have."
+)
+
 #: How many times ONE `_agent_loop` may be refused an ask before it hands over
 #: what it has.
 #:
@@ -2198,10 +2241,13 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
         # asks again -- see AgentState.user_answer.
         answered = state.get("user_answer")
         if answered:
+            closing = (
+                "\n\n" + CLOSING_ANSWER_NOTE if _is_closing_answer(answered) else ""
+            )
             messages.append(HumanMessage(
                 f"THE USER ANSWERED:\n{answered}\n\n"
                 "That answers the question you just asked. Carry on with the "
-                "task from here -- do not ask it again."
+                "task from here -- do not ask it again." + closing
             ))
         feedback = state.get("feedback") or ""
         if feedback:
@@ -2650,6 +2696,11 @@ def ask_user(state: AgentState) -> Command[Literal["agent", "evaluator"]]:
     qa = f'you asked: "{question}"\nthe user answered: "{answer}"'
     role = state.get("asking_role") or "agent"
     asked = (state.get("asks") or 0) + 1
+    if _is_closing_answer(answer):
+        # "done", "nothing else" -- the person has said they are finished
+        # being interrupted, so the turn has no asks left whatever it had
+        # before (_CLOSING_ANSWERS).
+        asked = max(asked, MAX_USER_QUESTIONS)
     update = {
         "context": f"{prior}\n\n{qa}" if prior else qa,
         "pending_question": None,
