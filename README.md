@@ -41,7 +41,8 @@ score went 0.54 to 0.62 on the measured tasks when they collapsed into one.
 ```mermaid
 flowchart TD
     start([request]) --> rubric[write the criteria<br/>from the task alone]
-    rubric --> agent
+    rubric -->|no task in it| chat[answer it<br/>one cheap call] --> done
+    rubric -->|criteria| agent
 
     agent{{agent}} -->|ACTION| tools
     tools -->|result| agent
@@ -76,6 +77,15 @@ flowchart TD
   information in the whole judgment that the actor did not produce. A verifier
   that re-reads the actor's own output measures at approximately nothing;
   with an external checklist the same models go from around 0% to 90-98%.
+- **not every message is a task** -- that same call is also what says so. A
+  greeting has no criteria, because it makes no claim to check, and everything
+  after it exists to make a claim trustworthy. So it is answered in one further
+  call on the cheapest seat: two for the turn, no loop, no judge, no lesson.
+  Before this, "hi otto!" cost
+  13 model calls and about five minutes -- the loop, told to run something that
+  would fail if the task were not done and handed no task, invented one. A real
+  task pays nothing for the fast path: the decision falls out of the call that
+  was already first.
 - **the agent loop** -- one conversation, a text `ACTION:` / `CODE:` protocol
   rather than JSON tool calls, one tool call per reply. Before a mutating tool
   runs against a target for the first time, it is held once for a check --
