@@ -90,6 +90,7 @@ from langfuse.langchain import CallbackHandler
 from langgraph.types import Command
 
 from agent.memory.session import bind_store
+from agent.pipeline.budget import bind_budget, current_budget, default_budget
 from agent.memory.store import MemoryStore
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
 from agent.pipeline.state import AgentState
@@ -101,17 +102,24 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = (), memory_context: 
     return {
         "messages": [*history, HumanMessage(text)],
         "board": [],
-        "round": 0,
+        "actions": [],
         "node": None,
         "feedback": "",
         "output": None,
         "context": memory_context,
-        "plan": None,
-        "active_step": None,
         "node_error": None,
         "pending_question": None,
         "pending_choices": None,
         "asking_role": None,
+        # The agent loop's own conversation, carried across node returns
+        # (agent/pipeline/state.py). None means "not started" -- the loop seeds
+        # it on its first entry and hands back the version it finished with.
+        "transcript": None,
+        "mode": None,
+        "mode_log": [],
+        "model_calls": 0,
+        "rejections": 0,
+        "checklist": None,
         "final_output": None,
     }
 
@@ -129,9 +137,83 @@ def _config(graph_thread_id: str, handler) -> dict:
     }
 
 
+def _salvage(final: dict | None, exc: Exception | None = None) -> dict:
+    """Make sure a run hands back the best answer it actually reached.
+
+    Three ways a run used to return nothing despite having done the work:
+
+    * an unhandled exception anywhere unwound the whole graph. Seen live on
+      Claw-Eval task C01 -- the agent had computed and verified a mortgage
+      comparison, then put prose where a file path goes, `Path.exists()` raised
+      OSError(ENAMETOOLONG), and 1096 seconds of correct work was thrown away.
+      The grader saw a conversation with no assistant messages at all.
+    * `app.invoke` returns NORMALLY on an interrupt, with `__interrupt__`
+      spliced into the state and `final_output` still None. Every caller reads
+      `final_output` and records an empty answer, and none of them checks.
+    * the evaluator never approved, so `output` held a real candidate that
+      `final_output` never received.
+
+    All three have the same fix and it belongs in one place: `output` is the
+    agent's own best attempt, and reporting it -- labelled as unverified -- beats
+    reporting nothing.
+    """
+    state = dict(final or {})
+    if exc is not None:
+        state.setdefault("board", [])
+        state["board"] = [*state.get("board", []), f"the run failed: {type(exc).__name__}: {exc}"]
+    if not (state.get("final_output") or "").strip():
+        candidate = (state.get("output") or "").strip()
+        if not candidate and state.get("pending_question"):
+            # The run stopped to ask something and nothing here can answer --
+            # `run_pipeline` has no resume path, that is the streaming API.
+            # The question IS the answer in that case, and saying it is both
+            # honest and useful: a caller that wanted a decision learns which
+            # decision is missing, instead of receiving nothing.
+            #
+            # Seen live on Claw-Eval T026, where the mutation gate correctly
+            # stopped the agent guessing between three contacts named Zhang.
+            # It asked, exactly as the grader requires, and the task recorded
+            # no assistant output whatsoever.
+            question = state["pending_question"]
+            choices = state.get("pending_choices") or []
+            candidate = question if not choices else (
+                f"{question}\n\n" + "\n".join(f"- {c}" for c in choices)
+            )
+        if candidate:
+            state["final_output"] = candidate
+    return state
+
+
+def _paused(final: dict | None) -> bool:
+    """Whether `app.invoke` came back on an interrupt rather than a finish.
+
+    It does not raise and it does not say so anywhere a caller looks -- the
+    only signals are the `__interrupt__` key it splices in and the
+    `pending_question` the paused node never got to clear.
+    """
+    return bool(final) and ("__interrupt__" in final or final.get("pending_question"))
+
+
 def _score(run_span, final: AgentState) -> None:
-    run_span.update(output=final["final_output"])
-    run_span.score_trace(name="dispatch_rounds", value=final["round"], data_type="NUMERIC")
+    """The facts worth filtering a Langfuse trace by, scored on it.
+
+    `model_calls` replaces the old `dispatch_rounds`: with one agent loop there
+    are no overseer rounds left to count, and model requests are the number that
+    maps to both latency and spend -- measured on Claw-Eval, tool execution was
+    0.1 to 0.4 seconds of runs lasting 119 to 946, so everything else was this.
+
+    `mode_swaps` is here so that "did the model park on one model, or thrash
+    between them?" is a query across a batch rather than an opinion. Nothing in
+    the loop can settle that with a rule; only the numbers can.
+    """
+    run_span.update(output=final.get("final_output"))
+    run_span.score_trace(
+        name="model_calls", value=final.get("model_calls") or 0, data_type="NUMERIC",
+    )
+    swaps = [line for line in (final.get("mode_log") or []) if "->" in line]
+    run_span.score_trace(name="mode_swaps", value=len(swaps), data_type="NUMERIC")
+    if final.get("mode"):
+        run_span.score_trace(name="final_mode", value=final["mode"], data_type="CATEGORICAL")
     if final.get("node"):
         run_span.score_trace(name="last_node", value=final["node"], data_type="CATEGORICAL")
 
@@ -155,6 +237,33 @@ def _as_ask_event(update: dict, graph_thread_id: str) -> dict | None:
             "thread_id": graph_thread_id,
         }
     }
+
+
+#: What app.stream() is asked for. "updates" is what it always yielded -- one
+#: dict per node RETURN. That was enough when a node returned every few seconds;
+#: with one long-running agent loop it means nothing reaches the screen until
+#: the whole loop finishes, so `otto chat` would sit silent for minutes and then
+#: print one panel. "custom" is the loop's own per-iteration events
+#: (langgraph.config.get_stream_writer), emitted in the same node-shaped form so
+#: agent/cli/chat.py and agent/cli/tui.py need no changes at all.
+_STREAM_MODES = ["updates", "custom"]
+
+
+def _stream_events(app_stream, graph_thread_id: str):
+    """Unwrap app.stream()'s `(mode, payload)` tuples into the flat updates
+    callers have always seen, turning an interrupt into an `__ask__` event.
+
+    Asking for more than one stream mode changes the yield shape from a bare
+    payload to a tuple, so this is the one place that knows about it. Custom
+    payloads pass straight through: the loop already emits them node-shaped.
+    Yields `(event, is_ask)`.
+    """
+    for mode, payload in app_stream:
+        if mode == "custom":
+            yield payload, False
+            continue
+        ask = _as_ask_event(payload, graph_thread_id)
+        yield (ask, True) if ask is not None else (payload, False)
 
 
 def _graph_thread_id(session_id: str) -> str:
@@ -193,8 +302,14 @@ def run_pipeline(
     handler = CallbackHandler()
     config = _config(_graph_thread_id(session_id), handler)
     store = MemoryStore.for_session(session_id)
+    # A run with nobody watching still needs a ceiling. Both benchmark harnesses
+    # bind their own Budget; an `otto chat` turn bound NOTHING, so
+    # OTTO_MAX_MODEL_CALLS was a dead env var and an interactive turn could
+    # spend without limit. `current_budget() or default_budget()` keeps a
+    # harness's own budget when there is one.
+    budget = current_budget() or default_budget()
 
-    with bind_store(store):
+    with bind_budget(budget), bind_store(store):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -203,7 +318,24 @@ def run_pipeline(
             with client.start_as_current_observation(
                 name="otto:pipeline", as_type="agent", input=text
             ) as run_span:
-                final = app.invoke(initial, config)
+                try:
+                    final = _salvage(app.invoke(initial, config))
+                except Exception as exc:
+                    # One salvage point, deliberately, rather than a catch
+                    # inside the loop: a real bug should still surface loudly
+                    # here and in the logs, but it must not cost the caller the
+                    # work that was already done. See _salvage.
+                    logger.exception("pipeline run failed; salvaging what it reached")
+                    final = _salvage(app.get_state(config).values, exc)
+                if _paused(final):
+                    # run_pipeline has no resume path -- resume is the streaming
+                    # API. A caller here would otherwise record an empty answer
+                    # and never learn that a question was asked.
+                    logger.warning(
+                        "run_pipeline: the graph paused to ask %r and cannot be "
+                        "resumed from here; answering with what it had",
+                        final.get("pending_question"),
+                    )
                 _score(run_span, final)
 
     return final
@@ -241,8 +373,14 @@ def run_pipeline_stream(
     graph_thread_id = _graph_thread_id(session_id)
     config = _config(graph_thread_id, handler)
     store = MemoryStore.for_session(session_id)
+    # A run with nobody watching still needs a ceiling. Both benchmark harnesses
+    # bind their own Budget; an `otto chat` turn bound NOTHING, so
+    # OTTO_MAX_MODEL_CALLS was a dead env var and an interactive turn could
+    # spend without limit. `current_budget() or default_budget()` keeps a
+    # harness's own budget when there is one.
+    budget = current_budget() or default_budget()
 
-    with bind_store(store):
+    with bind_budget(budget), bind_store(store):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -251,13 +389,13 @@ def run_pipeline_stream(
             with client.start_as_current_observation(
                 name="otto:pipeline", as_type="agent", input=text
             ) as run_span:
-                for update in app.stream(initial, config, stream_mode="updates"):
-                    ask = _as_ask_event(update, graph_thread_id)
-                    if ask is not None:
+                stream = app.stream(initial, config, stream_mode=_STREAM_MODES)
+                for event, is_ask in _stream_events(stream, graph_thread_id):
+                    if is_ask:
                         run_span.update(output="(paused -- awaiting your answer)")
-                        yield ask
+                        yield event
                         return
-                    yield update
+                    yield event
                 final = app.get_state(config).values
                 _score(run_span, final)
                 trace_id = run_span.trace_id
@@ -288,8 +426,14 @@ def resume_pipeline_stream(answer, *, thread_id: str, session_id: str):
     handler = CallbackHandler()
     config = _config(thread_id, handler)
     store = MemoryStore.for_session(session_id)
+    # A run with nobody watching still needs a ceiling. Both benchmark harnesses
+    # bind their own Budget; an `otto chat` turn bound NOTHING, so
+    # OTTO_MAX_MODEL_CALLS was a dead env var and an interactive turn could
+    # spend without limit. `current_budget() or default_budget()` keeps a
+    # harness's own budget when there is one.
+    budget = current_budget() or default_budget()
 
-    with bind_store(store):
+    with bind_budget(budget), bind_store(store):
         with propagate_attributes(
             trace_name="otto:pipeline",
             session_id=session_id,
@@ -298,13 +442,13 @@ def resume_pipeline_stream(answer, *, thread_id: str, session_id: str):
             with client.start_as_current_observation(
                 name="otto:pipeline:resume", as_type="agent", input=str(answer)
             ) as run_span:
-                for update in app.stream(Command(resume=answer), config, stream_mode="updates"):
-                    ask = _as_ask_event(update, thread_id)
-                    if ask is not None:
+                stream = app.stream(Command(resume=answer), config, stream_mode=_STREAM_MODES)
+                for event, is_ask in _stream_events(stream, thread_id):
+                    if is_ask:
                         run_span.update(output="(paused -- awaiting your answer)")
-                        yield ask
+                        yield event
                         return
-                    yield update
+                    yield event
                 final = app.get_state(config).values
                 _score(run_span, final)
                 trace_id = run_span.trace_id

@@ -5,7 +5,15 @@ __pycache__
 langfuse
 # per-run final-answer files (13.5) -- not something to commit
 otto_output/
-# agent/eval/memory_bench.py's LoCoMo dataset cache (download_locomo()) --
-# a ~2.8MB download-on-demand copy, not hand-authored fixture data like
-# agent/eval/golden/'s JSON files, so it doesn't belong in git history.
-agent/eval/data/
+# Downloaded benchmark data -- LoCoMo, HLE and Claw-Eval's own parquet and
+# fixture archives, 2.9GB of it, fetched on demand rather than committed.
+#
+# The rule used to be the whole of agent/eval/data/, which also silently
+# swallowed the hand-authored files that live alongside the downloads: the
+# Claw-Eval config, its judge patch, and the README telling you to apply it.
+# Three files the docs point at and git had never heard of. Ignore the
+# downloads by what they are instead.
+agent/eval/data/*.json
+agent/eval/data/*.parquet
+agent/eval/data/**/*.parquet
+agent/eval/data/**/*.tar.gz

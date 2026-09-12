@@ -52,6 +52,23 @@ def test_every_golden_checker_accepts_a_correct_candidate_and_rejects_a_wrong_on
         "math_04": ("x = 5", "x = 999"),
         "math_05": ("0.375", "0.9"),
         "math_06": ("153.94", "1.0"),
+        # NP-hard MATH items. These are the same class of problem as the
+        # nphard code items, asked as a question rather than as a function to
+        # write, so the "wrong" answer is what a greedy or first-fit pass
+        # actually produces rather than an arbitrary number -- a checker that
+        # only rejects nonsense is not checking optimality.
+        #
+        # Subset sum: the target is 33333 and the true best is 33308, so
+        # "33333" is exactly the mistake of reading the target off the
+        # question and calling it an answer.
+        "nphard_math_subsetsum_01": ("the best achievable sum is 33308", "33333"),
+        # Bin packing: first-fit-decreasing needs 5 bins here, the optimum is 4.
+        "nphard_math_binpacking_01": ("4 bins suffice", "you need 5 bins"),
+        # Set cover: greedy takes 4 sets, the minimum is 3.
+        "nphard_math_setcover_01": ("3 sets are enough", "4 sets"),
+        # Max clique: the obvious 4-clique on 1,2,3,4 is not the largest --
+        # adding vertex 8 makes 5.
+        "nphard_math_clique_01": ("the largest clique has 5 vertices", "4"),
         # NP-hard items (pulled from NPHardEval instances, ground truth
         # independently verified by brute force -- see agent/eval/golden/
         # nphard_*.json for the embedded instance data and how the true

@@ -69,43 +69,69 @@ def test_every_chain_is_a_non_empty_tuple():
         assert chain, f"{task} is empty"
 
 
-def test_inception_is_the_floor_of_every_chat_chain():
-    """The cost policy's structural half: no chat task can fail outright."""
-    chat_tasks = [
+#: Chat tasks that deliberately have no Inception floor, and why. Both would
+#: be actively worse with one: Mercury cannot see an image or reach the web,
+#: so falling through to it would answer confidently from memory while looking
+#: like a real look or a real search.
+NO_FALLBACK_BY_DESIGN = {Task.VISION, Task.WEB}
+
+
+def _chat_tasks() -> list[Task]:
+    return [
         t for t, chain in TASK_ROUTES.items()
         if all(c.endpoint is Endpoint.CHAT for c in chain)
     ]
-    assert chat_tasks, "expected at least one chat-only task"
-    for task in chat_tasks:
+
+
+def test_inception_is_the_last_resort_of_every_chat_chain_that_has_one():
+    """The cost policy's structural half, restated for a multi-vendor table
+    (2026-09-11): a chat task that CAN fall back to Inception must have it
+    LAST. Anywhere earlier and the cheap-or-better vendor above it is
+    unreachable, which is the failure mode a chain-ordering mistake produces.
+    """
+    checked = 0
+    for task in _chat_tasks():
         specs = [c.spec for c in TASK_ROUTES[task] if c.spec]
-        assert any(s.startswith("inception:") for s in specs), (
-            f"{task} has no pinned Inception candidate, so it can raise "
-            f"NoViableRoute when Inception itself is unreachable"
+        inception = [s for s in specs if s.startswith("inception:")]
+        if task in NO_FALLBACK_BY_DESIGN:
+            assert not inception, f"{task} is documented as having no Inception floor"
+            continue
+        assert inception, f"{task} has no Inception candidate and is not exempt"
+        assert specs[-1].startswith("inception:"), (
+            f"{task}: Inception must be last, got {specs}"
         )
+        checked += 1
+    assert checked, "expected at least one chat task with an Inception floor"
 
 
-def test_every_route_is_inception_only():
-    """Otto is Inception-only (2026-09-09) -- every candidate in every chain
-    is now a pinned Inception spec. This is the property that made the
-    anthropic/openai/gemini provider modules and their TASK_ROUTES entries
-    deletable rather than just unused: nothing left in the table can resolve
-    against them."""
+def test_every_inception_chat_candidate_is_mercury_2_5():
+    """Not just "Inception", the CURRENT generation. A route still pinned to
+    mercury-2 would keep working (both ids are live) but silently miss the
+    quality Mercury 2.5 exists for."""
+    for task in _chat_tasks():
+        for c in TASK_ROUTES[task]:
+            if c.spec and c.spec.startswith("inception:"):
+                assert c.spec == "inception:mercury-2.5", f"{task}: {c.spec}"
+
+
+def test_the_chat_fast_chain_stays_inception_only():
+    """The overseer's two-line classification is the highest-call-count,
+    lowest-value call in the graph, so it is the single worst place to spend a
+    frontier vendor's per-token price. It stays on Mercury on purpose."""
+    specs = [c.spec for c in TASK_ROUTES[Task.CHAT_FAST]]
+
+    assert specs == ["inception:mercury-2.5"]
+
+
+def test_no_inception_only_param_rides_on_another_vendors_candidate():
+    """`reasoning_effort` and `diffusing` are ChatInception constructor
+    arguments and raise on ChatOpenAI/ChatAnthropic. validate() enforces this
+    at import via PARAMS_BY_PROVIDER; this states it as a property so the
+    reason survives even if that table is refactored."""
     for task, chain in TASK_ROUTES.items():
-        for i, c in enumerate(chain):
-            assert c.provider_name == "inception", f"{task.name}[{i}]: {c.provider_name!r}"
-
-
-def test_chat_chains_are_pinned_to_mercury_2_5():
-    """The point of today's change: not just "Inception", the CURRENT
-    generation. A route still pinned to mercury-2 would keep working (both
-    ids are live), but silently miss the quality Mercury 2.5 exists for."""
-    chat_tasks = [
-        t for t, chain in TASK_ROUTES.items()
-        if all(c.endpoint is Endpoint.CHAT for c in chain)
-    ]
-    for task in chat_tasks:
-        specs = [c.spec for c in TASK_ROUTES[task]]
-        assert specs == ["inception:mercury-2.5"], f"{task}: {specs}"
+        for c in chain:
+            if c.provider_name != "inception":
+                assert "diffusing" not in c.params, f"{task}: {c.spec}"
 
 
 # ---------------------------------------------------------------------------
@@ -151,20 +177,18 @@ REJECTED = [
                  "needs", id="endpoint-capability-not-required"),
 
     # --- endpoints only Inception implements ---
-    # openai/anthropic no longer being KNOWN_PROVIDERS members at all means
-    # these two now fail one check earlier than they used to ("unknown
-    # provider" instead of "inception-only") -- there is no longer a
-    # *registered* non-Inception vendor left to exercise the inception-only
-    # branch specifically against. Either way the table is correctly
-    # rejected, which is the property these cases actually guard.
+    # These exercise the inception-only branch for real again. While openai
+    # and anthropic were unregistered they failed one check earlier, on
+    # "unknown provider", and the comment here used to note the lost
+    # coverage; registering those vendors (2026-09-11) restores it.
     pytest.param({Task.CODE_COMPLETE: (Candidate(spec="openai:gpt-4o",
                                                  requires=frozenset({Capability.FIM}),
                                                  endpoint=Endpoint.FIM),)},
-                 "unknown provider", id="fim-pinned-to-an-unregistered-vendor"),
+                 "inception-only", id="fim-pinned-to-a-non-inception-vendor"),
     pytest.param({Task.CODE_EDIT: (Candidate(provider="anthropic",
                                              requires=frozenset({Capability.EDIT}),
                                              endpoint=Endpoint.EDIT),)},
-                 "unknown provider", id="edit-scoped-to-an-unregistered-vendor"),
+                 "inception-only", id="edit-scoped-to-a-non-inception-vendor"),
     pytest.param({Task.CODE_COMPLETE: (Candidate(requires=frozenset({Capability.FIM}),
                                                  endpoint=Endpoint.FIM),)},
                  "open query", id="fim-as-an-open-query"),

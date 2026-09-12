@@ -1,298 +1,76 @@
-"""The overseer/planner/solver/summarizer/finder/evaluator graph.
+"""One agent, one evaluator, and the seams that keep them honest.
 
-Second revision of this graph (2026-09-10, same day the first revision
-replaced the orchestrator/worker/evaluate/subtask_consensus/synthesize swarm
-pipeline). The first revision's ROUTER was a one-shot dispatcher: decide once,
-run one specialist, judge once, re-decide only on rejection. This revision
-changes what ROUTER *is*, per that day's second design discussion:
+The graph is `agent -> evaluator -> END`, with an `ask_user` pause. It used to
+be seven nodes -- an overseer re-invoked after every step, four specialists and
+a judge -- and collapsing it is the largest measured change in this file:
+node boundaries were 45-69% of a run's wall time against 0.1-0.4 seconds of
+actual tool execution per task, and three of every five model calls were
+overhead. Mean score went 0.54 to 0.62 on the measured tasks.
 
-  * ROUTER is the OVERSEER now, not a one-shot dispatcher. It is re-invoked
-    after EVERY node -- not just after an evaluator rejection -- and decides
-    the single next action from everything accumulated so far: gathered
-    context, an approved plan (if any), the most recent pending output, and
-    the most recent rejection feedback (if any). Five targets, not four:
-    planner, solver, summarizer, finder, or evaluator. Sending something to
-    evaluator is now itself a decision the overseer makes explicitly, not
-    something that happens automatically after every specialist run -- a
-    finder call that only gathered background material, say, should usually
-    go straight to whichever specialist needs it next, not to the evaluator.
+WHAT A RUN DOES, in order.
 
-  * No cap on how many times the overseer may retry a task (design call:
-    "we dont need any variable to limit number of rounds a agent runs for").
-    `round` (AgentState) is telemetry now, incremented on every overseer
-    invocation, read by nothing that decides to stop. The only backstop left
-    is LangGraph's own recursion_limit, sized generously by
-    _RECURSION_SAFETY_NET below and by agent/pipeline/run.py's `_config` --
-    infra insurance against a genuinely runaway loop (a bug), never a
-    business rule a real, converging request is expected to hit.
+1. `_criteria` writes down what a correct answer must contain, FROM THE TASK
+   ALONE, before any attempt exists. Its own call, its own prompt. This is the
+   only information in the whole judgment the actor did not produce, and it is
+   why the evaluator is worth its calls: self-refinement without external
+   information measures at -2.5% to 0% over five turns, where the same models
+   reach 90-98% given an external checklist.
 
-  * Retry-same-specialist is the DEFAULT policy on a rejection, not a
-    hardcoded rule (design call: "we dont have overlap between specialist so
-    retry with same specialist with feedback rather than different"). It
-    lives entirely in ROUTER_PROMPT's wording below, with one deliberate,
-    explicit exception: if the feedback shows a task was attempted without a
-    plan and that was the actual problem, the overseer is told to dispatch
-    to planner instead, even though a different specialist tried it --
-    "learn from its mistake for which task required planning and which did
-    not," scoped to THIS run only (see the note at the bottom of this
-    docstring on the larger, cross-turn version of that same idea).
+2. `_agent_loop` runs one conversation until it answers, pauses, or runs out
+   of budget. The protocol is text -- `ACTION:` then `CODE:` -- not native
+   tool calling, which is deliberate: programmatic tool calling matches or
+   beats JSON in 11 of 14 models, and under fan-out JSON collapses from 100%
+   to 0% between 70 and 72 tools where the code path holds.
 
-  * planner / solver / summarizer / finder -- same ACTION/tool-then-FINAL
-    loop as before (_tool_loop), same six tools. What changed is what they
-    hand back: every one of them now returns to "router" (not "evaluator")
-    when done, and self-reports its own identity into `state["node"]` --
-    the overseer no longer predicts ahead of time who is about to run, it
-    only decides who runs next. See agent/pipeline/state.py for the full
-    field-by-field reasoning, and the third-refinement note below for how
-    `context` gets written during plan execution specifically.
+   Inside it, four things earn their place:
 
-  * evaluator is dual-mode now, not single-mode: it judges a PLAN
-    (`state["node"] == "planner"`) or a candidate FINAL ANSWER (anything
-    else) -- different question, different prompt. Approving a plan sets
-    `state["plan"]` and returns to the overseer (there is more work left --
-    the plan hasn't been executed yet); approving a final answer sets
-    `state["final_output"]` and ends the run. Rejecting either always
-    returns to the overseer with the reason -- there is no longer an
-    exhaustion branch that gives up after N rounds (removed along with
-    MAX_DISPATCH_ROUNDS, see above).
+   - `_parse_worker_reply` validates on the EMIT path. A tool name wrapped in
+     backticks, bold, prose or a typo resolves instead of costing a round trip
+     to be told it does not exist, and whichever of ACTION/FINAL comes first
+     wins so an answer is never silently discarded in favour of a trailing
+     suggestion.
+   - The mutation gate holds a tool that cannot be undone, once per target,
+     BEFORE it runs. Mutating actions are 14-18% of steps and one mutating
+     mistake cuts success odds 55-96%, so the gate is cheap and precisely
+     aimed. `TOOL_TIERS` is what it reads.
+   - `_switch_mode` changes model and guidance without changing node. Modes
+     are (task, guidance, depth); escalating restarts from the seed and
+     carries the last thing produced, de-escalating keeps everything. A
+     stronger model handed a weaker one's trajectory recovers 47% of the gain
+     at 4-6x the cost, which is why the directions differ.
+   - `_compact` shrinks old tool results for free and keeps the full text
+     retrievable through `recall_memory`.
 
-Third refinement, same day: a plan stopped being free text the moment it's
-approved. PLANNER_PROMPT now asks for a JSON array of `{"task": ...}`
-objects; evaluator(), on approving one, parses it (_parse_plan_steps) into
-a list of PlanStep dicts (agent/pipeline/state.py) --
-`{"task", "route_to": None, "output": None}` each -- and CLEARS
-`state["active_step"]` back to None. From there, executing the plan is
-deterministic/assignment-driven, not re-litigated through the general
-overseer prompt on every round:
+3. The evidence gate. An answer that changed code with nothing run since is
+   held once and asked for the check -- no model call unless it fires, prose
+   edits exempt, and "there is nothing to run here" accepted. See
+   agent/pipeline/evidence.py for why this is structural rather than a prompt.
 
-  * router() first checks for an ACTIVE, feedback-free plan
-    (`state["plan"]` is a non-empty list and `state["feedback"]` is empty).
-    If so, it finds the first step whose `output` is still None
-    (_next_pending_step_index) and:
-      - if there isn't one (every step has run), it dispatches straight to
-        evaluator for the whole-answer judgment -- no LLM call needed, the
-        decision is unambiguous once the plan says "done".
-      - if there is one, it makes a NARROWER LLM call (STEP_ROUTE_PROMPT,
-        restricted to STEP_TARGETS = solver/summarizer/finder -- no
-        re-planning or per-step judgment mid-plan in this design), writes
-        the chosen specialist into that step's own `route_to`, and
-        dispatches there.
-    The general ROUTER_PROMPT (all five targets) is only consulted again
-    either before any plan exists (the very first decision on a request)
-    or after a REJECTION (deciding how to retry) -- both cases where real
-    judgment, not just plan bookkeeping, is needed. A rejection while a
-    plan is active is really a rejection of the LAST step's output (see
-    below), so the general prompt's existing "retry same specialist by
-    default, escalate to planner if it needed one" policy still applies
-    unchanged; if it picks "planner" while an old plan is still hanging
-    around, router() resets `plan`/`active_step` to None first -- the old
-    plan turned out to be the problem, not just one step of it, so this
-    starts over rather than leaving stale step state behind.
+4. `evaluator` scores the answer against the criteria from step 1, separates
+   "not met" from "blocked by the environment", and may check one thing with a
+   tool. It is capped at MAX_EVALUATOR_ITERATIONS because, given a tool budget
+   and no cap, it spent it: 24 calls on a task the loop did in six.
 
-  * `active_step` (state.py) tracks which step is currently in flight.
-    _run_role checks it: when set, this call is executing (or REVISING,
-    after a rejection) that specific step, so its output overwrites that
-    step's `output` in `state["plan"]` -- not just the flat `state["output"]`
-    used outside plan execution -- and a labeled "step N (role): task ->
-    result" entry is always appended onto `context` (overriding that role's
-    own normal context_op, e.g. summarizer's usual "replace", for the
-    duration of plan execution -- erasing earlier steps' results because
-    the current step happens to be a summarizer step would defeat the whole
-    point of sequencing). This is the concrete mechanism behind point 4's
-    "big task -> plan -> later steps build on earlier ones' results."
+5. `_distil` leaves at most three transferable lessons behind, on a cheaper
+   seat than the executor. `_record_seat` credits the model that produced the
+   answer, but only when the run used ONE mode -- crediting any of several is
+   guessing, and a log that mis-attributes cannot be trusted to change routing.
 
-Fourth refinement, same day: both of the overseer's LLM calls (the general
-5-way decision and the narrower per-step assignment) now retry IN PLACE
-(_decide, _MAX_ROUTER_PARSE_RETRIES) if the reply doesn't parse at all,
-before falling back to _parse_router's "default to solver" safety net.
-Observed live: the model occasionally rambles instead of the required
-two-line NODE:/WHY: format -- most often the very first time a PENDING
-OUTPUT shows up in its prompt (i.e. right when it should say "evaluator"
-for the first time) -- rather than genuinely being unsure. Silently
-defaulting to solver in that case doesn't just misroute once: it burns an
-entire extra specialist round (a full ACTION/FINAL tool loop) to recover,
-every time it happens. A retry of just the one small router call is far
-cheaper and, empirically, usually succeeds on the first retry.
+WHAT IS BOUND, NOT IMPORTED. Every seam this file depends on is a contextvar
+so a harness can redirect it per run without the graph knowing: the workspace,
+the command runner (a container, for the benchmarks), extra tools, the spend
+budget, the memory store, and the lesson bank. That is what lets Claw-Eval and
+SWE-bench run Otto's real graph rather than a copy of it.
 
-Fifth refinement, same day (design call, verbatim: "if evaluator fails
-router should again go to planner for planning next steps based on
-current output"): a live run crashed with an uncaught httpx.ReadTimeout,
-raised mid-stream deep inside the Inception provider (solver's own call,
-that time -- not evaluator's), propagating all the way up through this
-file's `_call` and out of `app.invoke()` entirely. Two things changed:
-
-  * agent/router/llm_provider/inception_provider.py's `_stream` only
-    translated exceptions raised by the initial `client.chat.completions.
-    create(...)` call into ProviderError -- NOT exceptions raised while
-    iterating the returned stream itself (`for chunk in stream:`), which
-    is exactly where a read timeout happens (the request already
-    succeeded; the response body is still arriving). That gap is now
-    closed: the iteration is wrapped the same way the initial call is,
-    and raw httpx errors (not just the SDK's own InceptionError subtree)
-    are translated too, since a read timeout mid-stream surfaces as a raw
-    httpx.ReadTimeout, never one of the SDK's own wrapped types. The
-    invariant this restores (base.py's own docstring already states it):
-    nothing but ProviderError should ever cross the provider boundary.
-
-  * With that invariant actually holding, `_run_role` and `evaluator`
-    (below) now catch ProviderError around their own `_tool_loop` call
-    instead of letting it crash the graph. Rather than a real output or
-    verdict, they return to router() with `state["node_error"]` set
-    (state.py) -- and router() checks that FIRST, ahead of both the
-    plan-execution shortcut and the general 5-way decision, escalating to
-    planner DETERMINISTICALLY (no LLM call -- an LLM call is exactly what
-    just failed) with any active plan discarded, same as an ordinary
-    rejection-driven escalation. The literal request said "if evaluator
-    fails" -- but the crash that prompted it happened in solver, and
-    there's no principled reason a specialist's own network hiccup should
-    be handled differently from the evaluator's, so this is general: any
-    of the five nodes' own LLM call failing routes back to planner the
-    same way. "based on current output" is handled by reusing
-    _role_body's existing "PREVIOUS ATTEMPT BY <role>" background display
-    -- the failing node writes a plain-language explanation into
-    `feedback` (state["output"] itself is left untouched by the failure),
-    so planner sees exactly what a different specialist's rejected
-    attempt already looks like to it, just with a failure reason instead
-    of an evaluator's.
-
-Sixth refinement, same day, live-tested: "Hi" / "Solve N Queens with
-brute force" / "improve above solution" -- the third turn had no idea
-what "above solution" was and looped trying to guess. Root cause: every
-turn started `state["messages"]` from scratch (agent/pipeline/run.py's
-`_initial()` only ever seeded it with the CURRENT turn's text), even
-though chat.py's/tui.py's own `Session.history` was already tracking the
-whole conversation client-side -- it just never got handed to the graph.
-Two halves, both needed: run.py's new `history` parameter actually feeds
-prior turns into `state["messages"]`; `_conversation_so_far()` (below)
-is what makes every prompt-builder in THIS file (`_router_body`,
-`_step_route_body`, `_role_body`, and evaluator()'s own human_body) show
-it, as a "CONVERSATION SO FAR:" block ahead of TASK:/ORIGINAL REQUEST:.
-Without both halves this doesn't work -- state carrying the messages but
-no prompt ever displaying them would be just as blind as before.
-Deliberately NOT a fix for "the model asks the user a clarifying question
-mid-run" (there was no such capability anywhere in this graph yet, a
-separate and larger gap the same live test surfaced) -- this only made
-sure the model has what it needs to not HAVE to ask in a case like
-"improve above solution", where the answer was one turn away the whole
-time. See the seventh refinement, directly below, for that other gap.
-
-Seventh refinement, same day, same live test's other half (verbatim:
-"it got stuck in a loop trying to find what above solution is and was
-thinking to ask user but it didnt have that capability... not able to ask
-something to user mid thinking if it get's confused"): planner / solver /
-summarizer / finder / evaluator can now genuinely pause a run and ask the
-person something, instead of guessing or looping. Scoped with the person
-before building it (three separate calls, all "any node can ask" /
-"widget with multi choice + text bar" / "LangGraph interrupt()/
-Command(resume=...)"):
-
-  * `ask_user` joins the six existing tools (execute_python, execute_bash,
-    web_search, rag, complete_code, predict_edit) as a seventh ACTION any
-    of the five nodes above may reach for, mid-_tool_loop, exactly like
-    any other tool -- see PLANNER_PROMPT/SOLVER_PROMPT/SUMMARIZER_PROMPT/
-    FINDER_PROMPT/EVALUATOR_PROMPT's shared wording on when to use it
-    (sparingly -- it pauses the whole run and costs the person real time).
-
-  * Unlike every other tool, though, `ask_user` cannot just hand a result
-    back into _tool_loop's own local `messages` list and keep going --
-    the answer has to come from an actual human, which means the WHOLE
-    GRAPH has to pause (LangGraph's own checkpointed interrupt()/
-    Command(resume=...) mechanism -- app.compile(checkpointer=
-    InMemorySaver()) already had a checkpointer wired up, from before this
-    refinement, for an unrelated reason: giving every turn its own
-    disposable thread id, agent/pipeline/run.py's `_graph_thread_id`).
-    _tool_loop, on seeing ACTION: ask_user, raises NeedsUserInput (below)
-    instead of dispatching it like a normal tool -- unwinding out of
-    _tool_loop and out of whichever role node (or evaluator()) called it,
-    all the way to a NEW dedicated `ask_user` node (bottom of this file).
-    That node's entire body is "read the question off state, call
-    interrupt(), write the answer down, hand back to whoever asked" --
-    deliberately nothing else, because langgraph.types.interrupt's own
-    docstring is explicit that a node resumes by RE-EXECUTING ITS WHOLE
-    BODY from the top; a node with an LLM call or a tool dispatch BEFORE
-    its interrupt() would redo that work every single time the person
-    answers. Keeping the actual pause point in its own minimal node, with
-    NeedsUserInput as the unwind signal that gets it there, is what avoids
-    that -- the specialist that got stuck is simply re-invoked fresh
-    afterward (ask_user's own Command(goto=<the role that asked>)), not
-    resumed mid-loop.
-
-  * The answer goes into `state["context"]` (a `you asked: "..." / the
-    user answered: "..."` line, appended the same way finder's own
-    gathered material is), NOT into `state["messages"]` -- every node in
-    this graph, router() included, reads `state["messages"][-1]` as THE
-    TASK for the whole turn; appending the Q&A there would silently
-    replace the actual task the next time anything looked. `context`
-    already means "material gathered so far for planner/solver to use"
-    (state.py) and is already shown to every prompt below via "CONTEXT
-    GATHERED SO FAR:" -- reusing it needs no new display mechanism, and
-    the re-invoked specialist sees the answer as ordinary background,
-    the same way it would see anything finder dug up.
-
-  * Two new AgentState fields carry a pending question across the pause:
-    `pending_question`/`pending_choices` (what to show; choices is the
-    "multi choice" half of "multi choice + text bar" -- OPTIONAL, an
-    empty list means open-ended free text only) and `asking_role` (who to
-    hand back to once answered -- ask_user() itself has no other way to
-    know). All three are cleared back to None by ask_user() the moment it
-    resumes; nothing about this is meant to survive past that one pause.
-
-  * The interrupt surfaces to callers of agent/pipeline/run.py's
-    run_pipeline_stream() as a `{"__ask__": {"question", "choices",
-    "thread_id"}}` event (instead of the usual `{"__final__": ...}` at
-    the very end) -- the stream simply ends there, mid-turn, same
-    thread_id and all, and a NEW function, `resume_pipeline_stream()`,
-    continues that exact same LangGraph checkpoint thread once the caller
-    has an answer. agent/cli/chat.py and agent/cli/tui.py both loop on
-    that: render/collect the question, resume, keep going -- possibly
-    more than once, if the re-invoked specialist gets stuck again.
-
-Deliberately out of scope for this revision, same as the first:
-  - web_search and rag are still STUBBED (tools.py).
-  - No domain-specific verification beyond the evaluator's own tool access.
-  - No PER-STEP evaluation -- only the whole plan (before execution) and
-    the whole final answer (after every step has run) are ever judged. A
-    step that turns out wrong is caught at that final judgment and handled
-    like any other rejection (retry the specialist that produced it, or
-    escalate to a fresh plan) rather than being individually re-judged
-    mid-plan.
-
-Deliberately out of scope for a DIFFERENT reason -- not unbuilt-but-planned
-inside this file, but a separate, larger subsystem that already has its own
-design doc (claude/otto-memory-design.md, Phase 14 "Personal lessons"):
-persistent, CROSS-TURN learning about which tasks need a plan (retrieval
-from a local embeddings index, a promotion gate, etc.) is not implemented
-here. What IS implemented here is the narrower, IN-TURN version -- the
-overseer sees this run's own rejection history in its prompt and can act on
-it for the rest of THIS run -- because nothing durable persists once the
-run ends. Building the durable version is follow-up work against that doc,
-not a silent scope-expansion of this change.
-
-Eighth refinement, same day: Phase 2 of claude/otto-tiered-memory-design.md
-(the project doc has the full design) -- this graph's own two halves of
-that wiring, a DIFFERENT memory system from the paragraph just above (that
-one is cross-turn LEARNING; this one is cross-turn conversation MEMORY,
-short-term, not persisted past a session). agent/pipeline/run.py's
-`_initial()` gained a `memory_context` parameter: agent/cli/shell.py's
-`Session` now keeps conversation history in an `agent.memory.queue.
-TieredQueue` instead of an unbounded list, and seeds `state["context"]`
-with whatever's fallen out of that queue's verbatim recent tier (`X`) --
-the queue's own bounded, real Human/AIMessage reconstruction still becomes
-`history`/`state["messages"]` exactly as before this refinement, so
-`_conversation_so_far()` above needed zero changes; only what counts as
-"recent enough to stay verbatim" is now capped. tools.py's new
-`recall_memory` tool is the other half -- registered like any other tool
-(TOOL_DISPATCH/TOOL_TIERS) and mentioned in every role/evaluator prompt's
-ACTION list, same as every other tool (tests/test_prompt_tool_sync.py's
-existing "every prompt mentions every dispatchable tool" check is what
-keeps this in sync, unchanged by this refinement). FINDER_PROMPT's own
-listing gives it the most emphasis (Prefer, in this order: ...) since the
-spec's own framing was specifically "if AGENT decides it needs more
-details... FINDER will find the relevant stuff" -- but any role stuck on
-something from earlier in a long conversation can reach for it directly
-rather than routing through finder first.
+BUDGET IS IN MODEL REQUESTS, counted in `_call`, retries included -- a budget
+that counted logical calls would undercount by up to 3x exactly when a run is
+going badly.
 """
 from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass
 
 import json
 import logging
@@ -303,9 +81,25 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from agent.pipeline.state import AgentState, PlanStep
-from agent.pipeline.tools import TOOL_DISPATCH
-from agent.router.llm_provider.base import ProviderError
+from agent.memory.embeddings import current_model_name as embedding_model_name
+from agent.memory.embeddings import embed
+from agent.memory.hashing import content_hash
+from agent.memory.retrieval import EVICTED_KIND
+from agent.memory.session import current_store
+from agent.memory.lessons import (
+    Lesson, learning_enabled, parse_distilled, recall_lessons, record_lessons,
+)
+from agent.pipeline.evidence import Ledger, render_note as render_unproven
+from agent.pipeline.state import AgentState
+from agent.pipeline.budget import Budget, current_budget, default_budget
+from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
+from agent.pipeline.tools import (
+    MUTATING, READ_ONLY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
+)
+from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
+from agent.router.llm_provider.base import ProviderError, translate_unknown
+from agent.router import outcomes as seat_outcomes
+from agent.router import health as provider_health
 from agent.router.mapping import Task
 from agent.router.router import Router
 
@@ -319,33 +113,106 @@ ROUTER = Router()  # the LLM-provider router every node calls into -- NOT
 #: four; adding a fifth means adding its prompt, its node function, a line
 #: in the graph wiring at the bottom of this file, and a mention in
 #: ROUTER_PROMPT.
-ROLE_NODES = ("planner", "solver", "summarizer", "finder")
-
-#: Everywhere the overseer may dispatch to -- the four specialists plus
-#: evaluator itself. Judging something is now a decision the overseer makes
-#: explicitly (see module docstring) rather than something automatic.
-DISPATCH_TARGETS = ROLE_NODES + ("evaluator",)
-
-#: Specialists a single PLAN STEP may be assigned to (router()'s narrower,
-#: deterministic-except-for-this-one-choice step-assignment call) --
-#: deliberately excludes "planner" (no re-planning mid-step; abandoning a
-#: bad plan for a fresh one is a WHOLE-plan decision the general overseer
-#: prompt makes, see module docstring) and "evaluator" (no per-step
-#: judgment in this design -- see module docstring).
-STEP_TARGETS = ("solver", "summarizer", "finder")
-
-#: Pure infra safety net (see module docstring) -- NOT a business rule.
-#: Sized generously: a real converging request is expected to stay well
-#: under this; agent/pipeline/run.py's `_config` uses this directly as
-#: LangGraph's `recursion_limit`. If a run ever actually hits this, that is
-#: a bug (a genuinely non-converging loop) to go fix, not a signal to raise
-#: the number further.
-_RECURSION_SAFETY_NET = 150
+#: Cut from 150 to 30 with the loop rewrite. 150 was sized for a graph that
+#: bounced router -> specialist -> router for every few tool calls, so a real
+#: run legitimately used dozens of super-steps. One loop uses three or four
+#: (agent -> evaluator -> agent -> evaluator), so 30 is still a wide margin and
+#: catches a genuine runaway in seconds rather than minutes.
+_RECURSION_SAFETY_NET = 30
 
 #: Same rationale as the first revision's identical constant: a diffusing
 #: (Mercury) call cut off at max_tokens is not a clean prefix, it's an
 #: unconverged snapshot, and must be retried rather than accepted.
 MAX_DIFFUSION_RETRIES = 3
+
+#: Appended to a tool result the model has already produced, verbatim, earlier
+#: in this same attempt.
+#:
+#: A plain success gives it nothing to react to. Measured on a hard task: the
+#: solver wrote the same file over and over -- every write succeeding, every
+#: result saying so -- because "wrote main.c.rs (30 lines)" is not a reason to
+#: do anything different, and continuing an established pattern is the easiest
+#: thing for a model to do. Naming the repetition is: it turns an
+#: indistinguishable success into a fact about the attempt's own history.
+#:
+#: Deliberately not an error and not a refusal -- the call really did succeed,
+#: and re-running something is sometimes right (re-reading a file after
+#: changing it). This only says it happened and that repeating cannot change
+#: the outcome.
+REPEATED_CALL_NOTE = (
+    "NOTE: that is {n} {tool} calls in a row against `{target}`, with nothing "
+    "run in between. Rewriting it again is guessing. Run it -- compile it, "
+    "execute it, test it -- and use what that actually reports."
+)
+
+#: Appended when a call fails against something that has already failed in
+#: this attempt.
+#:
+#: Separate from REPEATED_CALL_NOTE, and fires on the SECOND occurrence rather
+#: than the third, because the two are not the same mistake. Re-running
+#: something that succeeded is wasteful; re-running something that failed,
+#: unchanged, means the error was never read. It is also the cheapest thing
+#: for a model to produce, which is why it needs saying out loud.
+REPEATED_FAILURE_NOTE = (
+    "NOTE: `{target}` has already failed once in this attempt and has now "
+    "failed again. Do not run it a third time. Read the error above and work "
+    "out what is actually wrong -- check the state of the thing you are acting "
+    "on, and whether something else is undoing or blocking your change. Fix "
+    "what you find, then try."
+)
+
+#: How many calls in a row against the same target before the note appears.
+#: 3, not 2: a second attempt straight after the first is ordinary (a typo
+#: spotted on re-reading), while a third with still nothing run against it is
+#: the pattern this exists to break.
+REPEATS_BEFORE_NOTE = 3
+
+
+def _action_target(tool_name: str, body: str) -> str:
+    """What a tool call is acting ON -- the file path for the file tools, the
+    command itself for the shell ones.
+
+    The target rather than the whole body, because the loop worth catching
+    does not repeat verbatim: rewriting the same file with a slightly
+    different draft every time looks different byte for byte and is the same
+    non-progress. Measured on a hard task: 166 writes to one path, of 8, 721,
+    36, 37 and 35 lines, without the compiler ever being run once.
+    """
+    first_line = next((line for line in body.splitlines() if line.strip()), "")
+    if tool_name == "view_image":
+        # The path alone is the wrong target here. Asking a second, narrower
+        # question about one image is exactly how this tool is meant to be
+        # used -- a vision model returns words, so narrowing across calls is
+        # the only way to get at detail -- and keying on the path would flag
+        # that as repetition and tell the agent to stop.
+        return f"view_image:{body.strip()[:200]}"
+    if tool_name in {"write_file", "edit_file", "read_file", "list_files"}:
+        return first_line.strip()[:120]
+    return f"{tool_name}:{first_line.strip()[:120]}"
+
+#: How many of the run's most recent recorded actions get shown (state.py's
+#: `actions`). Bounded because this goes into every role and overseer prompt
+#: and a long run accumulates hundreds; the most recent describe the world as
+#: it is now, and an older attempt since superseded is the one worth
+#: forgetting.
+_ACTIONS_SHOWN = 40
+
+#: How many unparseable replies IN A ROW end a node's tool loop early.
+#:
+#: The corrective retry (UNPARSEABLE_FEEDBACK) is worth having: a model that
+#: forgot the format once usually gets it right when told. What it cannot fix
+#: is a model that is not answering at all. Measured on a hard task: a broken
+#: reasoning_effort setting (agent/router/mapping.py's Task.REASON, now
+#: corrected) made the provider return empty streams, and the solver spent 39
+#: of its 40 turns feeding "you didn't follow the format" to a model that had
+#: sent back nothing, issuing 2 real commands in six minutes. The route is
+#: fixed; nothing about the loop knew to stop, and the next provider hiccup
+#: would spend a whole budget the same way.
+#:
+#: 3 rather than 2 because the retry genuinely does recover a one-off, and
+#: rather than 5 because by the third identical non-answer the budget is
+#: better spent letting the overseer pick a different step.
+MAX_CONSECUTIVE_DEAD_REPLIES = 3
 
 #: Bound on one node's OWN tool-calling loop (ACTION/execute_TOOL
 #: round-trips) before its last reply is used as-is. Unrelated to the
@@ -353,7 +220,183 @@ MAX_DIFFUSION_RETRIES = 3
 #: turn, not how many turns the overseer may hand out. Applies identically
 #: to every role node and the evaluator (_tool_loop is shared by all of
 #: them).
-MAX_TOOL_ITERATIONS = 5
+#: How many ACTION/tool exchanges one node gets before it must answer with
+#: what it has. 5 is right for what this graph was built for -- a node
+#: checking its own work, where a sixth exchange usually means it is stuck
+#: rather than making progress -- and it stays the default.
+#:
+#: It is overridable because agentic benchmarks are a genuinely different
+#: shape of task: published SWE-bench and terminal-agent traces routinely run
+#: dozens of tool calls in one attempt (read a file, edit it, run the tests,
+#: read the failure, edit again), and a cap of 5 would measure the cap rather
+#: than the agent. An env var rather than a parameter because _tool_loop is
+#: reached through five node functions and a LangGraph call, none of which
+#: take agent-level configuration today, and threading one through all of
+#: them to serve the harness would be a worse trade than this.
+#: Temperature now lives in the routing table, per candidate, because only a
+#: candidate knows which vendor it is talking to: Anthropic, OpenAI and Gemini
+#: honour 0.0, while Inception resets anything below 0.5 to the model default
+#: of 1.0 (agent/router/llm_provider/inception_provider.py clamps as a
+#: backstop). A single constant here could not be right for both ends of a
+#: chain, and passing one at the call site actively overrode the table --
+#: Router.model_for merges {**route_params, **overrides}.
+MAX_TOOL_ITERATIONS = int(os.environ.get("OTTO_MAX_TOOL_ITERATIONS", "5"))
+
+#: The ACTION: enumeration every role/evaluator prompt shows, built FROM the
+#: registry rather than typed out in each prompt. It was hand-kept in sync
+#: through three rounds of tool additions, with tests/test_prompt_tool_sync.py
+#: standing guard over the copies; deriving it means the next tool added to
+#: TOOL_DISPATCH appears in all five prompts by construction, and that test
+#: now checks the derivation reaches them rather than checking five hand-
+#: written lists against one registry. `ask_user` is appended by hand because
+#: it is deliberately NOT in TOOL_DISPATCH -- it unwinds the whole tool loop
+#: by raising (see NeedsUserInput below) instead of returning a ToolResult.
+#: `ask_user` and `switch_mode` are appended by hand because neither is in
+#: TOOL_DISPATCH: they change the LOOP's own state rather than returning a
+#: ToolResult -- one pauses the run, the other changes which model answers
+#: next and under what guidance.
+_TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user", "switch_mode", "delegate"))
+
+#: KEEP THIS SHORT. A fifth habit was added and measured -- "search for the
+#: exact text of an error rather than reasoning about it", which for the task
+#: in question was one command that would have named the culprit outright. It
+#: did not merely fail to take (zero such searches); it wiped out the
+#: behaviour the first four had produced, taking system-inspection commands
+#: from 17 to 0 and total commands from 80 to 53 on the same task. One run
+#: each, so treat the size of that with suspicion but not the sign: past some
+#: length the model acts on none of this rather than more of it. Adding a
+#: habit here means measuring that the others survive it.
+#: General debugging habits, shared by the prompts of the roles that actually
+#: change things. Not advice about any particular kind of task -- these are the
+#: two things a competent engineer does that a model, left alone, reliably
+#: does not.
+#:
+#: The first is looking at the system rather than at the thing that failed.
+#: Observed on a benchmark task: 99 commands, 28 of them re-running the one
+#: command that was broken, and not a single `ps`, `crontab` or look at what
+#: was running. The fix it applied was correct and kept being undone by
+#: processes it never went looking for.
+#:
+#: The second is not repeating an action that already failed. A model will
+#: re-issue a failing command verbatim several times over, because re-trying
+#: is cheaper to produce than diagnosing. Saying plainly that a repeat needs a
+#: reason is what turns the second attempt into a question about the first.
+#: The CODE: body format for each tool, written once instead of five times.
+#:
+#: It used to be spelled out inline in every prompt at 1054 characters -- 35%
+#: of the solver's whole prompt, repeated five ways, and hand-edited five ways
+#: every time a tool was added. Together with the habits block below that left
+#: the solver's own instructions as about a sixth of what it was reading,
+#: which matters more here than it would elsewhere: a fifth habit measurably
+#: erased the effect of the four before it, so length on this model is not
+#: free.
+#:
+#: Trimmed to the formats a caller cannot guess. execute_bash takes a command,
+#: execute_python takes code, web_search and rag take a query -- saying so
+#: costs tokens and tells the model nothing it did not already know from the
+#: tool's name.
+_TOOL_BODY_HINT = (
+    "read_file: a path, optionally `path:START-END`. "
+    "list_files: a directory. "
+    "write_file: the path on the FIRST line, the file's whole content after "
+    "it -- no separator, no JSON. "
+    "edit_file: the path, then a line `---OLD---`, the exact text to replace, "
+    "a line `---NEW---`, the replacement. "
+    "complete_code: code, optionally `---SUFFIX---` then trailing code. "
+    "predict_edit: code only, no instruction. "
+    "recall_memory: a search query. "
+    "code_map: `define <name>`, `uses <name>`, `imports <module>` or "
+    "`outline <path>` -- exact names, Python only. "
+    "switch_mode: one word from " + "|".join(mode_names()) + ", optionally why "
+    "after it -- the conversation carries on. "
+    "delegate: that same word, then one bounded job. It runs on that mode's "
+    "model with none of this conversation and reports back. "
+    # The WHEN of asking used to live here too, and it is said again by
+    # MUTATION_GATE_NOTE at the moment it applies -- which is where a model
+    # can act on it. This block's job is what goes in the body.
+    "ask_user: a question, optionally then `CHOICES: a | b`."
+)
+
+#: Which standing tools change things, named from the registry rather than
+#: typed out, so the next tool added to a mutating tier says so by itself.
+#:
+#: This is agent/pipeline/tools.py's TOOL_TIERS finally having a reader in
+#: production. It has always been declared and always been enforced only by a
+#: unit test, which is a strange place for the one distinction that decides
+#: whether a mistake can be taken back. Claw-Eval task T026 is what it costs:
+#: three contacts matched "Manager Zhang", the grader required asking which,
+#: and the agent sent to the first -- then sent twice more. Safety is a
+#: multiplier in that benchmark's formula, so the whole task scored zero.
+#:
+#: The rule in the ask_user hint above is about the ACTION rather than the
+#: tool, because a benchmark's own tools (agent/pipeline/toolkit.py) carry no
+#: tier and sending mail is exactly the case that matters. This line is the
+#: half that CAN be derived, and it keeps the registry honest.
+_MUTATING_TOOLS = tuple(
+    name for name, tier in TOOL_TIERS.items() if tier != READ_ONLY
+)
+
+#: The ACTION/CODE protocol, assembled once for every prompt that offers tools.
+_ACTION_BLOCK = (
+    "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<"
+    + _TOOL_BODY_HINT
+    + ">\nand you will be shown the result, then you can continue. "
+    + ", ".join(_MUTATING_TOOLS) + " change things and cannot be undone. "
+)
+
+_DIAGNOSTIC_HABITS = (
+    "Four habits, whatever the task:\n"
+    "1. Look at the system, not just at the thing that broke. Before you "
+    "conclude why something fails, find out what state it is actually in -- "
+    "what is running, what is scheduled, what a file really contains, what "
+    "changed recently. If a fix does not hold, or something reverts, then "
+    "something else is acting on it and finding THAT is the task.\n"
+    "2. Never run the same thing twice hoping for a different answer. If a "
+    "command failed, or did not achieve what you expected, work out why "
+    "before you touch it again -- read the actual error, check your "
+    "assumption about what it was going to do. Repeating an action is only "
+    "worth doing when you have changed something that would change its "
+    "result, and you should be able to say what.\n"
+    "3. Look wide before you look narrow. A filter hides everything you did "
+    "not think to ask for, so a `grep` that comes back empty or unsurprising "
+    "is not evidence -- it is a guess about what the answer looks like. When "
+    "a filtered search tells you nothing, run it again unfiltered and read "
+    "what is really there before you conclude anything.\n"
+    "4. If something goes back to how it was, that is not your change "
+    "failing -- it is something else changing it. Ask what could: a process "
+    "still running, a scheduled or repeating job, a service, something "
+    "watching the file. Enumerate them and look, rather than applying the "
+    "same fix harder.\n\n"
+)
+
+#: What to check before writing code, and the one place this prompt argues for
+#: doing LESS.
+#:
+#: Deliberately NOT a fifth diagnostic habit. The comment above records a
+#: measurement where adding one erased the effect of the four before it,
+#: taking system-inspection commands from 17 to 0; this is a different kind of
+#: instruction -- a check before a write rather than a habit while
+#: investigating -- so it is its own block, and its cost is visible on its own
+#: line if it ever needs removing.
+#:
+#: The ladder is measured. Against the same agent with no such instruction, on
+#: twelve real tickets in a real repository: 54% fewer lines, 22% fewer
+#: tokens, 20% lower cost, 27% faster, and safety held at 100%. It was the
+#: only variant tested that cut every metric at once -- a bare "write
+#: one-liners" prompt was cheaper too and dropped a safety guard doing it,
+#: which is why the last sentence here is not optional decoration.
+#:
+#: The cut is largest where there is a real over-build trap and near zero
+#: where the code is already minimal, so this costs almost nothing on tasks it
+#: does not apply to.
+_MINIMALITY_LADDER = (
+    "Before writing code, stop at the first that holds: it need not exist; "
+    "this codebase already has it; the standard library does it; the platform "
+    "does it; an installed dependency does it; it is one line. Then write the "
+    "minimum that works. Be lazy about the SOLUTION, never about the reading. "
+    "Never cut validation at a trust boundary, data-loss handling, security "
+    "or accessibility: those are the job.\n\n"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -362,218 +405,168 @@ logger = logging.getLogger(__name__)
 # Prompts
 # --------------------------------------------------------------------------
 
-ROUTER_PROMPT = (
-    "You are the OVERSEER. You are re-invoked after every step; decide the "
-    "single next action given everything accumulated so far (shown below). "
-    "Choose exactly one:\n"
-    "planner -- break a multi-step or complex task into an ordered plan (a "
-    "JSON list of steps) before anyone executes it -- each step then gets "
-    "assigned to a specialist one at a time as it runs. Also the right "
-    "move on a retry if the feedback below suggests the previous attempt "
-    "failed FOR WANT OF A PLAN (it jumped straight to solving something "
-    "that actually needed steps worked out first).\n"
-    "solver -- work out a concrete answer, writing/running code where that "
-    "helps. Use directly for a task simple enough to need no plan and no "
-    "lookup; use once a plan and/or context is ready if the task needed "
-    "either.\n"
-    "summarizer -- the context gathered so far (below) has gotten large or "
-    "noisy; condense it before anyone else has to read all of it.\n"
-    "finder -- something is missing that has to be looked up before the "
-    "task can be solved: local files/a directory/a codebase/GitHub (via "
-    "execute_bash: grep, find, git, gh, ls, cat, ...), a knowledge base "
-    "(rag), or the open web (web_search).\n"
-    "evaluator -- judge whatever was most recently produced -- a PLAN "
-    "pending approval, or a candidate FINAL ANSWER -- before deciding "
-    "whether the task is actually done. Only choose this when something "
-    "below is genuinely pending judgment; never on the very first turn, "
-    "and not right after a step that only gathered background material. "
-    "(Note: once a plan is approved and running, you are normally NOT "
-    "asked this question at all between its steps -- this choice only "
-    "comes up before any plan exists, or after a rejection.)\n"
-    "\n"
-    "Default policy on a REJECTED ATTEMPT below: retry the SAME specialist "
-    "that just tried it, with the feedback in view -- do not switch "
-    "specialists just because one attempt failed; the specialists don't "
-    "overlap, so a different one is not simply an alternate way to do the "
-    "same job. The one deliberate exception: if the feedback shows the "
-    "task was attempted without a plan and that was the actual problem, "
-    "dispatch to planner instead, even though a different specialist tried "
-    "it. Learn from which kind of task in THIS run actually needed a plan "
-    "and which one didn't, and route similar tasks later in this same run "
-    "accordingly.\n"
-    "\n"
-    "Reply with exactly two lines, and always start the first one with the "
-    "literal word \"NODE:\" -- yes, even when your answer is evaluator, "
-    "don't just write the bare word:\nNODE: one of planner, solver, "
-    "summarizer, finder, evaluator\nWHY: one sentence"
+#: Phase one of judging: work out what a good answer would have to contain,
+#: from the TASK ALONE, before the attempt is visible.
+#:
+#: This is the whole reason the evaluator is worth its calls. RefineBench
+#: measured self-refinement over five turns at 31.3% for the best model and
+#: -2.5% to 0% for most; the SAME models reach 90-98% when given an external
+#: checklist. An evaluator that only re-reads the actor's own output is
+#: measured at approximately nothing, and that is what this one was: it saw the
+#: answer, the action record, the transcript tail and the gathered context --
+#: all of it produced by the actor it was judging.
+#:
+#: A rubric derived from the task is the cheapest thing the actor does not have.
+#: Generating it in a SEPARATE phase is load-bearing rather than tidy: writing
+#: criteria while looking at an answer produces criteria that the answer
+#: happens to meet. The verifier paper reports this structure taking agreement
+#: with humans from 0.26-0.31 to 0.64 -- inside the human inter-annotator band
+#: of 0.53-0.57 -- and false positives from 0.40-0.45 to 0.01, and shows the
+#: gain survives giving the baselines the same model, so it is architectural
+#: rather than a better judge.
+RUBRIC_PROMPT = (
+    "You are about to judge someone else's attempt at the task below. First, "
+    "before you see any attempt, write down what a correct answer would have "
+    "to contain.\n\n"
+    "Write criteria about the ANSWER and what it claims, not about the route "
+    "taken to it. \"The reported value is what the code actually prints\" is a "
+    "criterion; \"the agent called the read tool first\" is a route.\n\n"
+    "COVERAGE COUNTS AS THE ANSWER. If the task is about a set of things -- "
+    "every meeting, each file, all the records -- then \"every one of them is "
+    "accounted for, not just the first\" is a criterion, and it is usually the "
+    "one that decides whether the work was actually done. A report that covers "
+    "one item and says nothing about the rest is a wrong answer, not a short "
+    "one.\n\n"
+    "Reply with 2 to 4 criteria, one per line, each starting with `- `. Each "
+    "must be something you could CHECK rather than an opinion: a value that "
+    "must be right, a file that must exist, a command that must succeed, a "
+    "question that must be answered. Make them independent -- overlapping "
+    "criteria double-count one mistake. Fewer is better.\n\n"
+    "Do not write criteria about style, effort or presentation. Nothing else "
+    "in your reply, no preamble."
 )
 
-#: The narrower call router() makes to assign ONE plan step to whichever
-#: specialist should execute it, once a plan is approved and this step's
-#: `route_to` is still unset (module docstring, third refinement). The
-#: plan itself is already settled -- this is purely an execution
-#: assignment, so there's no "evaluator"/"planner" option here at all
-#: (STEP_TARGETS).
-STEP_ROUTE_PROMPT = (
-    "You are the OVERSEER, assigning ONE step of an already-approved plan "
-    "to whichever specialist should execute it. The plan itself is settled "
-    "-- this is purely an execution assignment for THIS step. Choose "
-    "exactly one:\n"
-    "solver -- this step needs a concrete answer worked out, writing/"
-    "running code where that helps.\n"
-    "summarizer -- this step needs the context gathered so far condensed "
-    "or rewritten, not something new solved or looked up.\n"
-    "finder -- this step needs something looked up first: local files/a "
-    "directory/a codebase/GitHub, a knowledge base, or the open web.\n"
-    "\n"
-    "Reply with exactly two lines, and always start the first one with the "
-    "literal word \"NODE:\":\nNODE: one of solver, summarizer, finder\n"
-    "WHY: one sentence"
-)
-
-PLANNER_PROMPT = (
-    "You are the PLANNER. Break the request below into an ordered list of "
-    "concrete, executable steps for OTHER specialists to carry out -- you "
-    "do not execute any step yourself, and you do not decide who executes "
-    "each step (the overseer assigns that later, one step at a time, as "
-    "each one runs). You may check your reasoning with a tool: reply with "
-    "exactly\nACTION: <execute_python|execute_bash|web_search|rag|"
-    "recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input for "
-    "that tool -- recall_memory: a plain search query, nothing else -- "
-    "semantic search over this session's own compacted-away conversation "
-    "history; complete_code: prefix code, optionally then a line "
-    "\"---SUFFIX---\" "
-    "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit; ask_user: "
-    "a question for the person, optionally followed by a line \"CHOICES: "
-    "option one | option two | ...\" to also offer pick-able choices "
-    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
-    "genuinely stuck on something nobody but the person can supply, never "
-    "as a shortcut around planning yourself: it pauses the whole run and "
-    "costs them real time>\nand you "
-    "will be shown the result, then you can continue. When you are done, "
-    "reply with exactly\nFINAL:\n<a JSON array of steps, each an object "
-    "with exactly one key \"task\" holding that step's description -- "
-    "e.g. [{{\"task\": \"write the core function\"}}, {{\"task\": \"add "
-    "input validation\"}}] -- nothing else, no markdown code fence, no "
-    "explanation, and no \"route_to\" (that's decided later, per step, "
-    "not by you)>\nYou have at most {max_iter} exchanges before your last "
-    "reply is used as-is."
-)
-SOLVER_PROMPT = (
-    "You are the SOLVER. Work out a concrete answer to the request below, "
-    "writing and running code where that helps you check it. Reply with "
-    "exactly\nACTION: <execute_python|execute_bash|web_search|rag|"
-    "recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input for "
-    "that tool -- recall_memory: a plain search query, nothing else -- "
-    "semantic search over this session's own compacted-away conversation "
-    "history; complete_code: prefix code, optionally then a line "
-    "\"---SUFFIX---\" "
-    "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit; ask_user: "
-    "a question for the person, optionally followed by a line \"CHOICES: "
-    "option one | option two | ...\" to also offer pick-able choices "
-    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
-    "genuinely stuck on something nobody but the person can supply, never "
-    "as a shortcut around solving it yourself: it pauses the whole run "
-    "and costs them real time>\nand you "
-    "will be shown the result, then you can continue. When you are done, "
-    "reply with exactly\nFINAL:\n<the complete answer, nothing else -- no "
-    "markdown code fences, no explanation>\nYou have at most {max_iter} "
-    "exchanges before your last reply is used as-is."
-)
-SUMMARIZER_PROMPT = (
-    "You are the SUMMARIZER. Condense or rewrite the given content below to "
-    "satisfy the request -- you are not looking anything new up or solving "
-    "a new problem. You may still use a tool if it helps verify something: "
-    "reply with exactly\nACTION: <execute_python|execute_bash|web_search|"
-    "rag|recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input "
-    "for that tool -- recall_memory: a plain search query, nothing else -- "
-    "semantic search over this session's own compacted-away conversation "
-    "history; complete_code: prefix code, optionally then a line "
-    "\"---SUFFIX---\" "
-    "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit; ask_user: "
-    "a question for the person, optionally followed by a line \"CHOICES: "
-    "option one | option two | ...\" to also offer pick-able choices "
-    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
-    "genuinely stuck on something nobody but the person can supply, never "
-    "as a shortcut around condensing it yourself: it pauses the whole run "
-    "and costs them real time>\nand you "
-    "will be shown the result, then you can continue. When you are done, "
-    "reply with exactly\nFINAL:\n<the summary, nothing else -- no markdown "
-    "code fences, no explanation>\nYou have at most {max_iter} exchanges "
-    "before your last reply is used as-is."
-)
-FINDER_PROMPT = (
-    "You are the FINDER. Look up whatever the request below needs before "
-    "answering. Prefer, in this order: recall_memory if what's missing is "
-    "something from EARLIER IN THIS CONVERSATION that got compacted away "
-    "(agent/memory/'s tiered history queue -- a plain search query, not a "
-    "shell command); execute_bash for anything on the local system -- a "
-    "directory, a codebase, git history/blame, or GitHub via the gh CLI "
-    "if it's on PATH (grep, find, ls, cat, git, gh, ...); rag for a "
-    "knowledge base; web_search for the open web (rag and web_search are "
-    "both stubbed today and will tell you so -- if that happens, fall "
-    "back to your own knowledge and say plainly in your answer that you "
-    "could not verify it). Reply with exactly\nACTION: "
-    "<execute_python|execute_bash|web_search|rag|recall_memory|"
-    "complete_code|predict_edit|ask_user>\nCODE:\n<input for that tool -- "
-    "recall_memory: a plain search query, nothing else; complete_code: "
-    "prefix code, optionally then a line \"---SUFFIX---\" and trailing "
-    "code; predict_edit: code, optionally with a <|cursor|> marker, no "
-    "instruction -- it only predicts the next edit; ask_user: a question "
-    "for the person, optionally followed by a line \"CHOICES: option one "
-    "| option two | ...\" to also offer pick-able choices (omit CHOICES: "
-    "for an open-ended question) -- use this ONLY when genuinely stuck on "
-    "something nobody but the person can supply, never as a shortcut "
-    "around looking it up yourself: it pauses the whole run and costs "
-    "them real time>\nand you will be shown "
-    "the result, then you can continue. When you are done, reply with "
-    "exactly\nFINAL:\n<what you found, nothing else -- no markdown code "
-    "fences, no explanation>\nYou have at most {max_iter} exchanges before "
-    "your last reply is used as-is."
-)
-#: Used only when the SAME specialist that made the rejected attempt is the
-#: one retrying it (state["node"] == role at dispatch time) -- see
-#: _run_role. Shared by all four roles (parameterized by {role_upper})
-#: since the instruction is identical regardless of which specialist is
-#: revising its own work.
-ROLE_REVISE_PROMPT = (
-    "You are the {role_upper}. Your previous attempt at the task below was "
-    "rejected by the evaluator -- see your previous attempt and the "
-    "evaluator's feedback for what to fix or avoid. Produce a better "
-    "answer, reusing anything from the previous attempt that was actually "
-    "fine. Same reply format as before: ACTION/CODE to use a tool, or "
-    "FINAL: when done. You have at most {max_iter} exchanges before your "
-    "last reply is used as-is."
-)
-#: One shared evaluator prompt, parameterized by what's being judged --
-#: {target} is "PLAN" or "<ROLE> OUTPUT", {target_note} distinguishes
-#: "would this plan work if followed" from "is this actually a finished
-#: answer" (see evaluator()'s dual-mode dispatch below).
 EVALUATOR_PROMPT = (
     "Judge whether the {target} below actually satisfies the original "
-    "request -- {target_note}. You may check your judgment with a tool: "
-    "reply with exactly\nACTION: <execute_python|execute_bash|web_search|"
-    "rag|recall_memory|complete_code|predict_edit|ask_user>\nCODE:\n<input "
-    "for that tool -- recall_memory: a plain search query, nothing else -- "
-    "semantic search over this session's own compacted-away conversation "
-    "history; complete_code: prefix code, optionally then a line "
-    "\"---SUFFIX---\" "
-    "and trailing code; predict_edit: code, optionally with a <|cursor|> "
-    "marker, no instruction -- it only predicts the next edit; ask_user: "
-    "a question for the person, optionally followed by a line \"CHOICES: "
-    "option one | option two | ...\" to also offer pick-able choices "
-    "(omit CHOICES: for an open-ended question) -- use this ONLY when "
-    "genuinely stuck on something nobody but the person can supply, never "
-    "as a shortcut around judging it yourself: it pauses the whole run "
-    "and costs them real time>\nand you "
-    "will be shown the result, then you can continue. When you are done, "
-    "reply with exactly\nFINAL:\nAPPROVE: yes or no\nWHY: one sentence\n"
+    "request -- {target_note}.\n\n"
+    "CRITERIA, written before this attempt was visible. Judge against these "
+    "and nothing else:\n{rubric}\n\n"
+    "Take each in turn. A criterion is met, not met, or blocked -- blocked "
+    "meaning something outside the agent's control stopped it, or you could "
+    "not check it from what you were shown and had no budget left to look. "
+    "BLOCKED IS NOT FAILED. A criterion you could not verify is not evidence "
+    "the work is wrong, and rejecting on one sends the agent back to redo "
+    "something that may already be right.\n\n"
+    "Judge what the answer CLAIMS against what you can see. If the answer "
+    "states a result and nothing you were shown contradicts it, that is met.\n\n"
+    "CHECK IT, DO NOT TAKE ITS WORD. If the request asked for something to "
+    "be changed, fixed, built or made to work, run a command that would fail "
+    "if it had not been -- and judge what that command actually reports, not "
+    "what the output above claims. An output that says the work is done is "
+    "not evidence the work is done. If your own check contradicts it, reject "
+    "and quote exactly what you saw.\n\n"
+    "Check the RESULT, not the steps. A step that succeeded does not mean "
+    "the thing the request asked for is true now -- something else may have "
+    "undone it, or the step may have been aimed at the wrong target. If a "
+    "check passes, consider whether it would still pass a minute from now, "
+    "and if you have reason to doubt it, look for what would change it "
+    "back.\n\n"
+    "You may check ONE thing with a tool if a criterion genuinely cannot be "
+    "settled from what you were shown: "
+    + _ACTION_BLOCK +
+    "When you are done, reply with exactly\nFINAL:\n"
+    "MET: the number of criteria met, then / then the number of criteria\n"
+    "BLOCKED: yes or no -- whether anything unmet was outside the agent's "
+    "control\n"
+    "APPROVE: yes or no\n"
+    "WHY: one sentence naming the first criterion that failed, or why it "
+    "passed\n"
     "You have at most {max_iter} exchanges before your last reply is used "
     "as-is."
 )
+#: What a finished run is asked to leave behind for the next one.
+#:
+#: Deliberately asked of BOTH outcomes. A bank built only from successes
+#: throws away the half of the signal that says what not to do, and in a
+#: failed run the sharpest lesson is usually the one nobody would have
+#: written down after a win.
+#:
+#: Asked for at most three, and each one short, because injecting a pile of
+#: skill-like items every turn and letting the model decide when they apply
+#: measured 16.4 points BELOW a variant that injected none. Retrieved text is
+#: not free: it competes with the task for attention.
+DISTIL_PROMPT = (
+    "A run just finished. Write down what a DIFFERENT task could reuse from "
+    "it.\n\n"
+    "Look for FRICTION. What was retried, what was surprising, what took two "
+    "attempts, what nearly went wrong, what turned out not to be where it "
+    "looked. That is where a reusable lesson lives. A run that went smoothly "
+    "usually still contains one -- the thing that made it go smoothly and "
+    "would not have been obvious beforehand.\n\n"
+    "A lesson is about METHOD, never about subject matter. It has to make "
+    "sense to someone working on something completely unrelated, so do not "
+    "name what this task was about -- no emails, no invoices, no repository, "
+    "whatever it happened to be. If your cue only makes sense to someone "
+    "doing this same kind of task, you have written a note, not a lesson.\n"
+    "  no  -- \"the config lives in /etc/app.conf\" (a fact about one "
+    "machine)\n"
+    "  no  -- \"rank urgent client requests above internal deadlines\" (a "
+    "judgment about one domain's content)\n"
+    "  no  -- \"read files before editing them\" (true of every task, so it "
+    "tells the next run nothing)\n"
+    "  yes -- \"when a tool reports a path that does not exist, check the "
+    "working directory before assuming the file is missing\"\n"
+    "  yes -- \"when the request names a category of thing, count them first "
+    "and check the count against the answer before finishing\"\n\n"
+    "Write ONE to THREE. Keep each field under 25 words -- a lesson nobody "
+    "can read at a glance is a lesson nobody uses. Each has a `cue` -- the "
+    "SITUATION it applies in, never this task's subject -- an `action`, and "
+    "an `outcome` of "
+    "\"worked\" or \"failed\". A lesson from something that went wrong is "
+    "worth more than one from something that went right; say \"failed\" and "
+    "describe what to do instead. Reply with an empty array only if the run "
+    "genuinely contained no friction and no non-obvious choice.\n\n"
+    "Before you answer, re-read each cue and action. If either names anything "
+    "from this particular task, rewrite it in general terms or drop it.\n\n"
+    "Reply with a JSON array and nothing else:\n"
+    '[{{"cue": "...", "action": "...", "outcome": "worked"}}]'
+)
+
+#: The whole agent, in one prompt.
+#:
+#: This replaces PLANNER_PROMPT, SOLVER_PROMPT, SUMMARIZER_PROMPT and
+#: FINDER_PROMPT, and it is SHORTER than the four of them put together by a
+#: wide margin -- each of those carried its own copy of _ACTION_BLOCK (831
+#: characters), so the protocol alone was stated four times. Said once here,
+#: with what is specific to each role moved into agent/pipeline/modes.py as a
+#: guidance block under 400 characters, the text a call actually carries goes
+#: DOWN even though the agent can now do everything all four roles could.
+#:
+#: That matters more here than it would elsewhere. The comment above
+#: _DIAGNOSTIC_HABITS records a measurement where a fifth habit did not merely
+#: fail to take -- it erased the effect of the four before it, taking
+#: system-inspection commands from 17 to 0. Length is not free on this model,
+#: so the budget freed by de-duplicating the protocol is the budget that pays
+#: for the mode machinery.
+AGENT_PROMPT = (
+    "You are an engineer with a shell, working a task end to end: find out "
+    "what is true, do the work, and confirm it actually holds.\n\n"
+    + _DIAGNOSTIC_HABITS + _MINIMALITY_LADDER +
+    "You work in a MODE, which sets both how you are thinking and which model "
+    "you are running on. You start in " + DEFAULT_MODE + ". Switch when the "
+    "KIND of work changes -- `ACTION: switch_mode` with one of "
+    + "|".join(mode_names()) + " -- not to restate what you are already doing. "
+    "The conversation carries over: everything above stays, and you keep every "
+    "tool.\n\n"
+    + _ACTION_BLOCK +
+    "One tool call per reply.\n\n"
+    "Before you finish, run something that would FAIL if the task were not "
+    "done, and read what it prints. An explanation is not evidence. When you "
+    "have seen it work, reply with exactly\nFINAL:\n<the answer itself -- the "
+    "numbers, the names, the decision -- not a description of what you did>"
+)
+
+
 #: Fed back inside _tool_loop when a reply has neither ACTION: nor FINAL:
 #: (or a FINAL: with nothing after it). A marker-less or empty reply is
 #: never silently accepted as an answer -- the node is told what went wrong
@@ -611,34 +604,149 @@ def _call(llm, messages: list) -> str:
     is an incomplete but internally clean prefix, the ordinary "ran out of
     budget" case every LLM caller already has to tolerate.
     """
+    # Every model REQUEST is counted here, not every logical call, and the
+    # retries below are the reason. An empty-stream retry and a diffusion
+    # max_tokens doubling are each a fresh HTTP request that costs real money,
+    # so a budget that counted _call once would undercount by up to 3x exactly
+    # when a run is going badly. agent/pipeline/budget.py has the rest of the
+    # argument; nothing bound is the normal case and makes this a no-op.
+    budget = current_budget()
     current = llm
     for attempt in range(MAX_DIFFUSION_RETRIES):
+        if budget is not None:
+            budget.spend()
         reply = None
-        for chunk in current.stream(messages):
-            reply = chunk if reply is None else reply + chunk
+        try:
+            for chunk in current.stream(messages):
+                reply = chunk if reply is None else reply + chunk
+        except ValueError as exc:
+            # langchain_core raises ValueError("No generation chunks were
+            # returned") from inside stream() when the provider yields nothing
+            # at all -- so the `reply is None` check below never gets the
+            # chance to see it. This module always meant to treat an empty
+            # stream as an empty answer (the caller's unparseable-reply retry
+            # then does its job); an uncaught ValueError instead unwinds the
+            # whole graph, which is how one benchmark task died outright
+            # rather than scoring badly.
+            if "No generation chunks" not in str(exc):
+                raise
+            logger.warning(
+                "%s returned an empty stream (attempt %d/%d)",
+                _model_label(current), attempt + 1, MAX_DIFFUSION_RETRIES,
+            )
+            if attempt < MAX_DIFFUSION_RETRIES - 1:
+                continue  # transient often enough to be worth one more try
+            return ""
+        except ProviderError:
+            # Inception's own provider already translated this one; re-wrapping
+            # would bury the specific subclass the callers branch on.
+            raise
+        except Exception as exc:
+            # The chat model here may be a LangChain class Otto does not own,
+            # which raises its vendor's SDK errors straight out of .stream().
+            # _run_role and evaluator catch only ProviderError, so an untranslated
+            # one unwinds the whole graph instead of becoming a clean edge back
+            # to the overseer.
+            #
+            # Clause order is load-bearing twice over. The ValueError clause
+            # must stay FIRST, or a bare `except Exception` swallows the
+            # empty-stream retry above. And a `raise` from an earlier clause is
+            # not caught by a later clause of the same try, which is what keeps
+            # an unrelated ValueError propagating. Collapsing these into one
+            # handler with isinstance checks breaks both.
+            # Before translating: the raw exception still carries the status
+            # and any Retry-After header, and agent/router/health.py needs
+            # both. Translating first would throw away the one thing that
+            # tells a rate limit from an outage.
+            provider_health.note_failure(
+                exc, provider=getattr(current, "_otto_provider", ""),
+                model_id=_model_label(current))
+            raise translate_unknown(
+                exc,
+                provider=getattr(current, "_otto_provider", ""),
+                model_id=_model_label(current),
+            ) from exc
         if reply is None:
             return ""
+
+        # A call that came back settles "is this vendor reachable", whichever
+        # model answered it -- so this clears the provider breaker as well as
+        # the model's own cooldown.
+        provider_health.HEALTH.note_success(
+            getattr(current, "_otto_provider", ""), _model_label(current))
 
         finish_reason = (reply.response_metadata or {}).get("finish_reason")
         if not (getattr(current, "diffusing", False) and finish_reason == "length"):
             return _content_text(reply.content)
 
+        # Everything below is Inception-only by construction: `diffusing` is a
+        # ChatInception field, so no other vendor's model reaches it.
         if attempt == MAX_DIFFUSION_RETRIES - 1:
             raise ProviderError(
-                f"inception: {current.model} truncated a diffusing response at "
-                f"max_tokens={current.max_tokens!r} on every one of "
+                f"{_model_label(current)} truncated a diffusing response at "
+                f"max_tokens={getattr(current, 'max_tokens', None)!r} on every one of "
                 f"{MAX_DIFFUSION_RETRIES} attempts -- refusing to hand an "
                 f"unconverged diffusion snapshot to the rest of the graph"
             )
-        bumped = max(current.max_tokens or 1024, 1024) * 2
+        bumped = max(getattr(current, "max_tokens", None) or 1024, 1024) * 2
         logger.warning(
-            "inception: %s truncated a diffusing response at max_tokens=%r "
+            "%s truncated a diffusing response at max_tokens=%r "
             "(attempt %d/%d) -- retrying at max_tokens=%d",
-            current.model, current.max_tokens, attempt + 1,
-            MAX_DIFFUSION_RETRIES, bumped,
+            _model_label(current), getattr(current, "max_tokens", None),
+            attempt + 1, MAX_DIFFUSION_RETRIES, bumped,
         )
         current = current.model_copy(update={"max_tokens": bumped})
     return ""  # unreachable -- the loop always returns or raises
+
+
+def _parse_rubric(text: str) -> list[str]:
+    """The criteria out of a rubric reply. Bullet lines only.
+
+    Bounded at RUBRIC_MAX because criteria are scored one by one: an
+    unbounded list turns one judgment into an unbounded number of them, and
+    the verifier paper's own guidance is a small set of NON-OVERLAPPING
+    criteria, since overlapping ones double-count a single mistake.
+    """
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        for marker in ("- ", "* ", "\u2022 "):
+            if line.startswith(marker):
+                line = line[len(marker):].strip()
+                break
+        else:
+            continue
+        if line:
+            lines.append(line)
+    return lines[:RUBRIC_MAX]
+
+
+def _parse_verdict(text: str) -> "Verdict":
+    """The four things a judgment has to say, out of one FINAL body.
+
+    Separated because one number cannot carry them. An attempt can take every
+    right step and be stopped by a missing credential, or reach the right
+    answer by accident -- and a single approve/reject collapses those into the
+    same signal, which is how a judge ends up training the agent on noise.
+    """
+    approve, reason = _parse_approval(text)
+    met = total = 0
+    if "MET:" in text:
+        fragment = text.split("MET:")[1].split("\n")[0]
+        numbers = [int(n) for n in re.findall(r"\d+", fragment)[:2]]
+        if len(numbers) == 2:
+            met, total = numbers
+    blocked_line = text.split("BLOCKED:")[1].split("\n")[0].lower() if "BLOCKED:" in text else ""
+    return Verdict(
+        approved=approve,
+        reason=reason,
+        # The continuous score. Kept apart from `approved` on purpose: "three
+        # of four criteria met" and "nothing worked" are both rejections and
+        # should not look alike to anything reading this back.
+        process=round(met / total, 3) if total else (1.0 if approve else 0.0),
+        criteria=(met, total),
+        blocked="yes" in blocked_line,
+    )
 
 
 def _parse_approval(text: str) -> tuple[bool, str]:
@@ -711,29 +819,198 @@ def _parse_ask_user_body(body: str) -> tuple[str, list[str]]:
     return "\n".join(question_lines).strip(), choices
 
 
-def _parse_worker_reply(text: str) -> tuple[Literal["action", "final", "unparseable"], str, str]:
+#: A line that STARTS a new directive, and therefore ENDS the CODE: body
+#: above it. Anchored to the start of a line so a mention of the word inside
+#: a command ("echo ACTION: done") doesn't truncate anything.
+_NEXT_DIRECTIVE = re.compile(r"^[ \t]*(?:ACTION|FINAL):", re.MULTILINE)
+
+
+#: Chat-template control tokens a model sometimes emits into its own visible
+#: output -- "<|tool_call_start|>" and friends. They are markup for the
+#: serialiser, never content, and they arrive mid-body where nothing else
+#: strips them: observed once in a Terminal-Bench run, where the first command
+#: of the task became `curl -v example.com\n\n<|tool_call_start|> 2>&1 | head`
+#: and bash answered "syntax error near unexpected token `|'". Rare, and free
+#: to remove.
+_SPECIAL_TOKEN = re.compile(r"<\|[a-z_]+\|>")
+
+
+def _code_body(text: str) -> str:
+    """The CODE: body of the FIRST action in `text`, ending where the next
+    ACTION:/FINAL: begins.
+
+    It used to be "everything after the first CODE:, to the end of the reply".
+    That is correct only while the model emits exactly one tool call per reply,
+    which it does not: asked for one step it will sometimes lay out the whole
+    plan at once, and the entire rest of the reply -- the literal lines
+    "ACTION: execute_bash", "CODE:", and a trailing "FINAL:" block -- was then
+    handed to the shell as part of the command. Terminal-Bench transcripts
+    caught it: bash reporting `ACTION:: command not found` mid-task, an exit
+    code of 127 for a command whose real work had actually succeeded, and an
+    agent reading that as failure. Only the first call is executed either way;
+    the loop feeds its result back and the model reissues the rest.
+    """
+    if "CODE:" not in text:
+        return ""
+    after = text.split("CODE:", 1)[1]
+    match = _NEXT_DIRECTIVE.search(after)
+    body = after[: match.start()] if match else after
+    return _SPECIAL_TOKEN.sub("", body).strip()
+
+
+#: A bare identifier, for pulling a tool name out of whatever the model wrapped
+#: it in. Tool names are ASCII snake_case by construction (TOOL_DISPATCH).
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: The loop's own pseudo-tools. They never appear in TOOL_DISPATCH -- they
+#: change the loop's state rather than returning a result -- but a reply naming
+#: one is naming a real thing, so name RESOLUTION has to know about them. Whether
+#: the loop in question will honour it is a separate question, answered by that
+#: loop: `_tool_loop` (the evaluator's) rejects `delegate` on purpose.
+_LOOP_TOOLS = ("ask_user", "switch_mode", "delegate")
+
+#: How close a misspelling has to be before it is treated as the tool it
+#: resembles. 0.8 accepts `execute_pyton` and `read_files`; it does not accept
+#: `read_file` for `edit_file`, which differ by more than a typo and where
+#: guessing wrong would run the wrong tool rather than waste a round trip.
+_NEAR_MISS_CUTOFF = 0.8
+
+
+def _resolve_tool(line: str, allowed) -> str:
+    """The tool named on an ACTION: line, out of whatever decorated it.
+
+    Every shape here was produced by a real model against this protocol:
+
+        ACTION: execute_bash to list the files      prose after the name
+        ACTION: `execute_bash`                      backticks
+        ACTION: **execute_bash**                    bold
+        ACTION: execute_bash.                       a full stop
+
+    All four used to reach the dispatch table verbatim, miss, and come back as
+    "tool 'execute_bash.' is not available" -- a wasted model call each time,
+    for a reply that named the right tool. A text protocol has nothing
+    structurally enforcing its action schema, which is the dominant production
+    failure class (plausible reasoning decoupled from the action contract), and
+    the counter-evidence is that it closes in code: one harness eliminated all
+    illegal moves across 145 environments by validating on the emit path.
+
+    Resolution order is deliberate. An exact token match anywhere on the line
+    wins first, so the prose case resolves rather than being guessed at. Only
+    then does a near miss get considered, and only for the FIRST token -- a
+    fuzzy match against a word buried in a sentence is how a parser starts
+    inventing tool calls. When nothing resolves, the first token is returned
+    unchanged so the caller's "not available" message still names what the
+    model actually said.
+    """
+    import difflib
+
+    vocabulary = set(allowed) | set(_LOOP_TOOLS)
+    tokens = _IDENTIFIER.findall(line)
+    if not tokens:
+        return line.strip()
+    for token in tokens:
+        if token in vocabulary:
+            return token
+    near = difflib.get_close_matches(tokens[0], sorted(vocabulary), n=1,
+                                     cutoff=_NEAR_MISS_CUTOFF)
+    return near[0] if near else tokens[0]
+
+
+def _parse_worker_reply(
+    text: str, *, allowed=(),
+) -> tuple[Literal["action", "final", "unparseable"], str, str]:
     """Split a reply into (kind, tool_name, body).
 
-    For an ACTION: (`"action"`, the tool name on that line, the CODE: body).
-    For a FINAL: with a non-empty body: (`"final"`, `""`, the answer text).
-    Anything else -- no ACTION:/FINAL: marker anywhere, or a FINAL: with
-    nothing (or only whitespace) after it -- is `"unparseable"`, which
-    _tool_loop treats as a signal to retry with corrective feedback rather
-    than accepting it.
+    For an ACTION: (`"action"`, the tool named on that line resolved against
+    `allowed`, the CODE: body). For a FINAL: with a non-empty body:
+    (`"final"`, `""`, the answer text). Anything else -- no ACTION:/FINAL:
+    marker anywhere, or a FINAL: with nothing after it -- is `"unparseable"`,
+    which both loops treat as a signal to retry with corrective feedback
+    rather than accepting it.
+
+    WHICHEVER MARKER COMES FIRST WINS. This used to check ACTION: first
+    regardless of position, so a reply that answered and then suggested a
+    follow-up step --
+
+        FINAL:
+        the report is written to /workspace/report.md
+        ACTION: execute_bash
+        CODE:
+        cat /workspace/report.md
+
+    -- silently discarded the answer and ran the command instead. The loop
+    then had no output to return, and the run paid for another exchange to
+    get back an answer it had already been given. Reading in document order is
+    also simply what the reply means.
     """
-    if "ACTION:" in text:
-        action_line = text.split("ACTION:", 1)[1].split("\n", 1)[0].strip()
-        code = text.split("CODE:", 1)[-1].strip() if "CODE:" in text else ""
-        return "action", action_line, code
-    if "FINAL:" in text:
-        body = text.split("FINAL:", 1)[-1].strip()
+    action_at = text.find("ACTION:")
+    final_at = text.find("FINAL:")
+    if action_at != -1 and (final_at == -1 or action_at < final_at):
+        line = text[action_at + len("ACTION:"):].split("\n", 1)[0]
+        return "action", _resolve_tool(line, allowed), _code_body(text)
+    if final_at != -1:
+        body = text[final_at + len("FINAL:"):].strip()
         if body:
             return "final", "", body
         return "unparseable", "", text.strip()
     return "unparseable", "", text.strip()
 
 
-def _tool_loop(llm, messages: list) -> str:
+def _action_problem(tool_name: str, body: str, allowed) -> str:
+    """Why this action cannot be run, or "" if it can.
+
+    The emit-path contract, checked before anything is dispatched. Both
+    conditions used to be discovered by the tool itself, several seconds and
+    one confusing error later: an unavailable tool, and an ACTION: with no
+    CODE: body at all -- which reached the shell as an empty command and came
+    back as a returncode the model then had to interpret.
+    """
+    if tool_name not in allowed:
+        return (f"tool {tool_name!r} is not available "
+                f"(allowed: {sorted(allowed)})")
+    if not body.strip():
+        return (f"{tool_name} was called with no CODE: body. Put what it "
+                "should act on under a CODE: line.")
+    return ""
+
+
+def _model_label(llm) -> str:
+    """A model's id for a log line, whichever vendor's chat class this is.
+
+    `ChatInception`, `ChatAnthropic` and `ChatGoogleGenerativeAI` expose
+    `model`; `ChatOpenAI` exposes `model_name` and keeps `model` only as a
+    populate-by-name alias, so the plain attribute access this replaced raised
+    AttributeError there. The messages that used it were also hardcoded to say
+    "inception:", which is simply untrue for any other vendor.
+    """
+    for attr in ("model", "model_name", "model_id"):
+        value = getattr(llm, attr, None)
+        if isinstance(value, str):
+            return value
+    return type(llm).__name__
+
+
+def _summarise_action(tool_name: str, body: str, result) -> str:
+    """One line describing a tool call and how it went, for the record the
+    overseer and a re-invoked role read (agent/pipeline/state.py's `actions`).
+
+    Deliberately lossy: the point is "you already tried this, here is what came
+    back", not a replayable transcript. The first line of the body identifies
+    the call (a path, a command), and only a FAILING result's text is carried
+    forward -- a compiler error is exactly what the next attempt needs, the
+    full stdout of a successful build is noise.
+    """
+    first_line = next((line for line in body.splitlines() if line.strip()), "")
+    call = f"{tool_name} {first_line.strip()[:90]}"
+    if result.returncode == 0:
+        detail = (result.stdout or "").strip().splitlines()
+        return f"{call} -> ok{': ' + detail[0][:120] if detail else ''}"
+    problem = (result.stderr or result.stdout or "").strip().replace("\n", " ")
+    return f"{call} -> FAILED (exit {result.returncode}): {problem[:200]}"
+
+
+def _tool_loop(llm, messages: list, actions: list[str] | None = None,
+               *, max_iterations: int | None = None) -> str:
     """Run the shared ACTION/FINAL tool-calling loop -- every role node AND
     the evaluator drive their conversation through this one function. A
     role node's FINAL body IS its candidate answer; the evaluator's FINAL
@@ -746,19 +1023,57 @@ def _tool_loop(llm, messages: list) -> str:
     FINAL body, or, failing that, the last unparseable reply. An ACTION
     reply never touches it: a tool call is not a candidate answer.
     """
+    # TOOL_DISPATCH plus whatever agent/pipeline/toolkit.py has bound for this
+    # run -- empty in every ordinary turn, so this is a dict copy of nothing.
+    # A benchmark that hands the agent task-specific tools (agent/eval/
+    # claw_bench.py) binds them there rather than mutating the registry, and
+    # the note is how the prompt finds out they exist: the menu in
+    # _ACTION_BLOCK is derived at import and cannot know about them.
+    dispatch = dispatch_table()
+    note = render_note()
+    if note:
+        messages.insert(1, SystemMessage(note))
+
+    budget = current_budget()
     output = ""
-    for _ in range(MAX_TOOL_ITERATIONS):
+    dead_replies = 0
+    last_target: str | None = None
+    repeats = 0
+    failed_targets: set[str] = set()
+    for _ in range(max_iterations or MAX_TOOL_ITERATIONS):
+        # The evaluator drives this loop, and a judgment that kept checking
+        # past the ceiling would spend the budget the agent was stopped to
+        # protect. Its own MAX_TOOL_ITERATIONS cap stays as the inner bound.
+        if budget is not None and budget.spent():
+            return output
         text = _call(llm, messages)
-        kind_of_reply, tool_name, body = _parse_worker_reply(text)
+        kind_of_reply, tool_name, body = _parse_worker_reply(text, allowed=dispatch)
 
         if kind_of_reply == "final":
             return _strip_code_fence(body)
 
         if kind_of_reply == "unparseable":
-            output = text  # fallback if the loop is exhausted here
-            messages.append(AIMessage(text))
+            dead_replies += 1
+            output = text  # fallback if the loop ends here, exhausted or not
+            if dead_replies >= MAX_CONSECUTIVE_DEAD_REPLIES:
+                logger.warning(
+                    "tool loop: %d unparseable replies in a row -- giving up "
+                    "on this node rather than spending the rest of its budget",
+                    dead_replies,
+                )
+                return output
+            # Never an EMPTY AIMessage. `_call` returns "" on an empty stream,
+            # Anthropic rejects empty text blocks, and this loop is the
+            # evaluator's -- which runs on Anthropic. One empty reply here
+            # breaks every later call in the same judgment. The same guard
+            # exists in `_agent_loop`; this copy did not get it, which is the
+            # argument for there being one loop rather than two.
+            if text:
+                messages.append(AIMessage(text))
             messages.append(HumanMessage(UNPARSEABLE_FEEDBACK))
             continue
+
+        dead_replies = 0
 
         # ACTION -- deliberately does NOT touch `output` (see docstring).
         if tool_name == "ask_user":
@@ -767,200 +1082,288 @@ def _tool_loop(llm, messages: list) -> str:
             # just another TOOL_DISPATCH entry.
             question, choices = _parse_ask_user_body(body)
             raise NeedsUserInput(question or "(no question given)", choices)
-        if tool_name not in TOOL_DISPATCH:
-            evidence = (
-                f"tool {tool_name!r} is not available "
-                f"(allowed: {sorted(TOOL_DISPATCH)})"
-            )
+        if problem := _action_problem(tool_name, body, dispatch):
+            evidence = problem
         else:
-            result = TOOL_DISPATCH[tool_name](body)
+            result = dispatch[tool_name](body)
+            if actions is not None:
+                actions.append(_summarise_action(tool_name, body, result))
             evidence = (
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
                 f"returncode: {result.returncode}"
             )
+            target = _action_target(tool_name, body)
+            repeats = repeats + 1 if target == last_target else 1
+            last_target = target
+            failed_before = target in failed_targets
+            if result.returncode != 0:
+                failed_targets.add(target)
+            if result.returncode != 0 and failed_before:
+                # A failing call repeated is the strongest possible signal
+                # that the last one was not understood -- act on it at once
+                # rather than waiting for a run of three.
+                evidence += "\n\n" + REPEATED_FAILURE_NOTE.format(target=target)
+            elif repeats >= REPEATS_BEFORE_NOTE:
+                evidence += "\n\n" + REPEATED_CALL_NOTE.format(
+                    n=repeats, tool=tool_name, target=target,
+                )
         messages.append(AIMessage(text))
         messages.append(HumanMessage(f"TOOL RESULT:\n{evidence}"))
     return output
 
 
-def _extract_node(text: str, targets: tuple[str, ...]) -> tuple[str | None, str]:
-    """Try to find a NODE:/WHY: pair in `text`, restricted to `targets`.
-    Returns `(None, "")` if nothing in `targets` was found at all -- this
-    function bakes in no fallback, so a caller can decide for itself what
-    "nothing found" means: _parse_router defaults to "solver"; _decide
-    (below) retries the LLM call first and only falls back once retries
-    are exhausted.
+# --------------------------------------------------------------------------
+# The agent loop -- one conversation, many modes.
+#
+# What this replaces: router -> role -> router -> evaluator -> router, where
+# every node rebuilt [SystemMessage, HumanMessage] from scratch and the tool
+# conversation died with the node. Measured on Claw-Eval traces, the boundaries
+# between those nodes cost 20 to 126 seconds each and were 45 to 69% of a run's
+# wall time, while every tool call a task made totalled 0.1 to 0.4 seconds. One
+# round of work was five model calls, three of them the router and evaluator.
+#
+# The agent forgot what it had just done AND paid to be reminded. Those were
+# never two problems: they were the same boundary. So there is one loop now, and
+# changing role is an appended message rather than a node transition.
+# --------------------------------------------------------------------------
 
-    Tolerates one specific malformed shape, observed live (2026-09-10): the
-    model sometimes drops the literal "NODE:" label and replies with just
-    the bare target name on its own line (most often when the answer is
-    "evaluator", as if it read past its own format instruction) --
-    "evaluator\\nWHY: ..." instead of "NODE: evaluator\\nWHY: ...". Only a
-    line that is EXACTLY one of `targets` (whole line, stripped) counts --
-    never a substring match, so a WHY sentence that happens to mention
-    "solver" is never mistaken for a NODE: line.
+#: How many times a run may switch mode before it is told to finish in the one
+#: it is in. A backstop, not the main guard -- a swap already costs a model call
+#: and yields no tool result, so it competes for budget on its own, and
+#: `_refuse_idle_swap` below catches ping-ponging much earlier.
+MAX_MODE_SWAPS = 8
+
+#: Said when a swap follows a swap with nothing done in between. Deliberately
+#: the same shape as REPEATED_CALL_NOTE, which measurement already showed this
+#: model acts on.
+IDLE_SWAP_NOTE = (
+    "NOTE: you switched to {last} and now to {want} with nothing done in "
+    "between. Switching is not progress. Do the work in the mode you are in."
+)
+
+
+#: Said once, immediately before a tool that changes something runs for the
+#: first time against a given target.
+#:
+#: Measured justification: a single MUTATING deviation cuts a task's success
+#: odds by 55-96%, where a non-mutating one costs 7-21% -- and mutating actions
+#: are only 14-18% of steps, so gating them is cheap and precisely aimed
+#: (SABER, 2512.07850). Separately, 82.5% of analysed agent failures are the
+#: agent failing to compare against evidence it already holds: "evidence
+#: contradicting the failure already exists in the agent's execution directory,
+#: yet comparison never occurs."
+#:
+#: Claw-Eval T026 is that failure exactly. Three contacts matched "Manager
+#: Zhang", all three were in the transcript, and the agent sent to the first.
+#: Rewriting the ask_user guidance took it from three sends to two. A prompt
+#: cannot fix this because the problem is not what the agent knows, it is that
+#: nothing makes it look.
+#:
+#: It must offer a way FORWARD, not a refusal. One enforcement study blocked
+#: 94% of non-compliant actions and still had safe task completion below 5%,
+#: because the agent fabricated credentials to route around the block.
+MUTATION_GATE_NOTE = (
+    "HOLD. `{tool}` changes something outside this conversation and cannot be "
+    "undone.\n\n"
+    "Before it runs, check it against what you already know -- not against "
+    "what you intended. Name the exact target you are about to act on, and the "
+    "specific thing you read that identifies it as the right one.\n\n"
+    "If more than one candidate fits what you were asked for -- more than one "
+    "recipient, record, file or account -- you do not know which is meant. "
+    "Use ask_user. Picking one and hoping is the worst option available.\n\n"
+    "If it is the right target and you have the evidence, say so in one line "
+    "and issue the same call again; it will run."
+)
+
+
+#: How often the loop is reminded of things it was told once.
+#:
+#: Long runs suffer instruction fade-out: what was said in the system prompt
+#: stops steering behaviour as the conversation grows past it. The answer that
+#: works is event-driven reminders delivered in the CONVERSATION rather than by
+#: rewriting the system prompt -- rewriting it would invalidate every vendor's
+#: prefix cache, and the model has stopped attending to that region anyway.
+#:
+#: These ride on a tool result that was being sent regardless, so they cost no
+#: model call at all.
+REMINDER_EVERY = 6
+
+#: The reflection from the strongest cheap result in the survey. Its ablation
+#: is the point: an agent that COULD write itself tools scored 62% -> 64%;
+#: adding this question after each step took it to 76%, and the system to 77.4%
+#: on SWE-bench Verified -- beating offline self-improvers that cost 1231 GPU
+#: hours. Deciding WHEN to build a tool is the mechanism; being able to is not.
+TOOL_BUILDING_NOTE = (
+    "You have been at this a while. Is there a small script you could write "
+    "once and run repeatedly that would make the rest of this faster or more "
+    "reliable than doing it by hand each time? Write it if so; if not, carry "
+    "on."
+)
+
+
+def _reminders(iteration: int, checklist: list[dict] | None) -> str:
+    """What to re-say at this point in the loop, if anything.
+
+    Deliberately periodic rather than every turn. Said constantly these become
+    part of the wallpaper, which is the failure mode they exist to fix.
     """
-    node = None
-    why = ""
-    lines = text.splitlines()
-    for line in lines:
-        upper = line.upper()
-        if upper.startswith("NODE:"):
-            candidate = line.split(":", 1)[1].strip().lower()
-            if candidate in targets:
-                node = candidate
-        elif upper.startswith("WHY:"):
-            why = line.split(":", 1)[1].strip()
-    if node is None:
-        for line in lines:
-            candidate = line.strip().lower()
-            if candidate in targets:
-                node = candidate
-                break
-    return node, why
+    if iteration == 0 or iteration % REMINDER_EVERY:
+        return ""
+    parts = [TOOL_BUILDING_NOTE]
+    open_items = [i for i in (checklist or []) if i.get("status") == "pending"]
+    if open_items:
+        parts.append(
+            "Still open:\n" + "\n".join(f"- {i['text']}" for i in open_items)
+        )
+    return "\n\n".join(parts)
 
 
-def _parse_router(text: str, targets: tuple[str, ...] = DISPATCH_TARGETS) -> tuple[str, str]:
-    """Parse a NODE:/WHY: reply against `targets` (DISPATCH_TARGETS by
-    default; router()'s step-assignment call passes STEP_TARGETS instead) --
-    a thin wrapper over _extract_node that supplies the ONE-SHOT fallback:
-    an unparseable or unrecognised NODE: value fails toward "solver" (or
-    `targets[0]` if "solver" isn't even in this call's target set) rather
-    than crashing or leaving `node` unset; the WHY string says so
-    explicitly when that happens, visible on the board and to the
-    dispatched node's own prompt. router() itself doesn't call this
-    directly anymore -- it calls _decide(), which retries before ever
-    reaching this fallback -- but it's kept as the single-shot primitive
-    other callers and tests reason about.
+def _mutates(tool_name: str) -> bool:
+    """Whether this tool changes something that cannot be taken back.
+
+    TOOL_TIERS has recorded this since it was written and had no production
+    reader until the prompt started naming the mutating tools; this is the
+    second. Run-scoped tools carry their own flag and default to True, so an
+    unmarked benchmark tool is gated rather than waved through.
     """
-    node, why = _extract_node(text, targets)
-    if node is None:
-        fallback = "solver" if "solver" in targets else targets[0]
-        return fallback, f"could not parse a NODE: line from {text.strip()[:200]!r}, defaulting to {fallback}"
-    return node, why
+    extra = current_extra_tools().get(tool_name)
+    if extra is not None:
+        return extra.mutates
+    # MUTATING only, not WORKSPACE. Writing a file into a throwaway workspace
+    # or a task container is recoverable -- write it again. The measured case
+    # for gating is about actions that change something OUTSIDE: a refund, a
+    # cancellation, a sent message. Gating workspace writes cost a model call
+    # per new file and bought nothing; measured live, a two-file task went from
+    # 6 calls to 9.
+    #
+    # No standing tool is MUTATING today, which tools.py's own invariant
+    # asserts, so in practice this gate applies to run-scoped tools -- which is
+    # exactly where T026's `gmail_send_message` lived.
+    return TOOL_TIERS.get(tool_name, MUTATING) == MUTATING
 
 
-#: How many times _decide() retries the SAME small router call in place
-#: before giving up and falling back to _parse_router's "defaulting to
-#: solver" safety net. Observed live (2026-09-10): the model occasionally
-#: rambles instead of the required two-line format -- most often the
-#: first time a PENDING OUTPUT shows up in its prompt (i.e. right when it
-#: should say "evaluator" for the first time) -- rather than genuinely
-#: being unsure. A cheap retry of just this one call recovers that far
-#: more often than silently burning an entire extra specialist round on
-#: the fallback would.
-_MAX_ROUTER_PARSE_RETRIES = 2
+def _emit(payload: dict) -> None:
+    """Send one live event to whoever is streaming this run, or do nothing.
+
+    LangGraph's "updates" stream only emits when a node RETURNS. That was fine
+    when a node returned every few seconds; with one loop that runs for minutes
+    it would mean `otto chat` sits silent and then prints one panel. This is the
+    "custom" stream (agent/pipeline/run.py's _STREAM_MODES), and the payload is
+    deliberately shaped exactly like a node update so agent/cli/chat.py and
+    agent/cli/tui.py need no changes at all.
+
+    Best-effort by design: outside a graph run, or when nothing subscribes to
+    the custom stream, the writer is absent or a no-op -- so run_pipeline() and
+    every offline test are unaffected.
+    """
+    try:
+        from langgraph.config import get_stream_writer
+
+        get_stream_writer()(payload)
+    except Exception:  # not in a graph, or no custom subscriber
+        pass
 
 
-def _router_retry_feedback(targets: tuple[str, ...]) -> str:
-    return (
-        "Reply again using EXACTLY two lines and nothing else -- no "
-        "preamble, no explanation outside WHY:. Start the first line with "
-        f"the literal word \"NODE:\", followed by one of: {', '.join(targets)}."
+def _mode_message(name: str) -> HumanMessage:
+    """The message that puts the loop into a mode.
+
+    A HumanMessage, NEVER a SystemMessage, and this is load-bearing rather than
+    stylistic: langchain_anthropic raises ValueError("Received multiple
+    non-consecutive system messages") and langchain_google_genai hoists a
+    mid-list system message into `system_instruction` out of position or drops
+    it at a bare `else: pass`. Three of the routed Tasks are pinned to
+    Anthropic, so a system message here would be a hard 400 in some modes and a
+    silent no-op in others.
+    """
+    return HumanMessage(
+        f"MODE: {name}\n{MODES[name].guidance}\n"
+        "Same task, same tools, same conversation -- everything above still applies."
     )
 
 
-def _decide(system_prompt: str, human_body: str, *, targets: tuple[str, ...]) -> tuple[str, str]:
-    """Make one router-model call and extract (node, why) from it,
-    retrying the SAME call in place (see _MAX_ROUTER_PARSE_RETRIES) if the
-    reply doesn't parse at all, before falling back to _parse_router's
-    fallback. Shared by both of router()'s LLM calls (the general 5-way
-    decision and the narrower per-step assignment) -- identical retry
-    logic either way, just different prompts/targets.
+def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
+    """The conversation a run starts from. Built once per run, never rebuilt.
+
+    The two system messages are adjacent at indices 0 and 1 on purpose: a run of
+    system messages at the very start is legal on every vendor here, and the
+    moment one appears later it is not (see _mode_message). Everything after
+    them is Human/AI for the life of the run.
     """
-    llm = ROUTER.chat_model(Task.CHAT_FAST, temperature=0.2)
-    messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
-    text = _call(llm, messages)
-    node, why = _extract_node(text, targets)
-    attempts = 0
-    while node is None and attempts < _MAX_ROUTER_PARSE_RETRIES:
-        attempts += 1
-        messages.append(AIMessage(text))
-        messages.append(HumanMessage(_router_retry_feedback(targets)))
-        text = _call(llm, messages)
-        node, why = _extract_node(text, targets)
-    if node is None:
-        fallback = "solver" if "solver" in targets else targets[0]
-        return fallback, (
-            f"could not parse a NODE: line after {attempts + 1} attempt(s), "
-            f"last reply {text.strip()[:200]!r}, defaulting to {fallback}"
-        )
-    return node, why
+    history = _conversation_so_far(state)
+    context = state.get("context") or ""
+    body = "\n\n".join(part for part in (
+        f"CONVERSATION SO FAR:\n{history}" if history else "",
+        f"CONTEXT GATHERED SO FAR:\n{context}" if context else "",
+        f"TASK:\n{task_text}",
+        _lessons_block(task_text),
+        _render_checklist(checklist),
+    ) if part)
+
+    note = render_note()
+    messages: list = [SystemMessage(AGENT_PROMPT)]
+    if note:
+        messages.append(SystemMessage(note))
+    messages.append(HumanMessage(body))
+    messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
+    return messages
 
 
-def _parse_plan_steps(text: str) -> list[PlanStep]:
-    """Parse the planner's approved FINAL body into a list of PlanStep
-    dicts -- `{"task": str, "route_to": None, "output": None}` each, both
-    of the None fields filled in later (route_to by router()'s step
-    assignment, output by whichever specialist executes that step).
+def _lessons_block(task_text: str) -> str:
+    """At most ONE lesson from an earlier run, and only if it is about this.
 
-    PLANNER_PROMPT asks for a JSON array of `{"task": ...}` objects.
-    Tolerant of a reply that isn't clean JSON -- stray prose around it, a
-    fence _strip_code_fence didn't fully catch -- by also trying just the
-    substring between the first "[" and the last "]". If nothing parses as
-    a non-empty list of tasks at all, falls back to treating the WHOLE raw
-    reply as ONE step rather than dropping the plan or crashing: a
-    malformed-but-present plan should still be executable, just as one big
-    step instead of several small ones.
+    Three deliberate restraints, each measured. One, not several: task-time
+    procedural recall peaks at k=1 and loses about 7 points by k=5. Here at
+    the seed, not on every turn: always-on injection of skill-like items
+    scored 16.4 points below injecting none. And nothing at all when nothing
+    is relevant -- agent/memory/lessons.py returns an empty list rather than
+    the closest match, because an off-topic lesson is worse than silence.
     """
-    raw = text.strip()
-    candidates = [raw]
-    start, end = raw.find("["), raw.rfind("]")
-    if start != -1 and end != -1 and end > start:
-        candidates.append(raw[start:end + 1])
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(parsed, list) and parsed:
-            steps: list[PlanStep] = []
-            for item in parsed:
-                if isinstance(item, dict) and str(item.get("task") or "").strip():
-                    steps.append({"task": str(item["task"]).strip(), "route_to": None, "output": None})
-                elif isinstance(item, str) and item.strip():
-                    steps.append({"task": item.strip(), "route_to": None, "output": None})
-            if steps:
-                return steps
-    return [{"task": raw, "route_to": None, "output": None}]
+    lessons = recall_lessons(str(task_text or ""))
+    if not lessons:
+        return ""
+    return (
+        "FROM AN EARLIER RUN (might not apply -- ignore it if it does not):\n"
+        + "\n".join(f"- {lesson.rendered()}" for lesson in lessons)
+    )
 
 
-def _next_pending_step_index(plan: list[PlanStep]) -> int | None:
-    """The first step whose `output` is still None -- "not yet run" (an
-    empty string IS a completed, if useless, result -- see PlanStep's own
-    docstring in state.py). None if every step has already run.
+def _plain(messages: list) -> list[dict]:
+    """A transcript as JSON-able dicts, for the checkpointer and the trace.
+
+    LangGraph serialises state on every super-step and Langfuse serialises it
+    into every span, so storing message OBJECTS would put the whole
+    conversation through both on each pass.
     """
-    for i, step in enumerate(plan):
-        if step.get("output") is None:
-            return i
-    return None
+    kinds = {HumanMessage: "human", AIMessage: "ai"}
+    return [
+        {"kind": kinds[type(m)], "content": _content_text(m.content)}
+        for m in messages
+        # System messages are deliberately NOT stored. The only ones in the list
+        # are the opening pair, which `agent` rebuilds on resume; storing them
+        # would round-trip the same two constants through the checkpointer and
+        # every Langfuse span on each super-step, and would risk one being
+        # revived into the middle of a list -- the exact shape that raises on
+        # Anthropic and is silently dropped on Gemini.
+        if type(m) in kinds and _content_text(m.content).strip()
+    ]
 
 
-def _format_plan(plan: list[PlanStep]) -> str:
-    """Render a plan for display inside a human message -- to the overseer
-    (deciding what's next), a role node (showing it the whole plan for
-    context while it executes one step of it), or as part of a rejected
-    attempt's background. Not meant to round-trip; purely readable text.
-    """
-    lines = []
-    for i, step in enumerate(plan, start=1):
-        if step.get("output") is not None:
-            status = f"done, by {step.get('route_to')}"
-        elif step.get("route_to"):
-            status = f"assigned to {step['route_to']}, running"
-        else:
-            status = "not yet assigned"
-        lines.append(f"{i}. [{status}] {step['task']}")
-        if step.get("output") is not None:
-            lines.append(f"   result: {step['output']}")
-    return "\n".join(lines)
+def _revive(stored) -> list:
+    """The inverse of _plain. A stored SystemMessage is dropped rather than
+    revived: the only ones ever stored are the opening pair, which
+    _seed_transcript rebuilds, and reviving one into the middle of a list is
+    the exact failure _mode_message exists to avoid."""
+    if not stored:
+        return []
+    builders = {"human": HumanMessage, "ai": AIMessage}
+    out = []
+    for entry in stored:
+        builder = builders.get(entry.get("kind", "human"))
+        content = entry.get("content") or ""
+        if builder is not None and content:
+            out.append(builder(content))
+    return out
 
-
-# --------------------------------------------------------------------------
-# Shared human-message-body builders -- both the overseer and the role
-# nodes show the same accumulated state (context/plan/pending output or
-# feedback), just framed for their own purpose.
-# --------------------------------------------------------------------------
 
 def _conversation_so_far(state: AgentState) -> str:
     """Prior turns of this session's conversation, as plain dialogue lines
@@ -987,356 +1390,988 @@ def _conversation_so_far(state: AgentState) -> str:
     return "\n".join(lines)
 
 
-def _router_body(state: AgentState, task_text: str) -> str:
-    parts = []
-    history = _conversation_so_far(state)
-    if history:
-        parts.append(f"CONVERSATION SO FAR:\n{history}")
-    parts.append(f"TASK:\n{task_text}")
-    context = state.get("context") or ""
-    if context:
-        parts.append(f"CONTEXT GATHERED SO FAR:\n{context}")
-    plan = state.get("plan")
-    if plan:
-        parts.append(f"PLAN:\n{_format_plan(plan)}")
-    feedback = state.get("feedback") or ""
-    output = state.get("output") or ""
-    node = state.get("node")
-    if feedback:
-        parts.append(
-            f"REJECTED ATTEMPT (by {node}):\n{output}\n\n"
-            f"EVALUATOR FEEDBACK:\n{feedback}"
-        )
-    elif output and node:
-        parts.append(f"PENDING OUTPUT (from {node}, not yet judged):\n{output}")
-    return "\n\n".join(parts)
+def _actions_block(state: AgentState) -> str:
+    """What has already been done in this run, as prompt text -- or "" if
+    nothing has.
 
-
-def _step_route_body(state: AgentState, task_text: str, plan: list[PlanStep], idx: int) -> str:
-    parts = []
-    history = _conversation_so_far(state)
-    if history:
-        parts.append(f"CONVERSATION SO FAR:\n{history}")
-    parts += [
-        f"TASK:\n{task_text}",
-        f"PLAN:\n{_format_plan(plan)}",
-        f"STEP TO ASSIGN (step {idx + 1}):\n{plan[idx]['task']}",
-    ]
-    context = state.get("context") or ""
-    if context:
-        parts.append(f"CONTEXT GATHERED SO FAR:\n{context}")
-    return "\n\n".join(parts)
-
-
-def _role_body(state: AgentState, task_text: str, *, role: str, revising: bool, executing_step: bool, active_step: int | None) -> str:
-    parts = []
-    history = _conversation_so_far(state)
-    if history:
-        parts.append(f"CONVERSATION SO FAR:\n{history}")
-    parts.append(f"TASK:\n{task_text}")
-    plan = state.get("plan")
-    if plan:
-        parts.append(f"PLAN:\n{_format_plan(plan)}")
-    if executing_step and active_step is not None:
-        parts.append(f"YOUR CURRENT STEP (step {active_step + 1}):\n{plan[active_step]['task']}")
-    context = state.get("context") or ""
-    if context:
-        parts.append(f"CONTEXT GATHERED SO FAR:\n{context}")
-    feedback = state.get("feedback") or ""
-    if feedback:
-        previous_node = state.get("node") or "a specialist"
-        previous_output = state.get("output") or ""
-        if revising:
-            parts.append(
-                f"YOUR PREVIOUS ATTEMPT (rejected):\n{previous_output}\n\n"
-                f"EVALUATOR FEEDBACK -- fix this:\n{feedback}"
-            )
-        else:
-            # A different specialist's rejected attempt, shown as
-            # background only -- e.g. the overseer just escalated from
-            # solver to planner because solving without a plan failed.
-            parts.append(
-                f"PREVIOUS ATTEMPT BY {previous_node.upper()} (rejected):\n"
-                f"{previous_output}\n\n"
-                f"EVALUATOR FEEDBACK (why it was rejected):\n{feedback}"
-            )
-    return "\n\n".join(parts)
-
-
-# --------------------------------------------------------------------------
-# router -- the overseer. Re-invoked after every node; one call, no tools
-# (two calls, on the two paths described in the module docstring: the
-# general 5-way decision, or a narrower per-step assignment while an
-# approved plan is actively executing).
-# --------------------------------------------------------------------------
-
-def router(state: AgentState) -> Command[Literal["planner", "solver", "summarizer", "finder", "evaluator"]]:
-    round_ = state["round"] + 1
-    task_text = state["messages"][-1].content
-    plan = state.get("plan")
-    feedback = state.get("feedback") or ""
-    node_error = state.get("node_error") or ""
-
-    if node_error:
-        # A provider/network failure interrupted whoever just ran -- a
-        # specialist mid-attempt (possibly mid-plan-step), or the
-        # evaluator itself (module docstring, fifth refinement).
-        # Deterministic, no LLM call: an LLM call is exactly what just
-        # failed, so asking another one to decide what to do about it
-        # would be both ironic and just as likely to fail again. Discards
-        # any active plan the same way an ordinary rejection-driven
-        # escalation to planner already does -- a plan whose own step
-        # runner just blew up cannot simply resume where it left off.
-        update: dict = {
-            "round": round_,
-            "node_error": "",
-            "board": [f"round {round_}: overseer -- provider failure, escalating to planner ({node_error})"],
-        }
-        if plan is not None:
-            update["plan"] = None
-            update["active_step"] = None
-        return Command(update=update, goto="planner")
-
-    if isinstance(plan, list) and plan and not feedback:
-        # An approved plan is active and nothing is currently rejected --
-        # executing it is assignment-driven, not a fresh 5-way judgment
-        # call every round (module docstring, third refinement).
-        idx = _next_pending_step_index(plan)
-        if idx is None:
-            # Every step has run -- straight to evaluator for the whole-
-            # answer judgment. Unambiguous once the plan says "done": no
-            # LLM call needed to make this decision.
-            return Command(
-                update={
-                    "round": round_,
-                    "board": [f"round {round_}: overseer -- plan complete, dispatching to evaluator"],
-                },
-                goto="evaluator",
-            )
-        step = plan[idx]
-        if step.get("route_to"):
-            # Defensive/idempotent: shouldn't normally recur, since a
-            # Command's goto hands off immediately after route_to is set.
-            return Command(
-                update={
-                    "round": round_,
-                    "active_step": idx,
-                    "board": [f"round {round_}: overseer -- step {idx + 1} already assigned to {step['route_to']}"],
-                },
-                goto=step["route_to"],
-            )
-        route_to, why = _decide(STEP_ROUTE_PROMPT, _step_route_body(state, task_text, plan, idx), targets=STEP_TARGETS)
-
-        new_plan = [dict(s) for s in plan]
-        new_plan[idx] = {**new_plan[idx], "route_to": route_to}
-        return Command(
-            update={
-                "round": round_,
-                "plan": new_plan,
-                "active_step": idx,
-                "board": [f"round {round_}: overseer routed step {idx + 1} ({step['task']}) to {route_to} ({why})"],
-            },
-            goto=route_to,
-        )
-
-    # No active plan-with-pending-steps -- either no plan exists yet, or a
-    # rejection just happened and needs real judgment (retry the same
-    # specialist by default, or escalate to planner). The original 5-way
-    # overseer decision.
-    node, why = _decide(ROUTER_PROMPT, _router_body(state, task_text), targets=DISPATCH_TARGETS)
-
-    if node == "evaluator" and not (state.get("output") or "").strip():
-        # Defensive net, same "fail toward the safe default" spirit as
-        # _parse_router's own fallback: nothing is actually pending
-        # judgment (nothing has run yet, or a plan was just approved and
-        # cleared) -- evaluator would have nothing to judge.
-        why = f"picked evaluator with nothing pending judgment yet ({why}) -- defaulting to solver"
-        node = "solver"
-
-    update: dict = {
-        "round": round_,
-        "board": [f"round {round_}: overseer dispatched to {node} ({why})"],
-    }
-    if node == "planner" and plan is not None:
-        # Escalating to a fresh plan while an old one is still hanging
-        # around (e.g. the FINAL answer was rejected after every step ran,
-        # and the whole plan -- not just its last step -- looks like the
-        # problem) -- start over rather than leaving stale step state
-        # (a completed plan whose last step is about to be overwritten by
-        # an unrelated fresh planning pass) behind.
-        update["plan"] = None
-        update["active_step"] = None
-
-    return Command(update=update, goto=node)
-
-
-# --------------------------------------------------------------------------
-# The four specialists -- one shared implementation (_run_role), four thin
-# named wrappers (LangGraph nodes need their own registered function/name).
-# Every one of them now returns to "router" (the overseer decides what
-# happens next), not straight to "evaluator".
-# --------------------------------------------------------------------------
-
-def _run_role(
-    state: AgentState,
-    *,
-    role: str,
-    task: Task,
-    temperature: float,
-    prompt: str,
-    context_op: Literal["append", "replace"] | None = None,
-) -> Command[Literal["router", "ask_user"]]:
-    plan = state.get("plan")
-    active_step = state.get("active_step")
-    executing_step = isinstance(plan, list) and isinstance(active_step, int) and 0 <= active_step < len(plan)
-
-    task_text = state["messages"][-1].content
-    feedback = state.get("feedback") or ""
-    # Revising MY OWN rejected attempt vs a fresh attempt (even if a
-    # DIFFERENT specialist's rejected attempt or gathered context exists --
-    # see _role_body's revising=False branch for that case).
-    revising = bool(feedback) and state.get("node") == role
-
-    llm = ROUTER.chat_model(task, temperature=temperature)
-    system_prompt = (
-        ROLE_REVISE_PROMPT.format(role_upper=role.upper(), max_iter=MAX_TOOL_ITERATIONS)
-        if revising else prompt.format(max_iter=MAX_TOOL_ITERATIONS)
+    Shown to BOTH the overseer and the role it dispatches, because the loop
+    this fixes needed both to see it. A role's tool conversation lives in a
+    local list inside _tool_loop and dies when that node returns, so a
+    re-invoked role started blind; and the overseer, deciding what to do next,
+    could see only that "solver produced an output", never what solver had
+    tried. Measured on a hard task: the solver wrote the same file 166 times
+    across five rounds, a different draft each time, never compiling any of
+    them. Neither half of the loop knew the work had already been done.
+    """
+    already = state.get("actions") or []
+    if not already:
+        return ""
+    return (
+        "WHAT HAS ALREADY BEEN DONE (tool calls from earlier attempts in this "
+        "run, oldest first). These already happened and their effects are "
+        "real. Do not repeat one expecting a different result -- build on it, "
+        "or find out why it did not work:\n"
+        + "\n".join(f"- {line}" for line in already[-_ACTIONS_SHOWN:])
     )
-    human_body = _role_body(state, task_text, role=role, revising=revising, executing_step=executing_step, active_step=active_step)
-    messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
+
+
+#: How many exchanges the evaluator gets to reach a verdict.
+#:
+#: Measured, after giving it the evidence it had been missing: it went from
+#: judging blind to spending its whole five-iteration budget checking, on every
+#: judgment. On a task as small as "write fib.py and run it", one run cost 24
+#: model calls and 106 seconds -- and FIFTEEN of those 24 were the evaluator,
+#: three judgments of five calls each. The loop doing the actual work used six.
+#:
+#: That is the opposite of what the evidence was for. The point was one
+#: better-informed judgment, not four extra checks per judgment: it can now see
+#: the commands that were run and what they printed, so the common case needs no
+#: tool call at all. Two leaves room for one real check when something genuinely
+#: cannot be taken on trust.
+MAX_EVALUATOR_ITERATIONS = 2
+
+#: Criteria per judgment. Small and non-overlapping is the point -- each is
+#: scored in turn, and overlapping criteria double-count one mistake.
+RUBRIC_MAX = 5
+
+
+@dataclass(frozen=True, slots=True)
+class Verdict:
+    """What one judgment concluded, kept as four separate facts."""
+
+    approved: bool
+    reason: str
+    #: 0.0-1.0, the share of criteria met. The continuous half.
+    process: float
+    #: (met, total), so a caller can say "3 of 4" rather than "0.75".
+    criteria: tuple[int, int]
+    #: Whether what went unmet was outside the agent's control. An environment
+    #: blocker is not the agent being wrong, and counting it as one teaches
+    #: the wrong lesson to anything downstream.
+    blocked: bool
+
+
+#: How many rejections a run may collect before the answer stands anyway.
+#: Judgment is worth paying for; judgment without a bound is a way to spend a
+#: whole budget re-reading the same answer.
+MAX_REJECTIONS = 2
+
+#: Ceiling on each piece of evidence handed to the evaluator. Two-ended, like
+#: agent/pipeline/tools.py's own clip, for the same reason: the start says what
+#: was attempted and the end says how it came out, and keeping only the head
+#: loses the half that decides the verdict.
+_EVIDENCE_CHARS = 6000
+
+#: How much of the loop's own conversation the evaluator sees. The tail, because
+#: what it needs to check is how the run FINISHED -- the commands that were meant
+#: to prove the work, and what they actually printed.
+_EVIDENCE_MESSAGES = 6
+
+
+def _clip_evidence(text: str) -> str:
+    if len(text) <= _EVIDENCE_CHARS:
+        return text
+    half = _EVIDENCE_CHARS // 2
+    return (
+        f"{text[:half]}\n... [{len(text) - _EVIDENCE_CHARS} characters omitted] "
+        f"...\n{text[-half:]}"
+    )
+
+
+def _evidence_tail(state: AgentState) -> str:
+    """The end of the agent's own working, for the evaluator to check against.
+
+    This is the evidence that used not to exist. The evaluator saw an answer and
+    no way to verify it, so "I cannot confirm this" came back as a rejection --
+    and each rejection cost a full extra round of the graph.
+    """
+    stored = state.get("transcript") or []
+    tail = stored[-_EVIDENCE_MESSAGES:]
+    if not tail:
+        return ""
+    speaker = {"ai": "otto", "human": "result"}
+    lines = [
+        f"{speaker.get(entry.get('kind'), 'result')}: {entry.get('content', '')}"
+        for entry in tail
+    ]
+    return _clip_evidence("\n".join(lines))
+
+
+#: When the loop starts compacting itself, in characters of conversation.
+#: Roughly 40k tokens at four characters a token -- comfortably inside every
+#: routed model's window, and chosen so compaction is rare and chunky rather
+#: than incremental. That matters for cost as well as noise: every vendor
+#: caches its own prefix, and rewriting history invalidates the cache from the
+#: rewrite point, so many small compactions would cost more than they save.
+LOOP_COMPACT_AT = 160_000
+
+#: How many recent messages stay verbatim. The tail is what the model is
+#: actually reasoning over; the head is what it has already acted on.
+KEEP_VERBATIM = 8
+
+#: What a compacted tool result is cut down to. Enough to remember the shape
+#: of what came back -- an error class, a count, the first line of output --
+#: without carrying the whole thing for the rest of the run.
+COMPACTED_RESULT_CHARS = 240
+
+
+#: Message prefixes that are never compacted, whatever their age.
+#:
+#: Type-blind compaction is measured as destructive: constraint recall falls to
+#: 53% at 50% compression and 24% at 10%, and 53% -> 10% over five successive
+#: rounds. Type-AWARE compaction holds 100/95/80 and stabilises at 96%, and the
+#: behavioural difference is real -- 37.7% against 29.2% on one benchmark,
+#: p=0.005 (The Compaction Cliff, 2608.22752).
+#:
+#: What must survive is anything that says what the run is FOR or what it may
+#: not do. Losing a tool result costs a re-run; losing a constraint means the
+#: agent does the wrong thing confidently for the rest of the session.
+_NEVER_COMPACT = (
+    "TASK:",
+    "THIS IS WHAT HAS TO BE TRUE",
+    "MODE:",
+    "CONVERSATION SO FAR:",
+    "CONTEXT GATHERED SO FAR:",
+    "EVALUATOR REJECTED",
+    "HOLD.",
+)
+
+
+def _compact(messages: list, actions: list[str] | None = None) -> int:
+    """Shrink the oldest tool results in place. Returns how many it rewrote.
+
+    Costs NOTHING -- no model call -- which is why it is the first tier and why
+    it runs before anything cleverer. On a tool-heavy run the transcript is
+    mostly tool output by volume, so cutting the old ones down reclaims most of
+    it, and `actions` still carries the one-line record of everything.
+
+    Deliberately lossy in the same way `_summarise_action` is: "you already
+    tried this, here is roughly what came back". What it must never touch is
+    the seed (the task, the opening prompts) or the recent tail, so the run
+    keeps both what it was asked and what it is in the middle of.
+
+    This BOUNDS the transcript on its own -- after compaction a run at the
+    default 120-call ceiling holds roughly 8 verbatim results plus a hundred
+    240-character stubs, some 15k tokens, well inside every routed window.
+
+    It used to stop there, and the dropped bytes were simply gone. `_keep_evicted`
+    below is the second tier: the full text goes into the session store under
+    EVICTED_KIND before the message is overwritten, so `recall_memory` can
+    search it. Still no model call, and still nothing summarised.
+    """
+    rewritten = 0
+    protected = len(messages) - KEEP_VERBATIM
+    summaries = list(actions or [])
+    seen_results = 0
+    for i, message in enumerate(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        text = _content_text(message.content)
+        if not text.startswith("TOOL RESULT:"):
+            continue
+        # Count every result, compacted or not, so the summary line still lines
+        # up with the call it describes once some have been rewritten.
+        index, seen_results = seen_results, seen_results + 1
+        if i >= protected or len(text) <= COMPACTED_RESULT_CHARS:
+            continue
+        if any(marker in text for marker in _NEVER_COMPACT):
+            continue
+        # A real summary rather than a truncation, at no cost: `actions` already
+        # holds one line per call from `_summarise_action`, written when the
+        # call ran. Truncating to the first 240 characters keeps whatever
+        # happened to come first, which for a failing command is usually the
+        # banner and not the error.
+        summary = summaries[index] if index < len(summaries) else ""
+        # The full text, kept where `recall_memory` can find it again, BEFORE
+        # the message is overwritten. This is the second tier.
+        kept = _keep_evicted(text)
+        # The stub says where the rest went -- but ONLY when it actually went
+        # somewhere. A model that can see the bytes are missing and is not told
+        # they are searchable will re-run the command, which is what it was
+        # correctly told to do before the second tier existed; and a model told
+        # to search for something nothing stored will spend a call being told
+        # no memory is bound. Both are wrong in the other's situation, so the
+        # hint follows the storing.
+        messages[i] = HumanMessage(
+            (f"TOOL RESULT (compacted): {summary}" if summary else
+             text[:COMPACTED_RESULT_CHARS] + "\n... [older result, compacted]")
+            + (EVICTED_HINT if kept else "")
+        )
+        rewritten += 1
+    return rewritten
+
+
+#: Appended to every compacted stub. One short line, because it is appended
+#: to as many stubs as a long run has old tool calls.
+EVICTED_HINT = "\n(the full output is searchable: ACTION: recall_memory)"
+
+
+def _keep_evicted(text: str) -> bool:
+    """Put an evicted tool result somewhere `recall_memory` can still find it.
+
+    Until this existed, `_compact` was one-way: a result older than the recent
+    tail was replaced by its one-line summary and the bytes were gone. The
+    honest thing to tell the model then was "you can run that again", which is
+    true, and not "you can search for it", which was not. Now it is.
+
+    No model call, and no bullets. Chunks with their own embeddings, ranked
+    directly by agent/memory/retrieval.py's `recall_chunks`.
+
+    Returns whether the text was actually kept, which is what decides whether
+    the stub left behind may claim it is searchable.
+
+    False and silent when no store is bound -- every run outside a chat
+    session, the whole benchmark harness included. An embedder that is down
+    still returns True: an unembedded chunk is unrankable, not lost, and
+    becomes rankable again when the store is re-embedded.
+    """
+    store = current_store()
+    if store is None or not text.strip():
+        return False
     try:
-        output = _tool_loop(llm, messages)
+        vector = embed([text])[0]
+        model = embedding_model_name()
+    except Exception as exc:  # noqa: BLE001 -- never fail a run over this
+        logger.debug("evicted result stored without an embedding: %s", exc)
+        vector, model = None, None
+    try:
+        store.add_chunk(EVICTED_KIND, content_hash(text), text, vector, model)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not store an evicted result: %s", exc)
+        return False
+    return True
+
+
+def _transcript_size(messages: list) -> int:
+    return sum(len(_content_text(m.content)) for m in messages)
+
+
+def _agent_loop(state: AgentState, messages: list, *, mode: str,
+                actions: list[str], mode_log: list[str],
+                seed: list | None = None,
+                checklist: list[dict] | None = None,
+                max_iterations: int | None = None,
+                may_delegate: bool = True) -> tuple[str, str, str]:
+    """Run one conversation until it answers, pauses, or runs out of budget.
+
+    Returns `(output, why_it_stopped, mode)`. `output` is only ever set from an
+    attempted ANSWER -- a FINAL body, or failing that the last unparseable
+    reply. A tool call is not a candidate answer, which is the same rule the
+    loop this replaces had and the same reason: the ACTION protocol's raw text
+    leaking out as an answer is a bug that already happened once.
+
+    `messages` is mutated in place. The caller persists it, so a run that pauses
+    for a question or dies on a budget still hands back everything it learned.
+    """
+    budget = current_budget()
+    output = ""
+    dead_replies = 0
+    last_target: str | None = None
+    repeats = 0
+    failed_targets: set[str] = set()
+    swaps = 0
+    did_work_since_swap = True
+    #: (tool, target) pairs already held once. A gate that fired every time
+    #: would either loop forever or teach the model to ignore it.
+    confirmed: set[str] = set()
+    #: What this run has actually proved. See agent/pipeline/evidence.py; it
+    #: costs nothing until the moment a run tries to finish with code changed
+    #: and nothing run, and it is allowed to say that once.
+    ledger = Ledger()
+    asked_for_proof = False
+    iteration = 0
+    llm = ROUTER.chat_model(MODES[mode].task)
+
+    while max_iterations is None or iteration < max_iterations:
+        if _transcript_size(messages) > LOOP_COMPACT_AT:
+            dropped = _compact(messages, actions)
+            if dropped:
+                logger.info("agent loop: compacted %d old tool result(s)", dropped)
+                _emit({"agent": {"board": [f"compacted {dropped} older tool result(s)"]}})
+
+        if budget is not None:
+            if budget.spent():
+                return output, "budget", mode
+            note = budget.wrap_up_once()
+            if note:
+                messages.append(HumanMessage(note))
+
+        text = _call(llm, messages)
+        # Resolved against what this run can actually call, which includes
+        # whatever agent/pipeline/toolkit.py bound for it -- a benchmark's
+        # task-specific tools are exactly the names a model is most likely to
+        # decorate or misspell, having seen them once in a prompt.
+        dispatch = dispatch_table()
+        kind_of_reply, tool_name, body = _parse_worker_reply(text, allowed=dispatch)
+
+        if kind_of_reply == "final":
+            # The one place this is worth an exchange: code changed, nothing
+            # ran. Asked ONCE -- a guard that keeps asking is a guard the model
+            # learns to answer rather than act on. It is also allowed to be
+            # told there is nothing to run, because enforcement with no way to
+            # say no gets routed around rather than obeyed.
+            if ledger.needs_check and not asked_for_proof:
+                asked_for_proof = True
+                _emit({"agent": {"board": [
+                    "holding the answer: " + ", ".join(ledger.unproven[:3])
+                    + " changed with nothing run"
+                ]}})
+                messages.append(AIMessage(text))
+                messages.append(HumanMessage(render_unproven(ledger)))
+                continue
+            return _strip_code_fence(body), "final", mode
+
+        if kind_of_reply == "unparseable":
+            dead_replies += 1
+            output = text or output
+            if dead_replies >= MAX_CONSECUTIVE_DEAD_REPLIES:
+                logger.warning(
+                    "agent loop: %d unparseable replies in a row -- giving up on "
+                    "this attempt rather than spending the rest of the budget",
+                    dead_replies,
+                )
+                return output, "dead", mode
+            # An empty reply must not become an empty AIMessage. `_call` returns
+            # "" on an empty stream, Anthropic rejects empty text blocks, and in
+            # a transcript that never resets one of those would break every
+            # later Anthropic call for the rest of the run.
+            if text:
+                messages.append(AIMessage(text))
+            messages.append(HumanMessage(UNPARSEABLE_FEEDBACK))
+            continue
+
+        dead_replies = 0
+
+        if tool_name == "ask_user":
+            question, choices = _parse_ask_user_body(body)
+            raise NeedsUserInput(question or "(no question given)", choices)
+
+        if tool_name == "delegate":
+            if not may_delegate:
+                # One level only. A sub-agent that delegates is a subtask that
+                # was never bounded, and the depth would compound silently.
+                evidence = ("delegate is not available inside a delegated "
+                            "subtask -- do this one yourself")
+            else:
+                result = _delegate(state, body, actions=actions, parent_mode=mode)
+                evidence = (
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
+                    f"returncode: {result.returncode}"
+                )
+            iteration += 1
+            messages.append(AIMessage(text))
+            messages.append(HumanMessage(f"TOOL RESULT:\n{evidence}"))
+            did_work_since_swap = True
+            continue
+
+        if tool_name == "switch_mode":
+            messages.append(AIMessage(text))
+            mode, swaps, did_work_since_swap = _switch_mode(
+                messages, body, mode=mode, swaps=swaps,
+                did_work=did_work_since_swap, mode_log=mode_log,
+                calls=budget.calls if budget else 0, seed=seed,
+                confirmed=confirmed,
+            )
+            llm = ROUTER.chat_model(MODES[mode].task)
+            continue
+
+        did_work_since_swap = True
+
+        # The gate. Before a tool that cannot be undone runs for the first time
+        # against a given target, make the model check it against what it
+        # already read -- see MUTATION_GATE_NOTE for why a prompt alone does
+        # not do this. Costs one call on the ~15% of steps that mutate.
+        gate_key = f"{tool_name}:{_action_target(tool_name, body)}"
+        if tool_name in dispatch and _mutates(tool_name) and gate_key not in confirmed:
+            confirmed.add(gate_key)
+            messages.append(AIMessage(text))
+            messages.append(HumanMessage(MUTATION_GATE_NOTE.format(tool=tool_name)))
+            _emit({"agent": {"board": [f"holding {tool_name} for a check"]}})
+            continue
+
+        if problem := _action_problem(tool_name, body, dispatch):
+            evidence = problem
+        else:
+            result = dispatch[tool_name](body)
+            ledger.record(tool_name, body, result.returncode)
+            line = _summarise_action(tool_name, body, result)
+            actions.append(f"{mode}: {line}")
+            _emit({"agent": {"board": [f"{mode}: {line}"]}})
+            evidence = (
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
+                f"returncode: {result.returncode}"
+            )
+            target = _action_target(tool_name, body)
+            repeats = repeats + 1 if target == last_target else 1
+            last_target = target
+            failed_before = target in failed_targets
+            if result.returncode != 0:
+                failed_targets.add(target)
+            if result.returncode != 0 and failed_before:
+                evidence += "\n\n" + REPEATED_FAILURE_NOTE.format(target=target)
+            elif repeats >= REPEATS_BEFORE_NOTE:
+                evidence += "\n\n" + REPEATED_CALL_NOTE.format(
+                    n=repeats, tool=tool_name, target=target,
+                )
+        iteration += 1
+        # The LIVE checklist, not state's. On a first run the loop builds it
+        # and state still holds None, so reading state here silently reminded
+        # the model of nothing -- caught by a test, not by reading.
+        reminder = _reminders(iteration, checklist)
+        if reminder:
+            evidence += "\n\n" + reminder
+        messages.append(AIMessage(text))
+        messages.append(HumanMessage(f"TOOL RESULT:\n{evidence}"))
+
+    # Only a bounded sub-loop reaches here. The parent loop has no iteration
+    # cap -- it runs until it answers, pauses, or runs out of budget -- so its
+    # `while` is always true and every exit above is a `return`.
+    return output, "exhausted", mode
+
+
+#: How many exchanges a delegated subtask gets. Small on purpose: a sub-agent
+#: that needs a long conversation is a subtask that was not bounded properly,
+#: and the parent is better placed to notice that than the child is.
+MAX_DELEGATE_ITERATIONS = 8
+
+#: Ceiling on what one mode hands forward across an escalating switch. Long
+#: enough for a real plan, short enough that it cannot reintroduce the
+#: transcript the escalation exists to drop.
+MAX_CARRIED_CHARS = 3000
+
+
+#: Told to the sub-agent instead of the parent's conversation.
+#:
+#: The measured shape. Reasoning belongs at the ORCHESTRATOR: putting it there
+#: was worth +18.2 and +36.7 points on two benchmarks at 8% added latency,
+#: where putting it in the sub-agents was marginal-to-negative at +77%. And
+#: sub-agent SIZE barely mattered once the orchestrator thought -- 23.0 / 23.0
+#: / 23.6 across models twenty times apart. So the child is thin by design, not
+#: by economy.
+DELEGATE_CONTRACT = (
+    "You have been given one bounded job by another agent, which is handling "
+    "the wider task. Do exactly this and nothing beyond it:\n\n{instruction}\n\n"
+    "You do not have the conversation it came from and you do not need it. "
+    "When you are done reply with exactly\nFINAL:\n<what you found or did, "
+    "stated so someone who cannot see your working can act on it>"
+)
+
+
+def _delegate(state: AgentState, body: str, *, actions: list[str],
+              parent_mode: str) -> ToolResult:
+    """Run one bounded subtask in a fresh context, on another mode's model.
+
+    This is the one shape of multi-agent the evidence actually supports. Where
+    every agent shares a model, a single agent role-playing the workflow
+    matches or beats the multi-agent version at lower cost -- so a sub-agent
+    earns its keep only when the model genuinely differs, or the context must
+    be isolated, or both. Otto's modes differ by model, which is what makes
+    this worth having rather than a second way to spend calls.
+
+    What crosses in each direction is the point. Down: a contract, never the
+    parent's transcript. Up: a report, never a trajectory. The child's working
+    is discarded when it returns, which is what keeps a long delegation from
+    costing the parent its context window.
+    """
+    head, _, instruction = body.partition("\n")
+    want = parse_mode_body(head)
+    if want is None:
+        return ToolResult(
+            stdout="",
+            stderr=(f"delegate: first line must be a mode -- one of "
+                    f"{', '.join(mode_names())}. Then the job on the lines after it."),
+            returncode=1,
+        )
+    if not instruction.strip():
+        return ToolResult(
+            stdout="", stderr="delegate: say what the job is on the lines after the mode.",
+            returncode=1,
+        )
+    if want == parent_mode:
+        # Same model, no isolation gained that a fresh prompt would not give.
+        # This is the degenerate case the literature warns about: sub-agents
+        # used purely as context-isolation threads, paying coordination for
+        # something the parent could do itself.
+        return ToolResult(
+            stdout="",
+            stderr=(f"delegate: you are already in {want} mode, so this would run on "
+                    "the same model with no context you do not have. Just do it."),
+            returncode=1,
+        )
+
+    child: list = [SystemMessage(AGENT_PROMPT)]
+    if note := render_note():
+        child.append(SystemMessage(note))
+    child.append(HumanMessage(DELEGATE_CONTRACT.format(instruction=instruction.strip())))
+    child.append(_mode_message(want))
+
+    taken: list[str] = []
+    _emit({"agent": {"board": [f"delegated to {want}: {instruction.strip()[:60]}"]}})
+    try:
+        output, why, _ = _agent_loop(
+            state, child, mode=want, actions=taken, mode_log=[],
+            max_iterations=MAX_DELEGATE_ITERATIONS, may_delegate=False,
+        )
+    except NeedsUserInput:
+        # The child cannot pause the run -- it does not own the conversation
+        # with the person. Hand the question up as its result and let the
+        # parent decide whether to ask it.
+        raise
+    except ProviderError as exc:
+        return ToolResult(stdout="", stderr=f"delegate: the subtask failed: {exc}", returncode=1)
+
+    # The child's actions join the parent's record; its conversation does not.
+    actions.extend(f"{want}(delegated): {line}" for line in taken)
+    if not output.strip():
+        return ToolResult(
+            stdout="", stderr=f"delegate: {want} finished without an answer ({why})", returncode=1,
+        )
+    return ToolResult(stdout=output, stderr="", returncode=0)
+
+
+def _last_ai_text(messages: list) -> str:
+    """The most recent thing the model actually said, clipped.
+
+    Used to carry one mode's output across an escalation that otherwise wipes
+    the conversation. Deliberately the last AI turn rather than a search for
+    something plan-shaped: the loop does not know what a plan looks like, and
+    a heuristic that did would quietly fail on the day a mode produced
+    something else worth keeping.
+    """
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            text = _content_text(message.content).strip()
+            if text:
+                return text[:MAX_CARRIED_CHARS]
+    return ""
+
+
+def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
+                 did_work: bool, mode_log: list[str], calls: int,
+                 seed: list | None = None,
+                 confirmed: set[str] | None = None) -> tuple[str, int, bool]:
+    """Handle one `switch_mode` request. Returns `(mode, swaps, did_work)`.
+
+    Three refusals, cheapest first, and none of them raises -- a refusal is a
+    message the model reads and acts on, exactly like a failed tool result.
+
+    And an asymmetry, which is the measured part. Handing a stronger model the
+    weaker one's trajectory recovers under half the quality it should, at four
+    to six times the cost; DISCARDING that trajectory takes recovery from 47%
+    to 64%. The reverse is not true -- removing a strong model's trajectory
+    before handing down HURTS. In the paper's words: strong trajectories guide
+    weak receivers, weak trajectories burden strong ones.
+
+    So escalating restarts from the seed, and de-escalating carries everything.
+    The restart is only affordable because the checklist survives it: what the
+    run has established is state, not conversation, so a clean restart loses
+    the weaker model's phrasing and none of its findings.
+    """
+    want = parse_mode_body(body)
+    if want is None:
+        messages.append(HumanMessage(
+            f"switch_mode: that is not a mode. Choose one of "
+            f"{', '.join(mode_names())}. You are still in {mode}."
+        ))
+        mode_log.append(f"call {calls}: refused (unknown mode)")
+        return mode, swaps, did_work
+
+    if want == mode:
+        # Deliberately does NOT re-append the guidance: it is already above,
+        # and repeating it would grow the prompt every time the model asked
+        # for what it already has.
+        messages.append(HumanMessage(
+            f"You are already in {mode} mode; its guidance is above. Continue."
+        ))
+        mode_log.append(f"call {calls}: refused (already in {mode})")
+        return mode, swaps, did_work
+
+    if not did_work:
+        messages.append(HumanMessage(IDLE_SWAP_NOTE.format(last=mode, want=want)))
+        mode_log.append(f"call {calls}: refused ({mode} -> {want}, no work between)")
+        return mode, swaps, did_work
+
+    if swaps >= MAX_MODE_SWAPS:
+        messages.append(HumanMessage(
+            f"You have switched modes {swaps} times. Finish in the mode you "
+            "are in."
+        ))
+        mode_log.append(f"call {calls}: refused (swap limit)")
+        return mode, swaps, did_work
+
+    reason = mode_reason(body)
+    escalating = MODES[want].depth > MODES[mode].depth
+    messages_before = list(messages)
+    if escalating and seed is not None:
+        # Clean restart. Everything the run established is in the checklist and
+        # in the workspace; what is dropped is the weaker model's account of
+        # getting there, which is the part measured as a burden.
+        messages[:] = list(seed)
+        # The gate's memory goes with the conversation it was recorded in.
+        #
+        # `confirmed` holds "this tool has already been held once against this
+        # target, so let the reissue through". That is only true while the
+        # model can REMEMBER being asked. An escalating switch wipes the
+        # transcript back to the seed, so the model that arrives next has no
+        # record of the hold -- and without this line it would find the gate
+        # already satisfied and run the irreversible call unchecked. Holding
+        # the same target twice costs one exchange; not holding it costs the
+        # thing the gate exists to prevent.
+        if confirmed is not None:
+            confirmed.clear()
+        # The LAST thing this mode produced comes with it.
+        #
+        # Without this, `plan` is self-defeating: its own guidance says to
+        # "switch back and carry the steps out yourself", solve is the deepest
+        # mode so switching back always escalates, and escalating wipes the
+        # transcript -- so following the instruction destroys the plan at the
+        # moment it is needed. Nothing else held it: `context` is only written
+        # by ask_user and the checklist is fixed at run start.
+        #
+        # One message, not the whole conversation. What escalation is for is
+        # dropping the weaker model's account of getting somewhere; the thing
+        # it arrived at is the part worth carrying.
+        carried = _last_ai_text(messages_before)
+        if carried:
+            messages.append(HumanMessage(
+                f"What you produced in {mode} mode, to work from:\n{carried}"
+            ))
+        messages.append(HumanMessage(
+            f"Starting fresh in {want} mode. The work so far stands -- what is "
+            "already true is listed above, and anything written is still "
+            "written. What you do not have is the earlier back-and-forth, "
+            "which you do not need."
+        ))
+    messages.append(_mode_message(want))
+    direction = "escalated" if escalating else "switched"
+    mode_log.append(
+        f"call {calls}: {mode} -> {want}"
+        + (" (restarted)" if escalating and seed is not None else "")
+        + (f" ({reason})" if reason else "")
+    )
+    _emit({"agent": {"board": [f"{direction} to {want} mode" + (f" -- {reason}" if reason else "")]}})
+    return want, swaps + 1, False
+
+
+def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
+    """The one working node. Everything the four specialists did, in one
+    conversation that is never thrown away.
+
+    Every exit writes `transcript` back. That is a correctness rule rather than
+    an optimisation: a run that pauses on `ask_user` and never persisted its
+    conversation would resume having forgotten the work it paused in the middle
+    of, which is the failure this whole rewrite exists to remove.
+    """
+    task_text = state["messages"][-1].content
+    mode = state.get("mode") or DEFAULT_MODE
+    stored = _revive(state.get("transcript"))
+    resuming = bool(stored)
+
+    # The run's working state, written once from the task alone before any
+    # attempt exists. Nothing here can be shaped by an attempt trying to
+    # satisfy it -- which is stronger than generating it after the fact, and
+    # the same call now serves both the loop and the judgment instead of one
+    # each. See AgentState.checklist.
+    checklist = state.get("checklist")
+    if checklist is None:
+        checklist = _new_checklist(_criteria(ROUTER.chat_model(Task.EVALUATE), task_text))
+
+    if resuming:
+        messages = [SystemMessage(AGENT_PROMPT), *(
+            [SystemMessage(render_note())] if render_note() else []
+        ), *stored]
+        feedback = state.get("feedback") or ""
+        if feedback:
+            messages.append(HumanMessage(
+                f"EVALUATOR REJECTED THAT:\n{feedback}\n"
+                + (_render_checklist(checklist) + "\n" if checklist else "")
+                + "Fix what is still open. You have everything above."
+            ))
+    else:
+        messages = _seed_transcript(state, task_text, checklist)
+
+    actions: list[str] = []
+    mode_log: list[str] = []
+    budget = current_budget()
+
+    def carry(**extra) -> dict:
+        """Every return path persists the same four things."""
+        update = {
+            "transcript": _plain(messages),
+            "checklist": checklist,
+            "mode": mode,
+            "model_calls": budget.calls if budget else state.get("model_calls") or 0,
+        }
+        if actions:
+            update["actions"] = actions
+        if mode_log:
+            update["mode_log"] = mode_log
+        update.update(extra)
+        return update
+
+    try:
+        output, why, mode = _agent_loop(
+            state, messages, mode=mode, actions=actions, mode_log=mode_log,
+            # What an escalation restarts from: the prompts, the task and the
+            # checklist, with none of the working conversation.
+            seed=list(messages[:3]),
+            checklist=checklist,
+        )
     except NeedsUserInput as exc:
-        # Seventh refinement (module docstring): this role got stuck on
-        # something only the person can supply. Hand off to the dedicated
-        # ask_user node -- see NeedsUserInput's own docstring for why the
-        # actual pause has to happen there, not here. plan/active_step/
-        # context are left exactly as they were: this attempt never
-        # finished, there's nothing of its own to write back yet.
         return Command(
-            update={
-                "pending_question": exc.question,
-                "pending_choices": exc.choices,
-                "asking_role": role,
-                "board": [f"{role} is asking you a question (round {state['round']})"],
-            },
+            update=carry(
+                pending_question=exc.question,
+                pending_choices=exc.choices,
+                asking_role="agent",
+                board=["otto is asking you a question"],
+            ),
             goto="ask_user",
         )
     except ProviderError as exc:
-        # A provider/network failure interrupted this attempt before it
-        # produced anything -- fifth refinement (module docstring).
-        # Deliberately does NOT touch state["output"]/"plan"/"context": if
-        # this was executing a plan step, the step stays exactly as it
-        # was (still pending) -- router() discards the whole plan on the
-        # node_error branch anyway, so there is nothing to write back.
+        # A provider failure is not the agent being wrong. Hand over whatever
+        # was already produced rather than losing the run -- the evaluator can
+        # judge a partial answer, and an empty one is what the old graph
+        # produced here.
         return Command(
-            update={
-                "node_error": f"{role}: {exc}",
-                "feedback": (
-                    f"the previous attempt by {role} was interrupted by a "
-                    f"provider/network failure before it produced anything "
-                    f"-- not rejected by the evaluator: {exc}"
-                ),
-                "board": [f"{role} failed with a provider error (round {state['round']}): {exc}"],
-            },
-            goto="router",
+            update=carry(
+                node="agent",
+                node_error=f"agent: {exc}",
+                feedback=f"a provider/network failure interrupted the run: {exc}",
+                board=[f"otto hit a provider error: {exc}"],
+            ),
+            goto="evaluator",
         )
 
-    update: dict = {
-        "output": output,
-        "node": role,
-        # This attempt hasn't been judged yet -- any feedback it was shown
-        # has now been consumed (either fixed, or noted as background).
-        "feedback": "",
-        "board": [f"{role} produced an output (round {state['round']})"],
-    }
+    if why == "budget":
+        # Straight to the end, not to the evaluator. There is nothing left to
+        # pay a judgment with, and handing on would put the run in a loop: the
+        # evaluator rejects for lack of evidence, the loop returns immediately
+        # because it is still out of budget, and the two bounce until the
+        # recursion limit. Answering with what it has is the whole reason
+        # exhaustion returns instead of raising.
+        return Command(
+            update=carry(
+                node="agent",
+                output=output,
+                final_output=output,
+                board=["otto ran out of budget -- answering with what it has, unverified"],
+            ),
+            goto=END,
+        )
 
-    if executing_step:
-        # Write back into THIS step (not just the flat state["output"]) so
-        # the overseer's _next_pending_step_index sees it as done, and so a
-        # later revision of this same step (after a whole-answer rejection)
-        # overwrites the right slot instead of leaving a stale one behind.
-        new_plan = [dict(s) for s in plan]
-        new_plan[active_step] = {**new_plan[active_step], "output": output}
-        update["plan"] = new_plan
-        prior = state.get("context") or ""
-        step_label = f"step {active_step + 1} ({role}): {plan[active_step]['task']}\n-> {output}"
-        # Always APPEND while executing a plan step, regardless of this
-        # role's own normal context_op (e.g. summarizer's usual "replace")
-        # -- overwriting earlier steps' results mid-plan would defeat the
-        # whole point of sequencing them.
-        update["context"] = f"{prior}\n\n{step_label}" if prior else step_label
-    elif context_op == "append":
-        prior = state.get("context") or ""
-        update["context"] = f"{prior}\n\n{output}" if prior else output
-    elif context_op == "replace":
-        update["context"] = output
-
-    return Command(update=update, goto="router")
-
-
-def planner(state: AgentState) -> Command[Literal["router", "ask_user"]]:
-    return _run_role(state, role="planner", task=Task.PLAN, temperature=0.4, prompt=PLANNER_PROMPT)
-
-
-def solver(state: AgentState) -> Command[Literal["router", "ask_user"]]:
-    return _run_role(state, role="solver", task=Task.REASON, temperature=0.5, prompt=SOLVER_PROMPT)
-
-
-def summarizer(state: AgentState) -> Command[Literal["router", "ask_user"]]:
-    return _run_role(
-        state, role="summarizer", task=Task.SUMMARIZE, temperature=0.2,
-        prompt=SUMMARIZER_PROMPT, context_op="replace",
+    board = {
+        "final": "otto has an answer",
+        "dead": "otto could not produce a usable reply and is handing over what it has",
+    }[why]
+    return Command(
+        update=carry(node="agent", output=output, feedback="", board=[board]),
+        goto="evaluator",
     )
 
 
-def finder(state: AgentState) -> Command[Literal["router", "ask_user"]]:
-    # No dedicated Task route for "look something up" exists yet -- CHAT_FAST
-    # (fast turnaround, light reasoning) fits a node whose real work is
-    # supposed to be the tool call, not deliberation. Revisit if/when
-    # web_search/rag stop being stubs and finder's actual job gets harder.
-    return _run_role(
-        state, role="finder", task=Task.CHAT_FAST, temperature=0.3,
-        prompt=FINDER_PROMPT, context_op="append",
-    )
+def _new_checklist(criteria: list[str]) -> list[dict]:
+    return [{"text": c, "status": "pending", "evidence": ""} for c in criteria]
 
 
-# --------------------------------------------------------------------------
-# evaluator -- dual-mode: judges a PLAN (state["node"] == "planner") or a
-# candidate FINAL ANSWER (anything else), with the same tool access every
-# role node has. Approving a plan PARSES it into a structured step list
-# (_parse_plan_steps) and hands back to the overseer (there's more work
-# left -- the plan hasn't been executed yet); approving a final answer ends
-# the run. Rejecting either always goes back to the overseer -- no
-# exhaustion branch (see module docstring).
-# --------------------------------------------------------------------------
+def _render_checklist(checklist: list[dict] | None) -> str:
+    """The working state as the loop sees it: what is settled and what is not.
 
-def evaluator(state: AgentState) -> Command[Literal["router", "__end__", "ask_user"]]:
-    task_text = state["messages"][-1].content
-    node = state.get("node") or "solver"
-    output = state.get("output") or ""
-    judging_plan = node == "planner"
+    Status first on every line, because the question the loop is answering is
+    "what is left", and a list that reads as prose makes that the reader's job.
+    """
+    if not checklist:
+        return ""
+    mark = {"met": "[done]", "blocked": "[blocked]", "pending": "[  ]"}
+    lines = []
+    for item in checklist:
+        line = f"{mark.get(item.get('status'), '[  ]')} {item.get('text', '')}"
+        if item.get("evidence"):
+            line += f"  <- {item['evidence']}"
+        lines.append(line)
+    return "THIS IS WHAT HAS TO BE TRUE WHEN YOU ARE DONE:\n" + "\n".join(lines)
 
-    llm = ROUTER.chat_model(Task.REASON, temperature=0.0)
-    if judging_plan:
-        target, target_note = "PLAN", (
-            "a properly ordered, complete JSON list of executable steps "
-            "that would satisfy the request if followed -- not whether "
-            "the task is already done"
-        )
-        human_label = f"PLAN (from {node}, should be a JSON array of steps)"
+
+def _settle(checklist: list[dict], verdict: "Verdict") -> list[dict]:
+    """Apply one judgment to the run's records.
+
+    Coarse on purpose. The verdict says how many criteria were met, not which,
+    so this marks all of them or none rather than guessing an assignment --
+    a wrong `met` is worse than an honest `pending`, because the next attempt
+    would skip the thing that is actually missing.
+
+    What it does carry is the distinction that matters: `blocked` is not the
+    same as `pending`. An obstacle outside the agent's control should not be
+    retried identically, and a plain rejection invites exactly that.
+    """
+    if not checklist:
+        return checklist or []
+    if verdict.approved:
+        status, evidence = "met", verdict.reason
+    elif verdict.blocked:
+        status, evidence = "blocked", verdict.reason
     else:
-        target, target_note = f"{node.upper()} OUTPUT", "as a finished answer"
-        human_label = f"{node.upper()} OUTPUT"
-    system_prompt = EVALUATOR_PROMPT.format(target=target, target_note=target_note, max_iter=MAX_TOOL_ITERATIONS)
-    history = _conversation_so_far(state)
-    human_body = (
-        (f"CONVERSATION SO FAR:\n{history}\n\n" if history else "")
-        + f"ORIGINAL REQUEST:\n{task_text}\n\n{human_label}:\n{output}"
+        status, evidence = "pending", ""
+    return [{**item, "status": status, "evidence": evidence} for item in checklist]
+
+
+def _criteria(llm, task_text: str) -> list[str]:
+    """Phase one: the rubric, from the task alone.
+
+    A separate call on purpose. Criteria written while looking at an answer
+    are criteria the answer happens to meet, which is the failure mode that
+    makes a self-judging loop measure zero.
+
+    Fails soft: a provider hiccup here must not cost the judgment. An empty
+    rubric degrades the evaluator to what it was before this change, which is
+    worse but not broken.
+    """
+    try:
+        reply = _call(llm, [
+            SystemMessage(RUBRIC_PROMPT),
+            HumanMessage(f"TASK:\n{task_text}"),
+        ])
+    except ProviderError as exc:
+        logger.warning("rubric generation failed, judging without one: %s", exc)
+        return []
+    return _parse_rubric(reply)
+
+
+def _record_seat(state: AgentState, *, approved: bool) -> None:
+    """Credit the seat that produced this answer, for agent/router/outcomes.py.
+
+    ONLY SINGLE-MODE RUNS. If the agent changed modes, several models touched
+    the answer and one verdict came back; crediting any of them is guessing.
+    The data thrown away is real and the alternative is worse -- a log that
+    mis-attributes cannot be trusted enough to change routing, which is the
+    only thing it is for.
+
+    Not the evaluator's own seat either. Nothing in a run says whether the
+    JUDGE was right, so recording the judge's verdict against the judge would
+    be a system marking its own homework.
+
+    Costs no model call. This is the whole appeal of it: the evidence is a
+    by-product of runs that were happening anyway.
+    """
+    if state.get("mode_log"):
+        return
+    mode = state.get("mode") or DEFAULT_MODE
+    task = MODES[mode].task
+    try:
+        model_id = ROUTER.resolve(task).model.id
+    except ProviderError:
+        return
+    seat_outcomes.record(
+        task.value, model_id,
+        approved=approved, calls=(current_budget().calls if current_budget() else 0),
     )
+
+
+def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
+    """One cheap call at the end of a run, turning the trajectory into at most
+    three lessons for the next one.
+
+    RUN ON A CHEAP MODEL, BUT NOT THE CHEAPEST. The evidence says
+    harness-UPDATING is flat in base capability -- a 9B model's updates
+    measure as good as a frontier model's, and a 7B meta-agent trained in one
+    GPU hour gave +2.9 to +24.6% designing for stronger executors -- while
+    harness-BENEFIT is not flat. So this deliberately does not get the seat
+    the executor gets.
+
+    It was Task.SUMMARIZE for exactly one measurement. On a real 29-message
+    trajectory that model returned `[]` every time, including from a run the
+    judge had rejected; the same body on Task.PLAN produced three usable
+    lessons. "Flat in capability" is about whether the updates are GOOD,
+    which says nothing about whether a model will emit any at all -- and a
+    distiller that always answers "nothing to learn" is a bank that never
+    fills. Task.PLAN it is, one call per run.
+
+    FROM THE RAW TRAJECTORY, NEVER FROM THE BANK. The bank is not shown to
+    this call. Consolidating a model's own distillations and feeding them back
+    made one model fail 54% of problems it had previously solved; raw-episode
+    retention doubled accuracy against forced consolidation. Abstract once.
+
+    Failure here is silent by design. A run that produced an answer has done
+    its job, and losing the lesson is not worth losing the answer.
+    """
+    if not learning_enabled():
+        return []
+    if not (evidence := _evidence_tail(state)) and not state.get("actions"):
+        return []
+    body = "\n\n".join(part for part in (
+        f"TASK:\n{state['messages'][-1].content}",
+        f"HOW IT WENT: {'the answer was accepted' if succeeded else 'it was NOT accepted'}",
+        _actions_block(state),
+        f"THE END OF THE WORKING:\n{evidence}" if evidence else "",
+    ) if part)
+    try:
+        # Through _call, not .invoke, so this shows up in `model_calls` like
+        # every other request. A learning step whose cost the cost axis cannot
+        # see is exactly the kind of thing milestone 7 exists to prevent.
+        # BudgetExhausted is caught below along with everything else: a run
+        # with nothing left to spend learns nothing, which is correct.
+        reply = _call(ROUTER.chat_model(Task.PLAN),
+                      [SystemMessage(DISTIL_PROMPT), HumanMessage(body)])
+    except Exception as exc:  # noqa: BLE001 -- never fail a finished run
+        logger.info("distilling lessons failed, learning nothing: %s", exc)
+        return []
+    return record_lessons(parse_distilled(
+        reply, outcome_default="worked" if succeeded else "failed",
+    ))
+
+
+def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_user"]]:
+    task_text = state["messages"][-1].content
+    node = state.get("node") or "agent"
+    output = state.get("output") or ""
+    judging_plan = False
+
+    llm = ROUTER.chat_model(Task.EVALUATE)
+    target, target_note = "ANSWER", "as a finished answer"
+    human_label = "ANSWER"
+    # The SAME number the loop below is actually run with. It used to be
+    # MAX_TOOL_ITERATIONS, so the prompt promised five exchanges and the loop
+    # allowed two -- a model told it has budget it does not have will plan to
+    # use it.
+    # The criteria the run has been working against, written from the task
+    # alone before any attempt existed (AgentState.checklist). They are the
+    # only information in the whole judgment that the actor did not produce,
+    # and the reason it is worth its calls -- see RUBRIC_PROMPT.
+    #
+    # Read from state rather than regenerated: it is the same list the loop
+    # has been carrying, so judge and actor cannot be working to different
+    # bars, and a re-judgment after a rejection costs nothing to set up.
+    # Generated here only for a caller that drove the evaluator directly.
+    checklist = state.get("checklist")
+    if checklist is None:
+        checklist = _new_checklist(_criteria(llm, task_text))
+    rubric = [item["text"] for item in checklist]
+
+    system_prompt = EVALUATOR_PROMPT.format(
+        target=target, target_note=target_note, max_iter=MAX_EVALUATOR_ITERATIONS,
+        rubric="\n".join(f"- {c}" for c in rubric) or "- the request is satisfied",
+    )
+    # It used to judge blind: conversation, request, output, nothing else. So
+    # "I cannot verify this" came back as a rejection, and a rejection cost a
+    # whole extra round. Everything added below already exists and is already
+    # bounded -- _actions_block caps at _ACTIONS_SHOWN, the transcript tail is
+    # clipped -- so one better-informed judgment costs a fraction of the round
+    # it avoids.
+    human_body = "\n\n".join(part for part in (
+        (f"CONVERSATION SO FAR:\n{_conversation_so_far(state)}"
+         if _conversation_so_far(state) else ""),
+        f"ORIGINAL REQUEST:\n{task_text}",
+        f"{human_label}:\n{output}",
+        _actions_block(state),
+        (f"MODES USED:\n" + "; ".join(state.get("mode_log") or [])
+         if state.get("mode_log") else ""),
+        (f"HOW IT FINISHED (the end of otto's own working):\n{_evidence_tail(state)}"
+         if _evidence_tail(state) else ""),
+        (f"CONTEXT GATHERED:\n{_clip_evidence(state.get('context') or '')}"
+         if state.get("context") else ""),
+    ) if part)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     try:
-        reply = _tool_loop(llm, messages)
+        reply = _tool_loop(llm, messages, max_iterations=MAX_EVALUATOR_ITERATIONS)
     except NeedsUserInput as exc:
         # Seventh refinement (module docstring): the evaluator itself got
         # stuck judging something and needs the person's input to settle
@@ -1346,7 +2381,7 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__", "ask_us
                 "pending_question": exc.question,
                 "pending_choices": exc.choices,
                 "asking_role": "evaluator",
-                "board": [f"evaluator is asking you a question (round {state['round']})"],
+                "board": ["evaluator is asking you a question"],
             },
             goto="ask_user",
         )
@@ -1366,36 +2401,92 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__", "ask_us
                     f"failure before it could judge {node}'s {what} -- not "
                     f"a real rejection: {exc}"
                 ),
-                "board": [f"evaluator failed with a provider error (round {state['round']}): {exc}"],
+                "board": [f"evaluator failed with a provider error: {exc}"],
             },
-            goto="router",
+            goto="agent",
         )
     # _parse_approval defaults to approve=False whenever "APPROVE:" isn't
     # found in `reply` at all (e.g. _tool_loop exhausted on unparseable
     # replies) -- fails CLOSED by construction: an evaluator that never
     # rendered a real verdict is not evidence the answer is fine.
-    approve, reason = _parse_approval(reply)
+    verdict = _parse_verdict(reply)
+    approve, reason = verdict.approved, verdict.reason
+    # The audit is the ONLY thing that may move a record's status. An
+    # executor's claim about its own work is not evidence, which is the whole
+    # separation the state layer exists for.
+    judged = _settle(checklist, verdict)
+    if verdict.criteria[1]:
+        reason = f"{verdict.criteria[0]}/{verdict.criteria[1]} criteria met -- {reason}"
+    if verdict.blocked and not approve:
+        # An environment blocker is not the agent being wrong. Saying so keeps
+        # a real obstacle from being counted as a failure -- and from being
+        # retried identically, which is what a plain rejection invites.
+        reason = f"blocked by the environment, not by the attempt: {reason}"
+    # The judgment's own calls count too. Left out, `model_calls` reports what
+    # the loop spent rather than what the run spent -- measured live at 4
+    # against an actual 9, because the evaluator checks the answer with tools
+    # and those are model calls like any other.
+    def calls_so_far() -> dict:
+        """Called at each return rather than computed once above, because the
+        learning step below is itself a model call. Reading this first left
+        the distilling call out of the very number it is meant to appear in --
+        which is the blindness milestone 7 exists to remove."""
+        return {"model_calls": budget.calls} if (budget := current_budget()) else {}
 
-    if approve and judging_plan:
-        steps = _parse_plan_steps(output)
+    def learned_from(succeeded: bool) -> list[str]:
+        """Board lines for whatever the run leaves behind. The distilling call
+        happens HERE, at a terminal edge, so a run that is going back to the
+        agent for another attempt does not pay for a lesson about work that is
+        not finished."""
+        return [f"learned: {lesson.rendered()}"
+                for lesson in _distil(state, succeeded=succeeded)]
+
+    if approve:
+        _record_seat(state, approved=True)
+        board = ["evaluator approved the answer"] + learned_from(True)
         return Command(
             update={
-                "plan": steps,
-                "active_step": None,
-                "output": None,
-                "feedback": "",
-                "board": [f"evaluator approved {node}'s plan ({len(steps)} step(s)) (round {state['round']})"],
+                "checklist": judged,
+                "final_output": output,
+                "rejections": 0,
+                "board": board,
+                **calls_so_far(),
             },
-            goto="router",
+            goto=END,
         )
-    if approve:
+    rejections = (state.get("rejections") or 0) + 1
+    if rejections > MAX_REJECTIONS:
+        # Judgment must not eat the whole budget. Past the cap the answer
+        # stands, said plainly rather than silently -- an unverified answer the
+        # reader is told about beats a run that spent everything re-judging.
+        #
+        # It still learns. A run the judge would not accept is the one most
+        # worth learning from -- distilling only from accepted runs throws away
+        # the half of the signal that says what NOT to do.
+        _record_seat(state, approved=False)
+        board = [
+            f"evaluator rejected {node} {rejections} times; answering "
+            "anyway, unverified: " + reason
+        ] + learned_from(False)
         return Command(
-            update={"final_output": output, "board": [f"evaluator approved {node}'s answer (round {state['round']})"]},
+            update={
+                "checklist": judged,
+                "final_output": output,
+                "rejections": rejections,
+                "board": board,
+                **calls_so_far(),
+            },
             goto=END,
         )
     return Command(
-        update={"feedback": reason, "board": [f"evaluator rejected {node}: {reason}"]},
-        goto="router",
+        update={
+            "checklist": judged,
+            "feedback": reason,
+            "rejections": rejections,
+            "board": [f"evaluator rejected {node}: {reason}"],
+            **calls_so_far(),
+        },
+        goto="agent",
     )
 
 
@@ -1409,7 +2500,7 @@ def evaluator(state: AgentState) -> Command[Literal["router", "__end__", "ask_us
 # effect before interrupt() would redo it every time the person answers.
 # --------------------------------------------------------------------------
 
-def ask_user(state: AgentState) -> Command[Literal["planner", "solver", "summarizer", "finder", "evaluator"]]:
+def ask_user(state: AgentState) -> Command[Literal["agent", "evaluator"]]:
     question = state.get("pending_question") or ""
     choices = state.get("pending_choices") or []
     answer = interrupt({"question": question, "choices": choices})
@@ -1424,14 +2515,14 @@ def ask_user(state: AgentState) -> Command[Literal["planner", "solver", "summari
     # (fresh) attempt, the same way it would see anything finder dug up.
     prior = state.get("context") or ""
     qa = f'you asked: "{question}"\nthe user answered: "{answer}"'
-    role = state.get("asking_role") or "solver"
+    role = state.get("asking_role") or "agent"
     return Command(
         update={
             "context": f"{prior}\n\n{qa}" if prior else qa,
             "pending_question": None,
             "pending_choices": None,
             "asking_role": None,
-            "board": [f"you answered otto's question -- {role} is trying again"],
+            "board": [f"you answered -- {role} is carrying on"],
         },
         goto=role,
     )
@@ -1439,16 +2530,12 @@ def ask_user(state: AgentState) -> Command[Literal["planner", "solver", "summari
 
 g = StateGraph(AgentState)
 for _name, _fn in (
-    ("router", router),
-    ("planner", planner),
-    ("solver", solver),
-    ("summarizer", summarizer),
-    ("finder", finder),
+    ("agent", agent),
     ("evaluator", evaluator),
     ("ask_user", ask_user),
 ):
     g.add_node(_name, _fn)
-g.add_edge(START, "router")
+g.add_edge(START, "agent")
 # Every other edge is a Command(goto=...) from the node function itself --
 # router -> whichever of the five it picks (or a plan step's route_to);
 # every specialist -> router OR ask_user (got stuck, NeedsUserInput --

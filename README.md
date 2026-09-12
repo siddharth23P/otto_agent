@@ -4,56 +4,103 @@ can't say much explore on your own
 
 ## Architecture
 
-One overseer, four specialists, one evaluator -- but the overseer runs after *every* step, not just once. It reads everything gathered so far (context, an approved plan, a pending output, a rejection) and decides the single next move: dispatch a specialist, or send the pending work to the evaluator. There is no cap on how many times it may retry a task -- the only backstop is a generous recursion limit, pure infra insurance against a runaway loop, never a business rule. Rejections retry the *same* specialist by default (the four don't overlap, so switching isn't just an alternate way to do the same job); the one deliberate exception is a task that was solved without a plan and needed one -- the overseer escalates to the planner instead, and learns which kinds of task in this run actually needed planning.
+One agent, one evaluator. The agent works the task end to end in a single
+conversation -- find out what is true, do the work, confirm it holds -- and
+changes MODE when the kind of work changes. A mode is a model and a way of
+thinking, not a separate node: switching swaps the model underneath while the
+conversation, the tools and everything learned so far carry over.
+
+This replaced a seven-node graph with an overseer that re-decided after every
+step. Measured on Claw-Eval traces, the boundaries between those nodes were 45
+to 69% of a run's wall time against 0.1 to 0.4 seconds of actual tool
+execution per task, and three of every five model calls were overhead. Mean
+score went 0.54 to 0.62 on the measured tasks when they collapsed into one.
 
 ```mermaid
 flowchart TD
-    start([request]) --> router{overseer}
+    start([request]) --> rubric[write the criteria<br/>from the task alone]
+    rubric --> agent
 
-    router -- dispatch --> planner[planner]
-    router -- dispatch --> solver[solver]
-    router -- dispatch --> summarizer[summarizer]
-    router -- dispatch --> finder[finder]
-    router -- judge --> evaluator{evaluator}
+    agent{{agent}} -->|ACTION| tools
+    tools -->|result| agent
+    agent -->|switch_mode| agent
+    agent -->|delegate| child[bounded sub-agent<br/>contract down, report up]
+    child -->|report| agent
 
-    planner --> router
-    solver --> router
-    summarizer --> router
-    finder --> router
+    agent -->|FINAL| gate{code changed<br/>with nothing run?}
+    gate -->|yes, once| agent
+    gate -->|no| evaluator
 
-    evaluator -- plan approved --> router
-    evaluator -- rejected + feedback --> router
-    evaluator -- final answer approved --> done([final answer])
+    evaluator{{evaluator}} -->|rejected + why| agent
+    evaluator -->|approved| learn[distil at most<br/>three lessons]
+    learn --> done([final answer])
 
-    planner -. provider/network failure .-> router
-    solver -. provider/network failure .-> router
-    summarizer -. provider/network failure .-> router
-    finder -. provider/network failure .-> router
-    evaluator -. provider/network failure .-> router
-    router -- node_error: escalate --> planner
+    agent -->|ask_user| pause([paused for a question])
 
-    subgraph tools [shared tool box]
+    subgraph tools [17 tools]
         direction LR
-        execute_python
-        execute_bash
+        shell_and_python
+        files
+        browser
+        screen
+        code_map
+        recall_memory
         web_search
-        rag
-        complete_code
-        predict_edit
     end
-
-    planner -.-> tools
-    solver -.-> tools
-    summarizer -.-> tools
-    finder -.-> tools
-    evaluator -.-> tools
 ```
 
-- **overseer (router)** -- re-invoked after every step. Before any plan exists, or after a rejection, it makes one classification call: a lookup (finder), a plan for a task complex enough to want one (planner), a condensed context once it's gotten large (summarizer), a concrete answer (solver), or a judgment on whatever was just produced (evaluator). On a rejection it defaults to retrying the same specialist with the feedback in view, unless the feedback shows the real problem was skipping a plan -- then it escalates to the planner instead (discarding the old plan, since it turned out to be the problem).
-- **plan execution** -- once the evaluator approves a plan, it isn't free text: it's a JSON list of `{task, route_to, output}` steps, `task` written by the planner and `route_to` filled in by the overseer one step at a time. While a plan is executing, the overseer stops asking the open-ended question above -- it deterministically finds the next step with no output yet and makes a *narrower* call (just "which specialist should run this one step"), or, once every step has an output, dispatches straight to the evaluator with no LLM call at all. Each finished step's result is folded into shared context, so later steps build on earlier ones'.
-- **planner / solver / summarizer / finder** -- one specialist runs per dispatch, looping ACTION → tool result → ... → FINAL, then always hands back to the overseer (never straight to the evaluator). Outside plan execution: finder appends what it gathers onto shared context, summarizer replaces that context with a condensed version, planner and solver leave it alone. While executing a plan step, every role instead writes its result into that step and always appends to context, regardless of its own usual rule -- a summarizer step mid-plan must not erase earlier steps' results.
-- **evaluator** -- same tool access as the specialists, dual-mode: judges a plan (a well-formed, complete list of steps that would work if followed) or a candidate final answer (is the task actually done?). Approving a plan hands the parsed step list back to the overseer; approving a final answer ends the run; rejecting either goes back to the overseer with the reason, no matter how many rounds have already happened.
-- **provider/network failures** -- a node's own LLM call can fail outright (a timeout, an outage) rather than just answer badly. Any of the five nodes' call failing returns to the overseer with that fact flagged instead of crashing the run; the overseer escalates straight to the planner, deterministically (no LLM call -- one just failed), discarding any plan that was active. The planner sees the failure and whatever output already existed the same way it would see any other specialist's rejected attempt.
-- **tools** -- `execute_python` / `execute_bash` (real), `web_search` / `rag` (stubbed), `complete_code` / `predict_edit` (Mercury's FIM/edit endpoints). Read-only: nothing irreversible happens before the evaluator signs off.
+- **criteria first** -- what a correct answer must contain is written from the
+  task *before* any attempt exists, in its own call. This is the only
+  information in the whole judgment that the actor did not produce. A verifier
+  that re-reads the actor's own output measures at approximately nothing;
+  with an external checklist the same models go from around 0% to 90-98%.
+- **the agent loop** -- one conversation, a text `ACTION:` / `CODE:` protocol
+  rather than JSON tool calls, one tool call per reply. Before a mutating tool
+  runs against a target for the first time, it is held once for a check --
+  mutating actions are 14-18% of steps and a single mutating mistake cuts
+  success odds by 55-96%, so the gate is cheap and precisely aimed.
+- **modes** -- solve, plan, summarize, find. Escalating to a deeper mode
+  restarts from the task and the criteria; de-escalating carries the whole
+  conversation. A stronger model handed a weaker one's trajectory recovers
+  less than half the gain at several times the cost, which is why the two
+  directions are not symmetrical.
+- **delegate** -- one bounded subtask, one level, on a different mode's model.
+  A contract goes down and a report comes back; the child's trajectory is
+  discarded. Where every agent shares a model, a single agent matches or beats
+  the multi-agent version at lower cost, so this earns its keep only when the
+  model genuinely differs.
+- **the evidence gate** -- an answer that changed code with nothing run since
+  is held once and asked for the check. No model call unless it fires, prose
+  edits exempt, and "there is nothing to run here" is an accepted answer.
+- **the evaluator** -- scores the answer against the criteria written at the
+  start, separates "not met" from "blocked by the environment", and may check
+  one thing with a tool. Rejection hands straight back to the agent.
+- **memory** -- a tiered queue per session. Recent turns verbatim, older ones
+  summarised into cited bullets, every raw item kept as an embedded chunk that
+  `recall_memory` can search. What the *person* said is never handed to the
+  summariser: type-blind compaction loses constraints (3 of 8 at 120 turns,
+  0 of 8 at 400), type-aware keeps 8 of 8 at every budget tried.
+- **lessons** -- a finished run distils at most three transferable lessons,
+  and the next run reads at most one, only when it is relevant. Off in the
+  baseline arm of any measurement.
+- **routing** -- four vendors behind a task-to-model table, reordered by what
+  each seat has actually achieved once twelve runs back it, with one run in
+  ten exploring so the order cannot freeze. A rate limit cools one model;
+  three transport failures cool the provider.
 
-Every call routes through Mercury (Inception) via `agent/router` -- it's the only provider wired in.
+## Measuring it
+
+| command | what it grades |
+| --- | --- |
+| `otto eval` | 20 golden code, math and NP-hard tasks, by a real checker |
+| `otto eval-swe` | SWE-bench Verified -- 500 real issues, by each repo's own tests |
+| `otto eval-claw` | Claw-Eval's 300 tool-use tasks, by their graders |
+| `otto eval-memory` | LoCoMo long-conversation recall |
+| `otto eval-compaction` | what each compaction policy loses from the prompt |
+| `otto eval-hle` | Humanity's Last Exam |
+
+Every model request counts against a spend ceiling, retries included.
+`otto eval-claw --trials N` reports pass^k and the spread, because a single
+run on that benchmark swings 0.36 between identical attempts, and every report
+carries a fingerprint of the grading path -- two numbers from different
+fingerprints are not a comparison.

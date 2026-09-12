@@ -64,6 +64,15 @@ Two tiers, then permanent storage:
                have multiple hash associated with it") -- it accumulates
                everything transitively cited into it, generation over
                generation.
+            3b. every item the reply did NOT cite gets its own extra
+               bullet anyway (_uncited_bullets, below), so the new
+               generation's hash_refs collectively cover everything this
+               compaction flushed. The prompt asks for full coverage; this
+               is what makes it true. Without it an omitted item stays in
+               the chunk store but nothing live points at it, and recall()
+               searches only the live generation -- and because a prior
+               bullet is itself a numbered item carrying every hash behind
+               it, one uncited bullet used to sever a whole chain at once.
             4. Y is replaced by just that new bullet list -- a handful of
                short, cited lines instead of everything they summarize --
                freeing almost all of Y's budget again. The store's OLDER
@@ -82,6 +91,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Callable
+
+import numpy as np
 
 from agent.memory.embeddings import EmbeddingUnavailable, embed
 from agent.memory.hashing import content_hash
@@ -159,6 +170,135 @@ def _parse_bullets(text: str, item_count: int) -> list[tuple[str, list[int]]]:
     return parsed
 
 
+#: Longest single-item excerpt kept as a carry-forward bullet's own text
+#: (_uncited_bullets, below). Long enough that recall()'s embedding search
+#: has real, distinguishing words to rank on -- a carried-forward turn about
+#: someone's dog has to stay findable by the word "dog" -- but short enough
+#: that a compaction whose summarizer cited almost nothing still frees most
+#: of Y rather than re-filling it with what it just tried to compact.
+CARRY_FORWARD_EXCERPT_CHARS = 160
+
+
+def _excerpt(text: str) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= CARRY_FORWARD_EXCERPT_CHARS:
+        return collapsed
+    return collapsed[:CARRY_FORWARD_EXCERPT_CHARS].rstrip() + "..."
+
+
+def _embed_each(texts: list[str]) -> list["np.ndarray | None"]:
+    """One embedding per text, or a list of Nones if the local model can't be
+    reached -- store.py treats a NULL embedding as "not rankable", not as an
+    error (agent/memory/embeddings.py's EmbeddingUnavailable), so a compaction
+    that happens while the model is unavailable still stores everything."""
+    if not texts:
+        return []
+    try:
+        return list(embed(texts))
+    except EmbeddingUnavailable:
+        return [None] * len(texts)
+
+
+def _uncited_bullets(
+    items: list[str], item_hashes: list[list[str]], covered: set[int], prior_bullet_count: int,
+) -> list["NewBullet"]:
+    """One extra bullet for every item the summarizer's reply never cited,
+    so the new generation's `hash_refs` collectively cover EVERYTHING this
+    compaction flushed.
+
+    The prompt (_build_summarize_prompt) asks for full coverage, but nothing
+    made the model deliver it, and an omission here is not proportional
+    damage -- it is a cliff. Measured on LoCoMo at a stress budget (250
+    turns, x=200/y=400, 19 generations): a summarizer citing ~70% of its
+    items left only 3-4% of the 249 stored chunks reachable from the live
+    bullet generation, and recall() found the right turn for 2-3% of
+    questions instead of ~100%. The reason it is a cliff rather than a
+    ~30% loss is that a PRIOR BULLET is itself one of the numbered items,
+    carrying every hash it has accumulated over every generation before it;
+    one compaction that summarizes it into prose without citing its number
+    severs the whole accumulated chain at once. The raw text is still in the
+    permanent chunk store either way (store_coverage stays 100%), but
+    nothing in the live generation points at it any more, and recall()
+    only ever searches the live generation (agent/memory/retrieval.py,
+    agent/memory/store.py's `superseded`) -- so it becomes unreachable in
+    practice by any path short of a direct hash lookup nothing performs.
+
+    An uncited PRIOR BULLET is carried forward exactly as it was: its text
+    is already a summary and its hash_refs already resolve, so re-deriving
+    either would only lose fidelity. An uncited RAW item becomes a bullet
+    holding its own (truncated) text, which keeps the distinguishing words
+    recall() ranks on instead of hiding it inside a contentless catch-all.
+    """
+    carried = []
+    for index in range(1, len(items) + 1):
+        if index in covered:
+            continue
+        is_prior_bullet = index <= prior_bullet_count
+        text = items[index - 1] if is_prior_bullet else _excerpt(items[index - 1])
+        carried.append(NewBullet(text=text, hash_refs=list(item_hashes[index - 1])))
+    return carried
+
+
+#: Whether a compaction is allowed to summarise a PREVIOUS compaction's
+#: bullets, or only the raw text that has newly overflowed.
+#:
+#: True is the original behaviour and every generation's bullets are then a
+#: summary of the last generation's bullets, geometrically. The research says
+#: not to: consolidating a model's own distillations and feeding them back
+#: made one model fail 54% of problems it had previously solved, and
+#: raw-episode retention doubled accuracy against forced consolidation.
+#: Abstract once from raw; never re-abstract an abstraction.
+#:
+#: It is still the default, and that is now a measurement rather than
+#: inertia. `otto eval-compaction` compares the two arms directly, and on
+#: eight constraints planted through a conversation:
+#:
+#:                       120 turns   400 turns
+#:     shipping             8/8         8/8
+#:     abstract-once        8/8         8/8
+#:     both, tight budget   8/8         8/8
+#:
+#: No difference at all. What was destroying constraints was not re-abstraction
+#: but the FIRST compaction, and nothing a later generation does can recover
+#: what generation one dropped. PROTECT_PREFIX below is what actually moved
+#: the number; this knob moved nothing.
+#:
+#: The alternative also costs something real: with prior bullets carried
+#: forward verbatim, the budget has to be freed some other way, and the only
+#: way that does not re-abstract is to drop older bullets' TEXT while merging
+#: their citations forward (`_shed_oldest`). Losing the oldest summaries
+#: cleanly, rather than degrading all of them slowly. Kept, unused by default,
+#: because it is the arm that made the comparison possible.
+REABSTRACT = True
+
+#: Items starting with this are carried into a compaction VERBATIM instead of
+#: being summarised. Empty string disables it.
+#:
+#: Type-blind compaction is measured as destructive in a specific way: it is
+#: the CONSTRAINTS that go. Constraint recall falls to 53% at 50% compression
+#: and 24% at 10%, where a type-aware policy holds 100/95/80. And in a
+#: conversation the type is visible from the speaker -- what the person said
+#: is the requirement, what Otto said is a report of work, and a report can be
+#: summarised without losing anything the next turn has to honour.
+#:
+#: agent/memory/wiring.py writes "you: " in front of every human turn, which
+#: is what makes this a one-line rule rather than a classifier.
+#:
+#: Measured with `otto eval-compaction`, eight constraints planted through a
+#: conversation, counting how many are still in `current_view()` afterwards:
+#:
+#:                        120 turns   400 turns
+#:     type-blind            3/8         0/8
+#:     type-blind, tight     0/8         0/8
+#:     protected             8/8         8/8
+#:     protected, tight      8/8         8/8
+#:
+#: Eight out of eight at every budget and every length tried, through 23
+#: compaction rounds. Type-blind goes to nothing. This is the single largest
+#: measured change to compaction in this file.
+PROTECT_PREFIX = "you: "
+
+
 class TieredQueue:
     """One X/Y buffer, for one `kind` ("history" or "context") of one
     session's MemoryStore. `summarize` is the only injected dependency --
@@ -176,12 +316,16 @@ class TieredQueue:
         summarize: Callable[[str], str],
         x_budget: int = X_BUDGET,
         y_budget: int = Y_BUDGET,
+        reabstract: bool = REABSTRACT,
+        protect: str = PROTECT_PREFIX,
     ) -> None:
         self.kind = kind
         self.store = store
         self.summarize = summarize
         self.x_budget = x_budget
         self.y_budget = y_budget
+        self.reabstract = reabstract
+        self.protect = protect
         self._x: list[str] = []
         self._y_raw: list[str] = []
         self._y_bullets: list[NewBullet] = []
@@ -197,6 +341,28 @@ class TieredQueue:
             self._y_raw.extend(self._x)
             self._x = []
             self._compact_y_if_full()
+
+    def _shed_oldest(self, bullets: list[NewBullet]) -> list[NewBullet]:
+        """Bring `bullets` back inside the Y budget without rewriting any of them.
+
+        Only reached when re-abstraction is off. The oldest bullets' TEXT is
+        dropped and their citations are merged into the oldest survivor, so
+        every raw chunk stays reachable through a live bullet -- which is what
+        agent/memory/retrieval.py's stage one depends on -- while no surviving
+        summary has been through a model twice.
+
+        A clean loss of the oldest summaries, rather than a slow degradation
+        of all of them. Which is better is the question the bench exists to
+        answer; this is the half that does not re-abstract.
+        """
+        while len(bullets) > 1 and self._tokens([b.text for b in bullets]) > self.y_budget:
+            dropped, keeper = bullets[0], bullets[1]
+            bullets = [
+                NewBullet(text=keeper.text,
+                          hash_refs=sorted({*dropped.hash_refs, *keeper.hash_refs})),
+                *bullets[2:],
+            ]
+        return bullets
 
     @staticmethod
     def _tokens(items: list[str]) -> int:
@@ -216,12 +382,34 @@ class TieredQueue:
         # whether the summarizer's reply parses cleanly below).
         items: list[str] = []
         item_hashes: list[list[str]] = []
-        for bullet in self._y_bullets:
+        # Prior bullets join the summariser's input ONLY when re-abstraction
+        # is allowed. Otherwise they are carried forward untouched and the
+        # budget is freed by _shed_oldest below instead.
+        carried: list[NewBullet] = [] if self.reabstract else list(self._y_bullets)
+        for bullet in (self._y_bullets if self.reabstract else ()):
+            # A protected bullet stays protected. It kept its verbatim text
+            # last time precisely so it would not be summarised, and feeding
+            # it to the summariser on the NEXT round would undo that one
+            # generation later -- which is exactly what happened the first
+            # time this was written, and what the test now holds.
+            if self.protect and bullet.text.startswith(self.protect):
+                carried.append(bullet)
+                continue
             items.append(bullet.text)
             item_hashes.append(bullet.hash_refs)
-        for text in self._y_raw:
+        # One batched embed() for the whole flush rather than one per item --
+        # each chunk carries its own vector so retrieval.py can rank the RAW
+        # text, not just the bullets summarizing it (agent/memory/store.py's
+        # `chunks.embedding`).
+        chunk_embeddings = _embed_each(self._y_raw)
+        for text, embedding in zip(self._y_raw, chunk_embeddings):
             h = content_hash(text)
-            self.store.add_chunk(self.kind, h, text)
+            self.store.add_chunk(self.kind, h, text, embedding)
+            if self.protect and text.startswith(self.protect):
+                # Never shown to the summariser. It becomes its own bullet,
+                # word for word -- see PROTECT_PREFIX.
+                carried.append(NewBullet(text=text, hash_refs=[h]))
+                continue
             items.append(text)
             item_hashes.append([h])
 
@@ -239,14 +427,20 @@ class TieredQueue:
             NewBullet(text=bullet_text, hash_refs=sorted({h for i in indices for h in item_hashes[i - 1]}))
             for bullet_text, indices in parsed
         ]
+        # Nothing above guarantees the summarizer cited every item, and an
+        # item no surviving bullet points at is one recall() can never find
+        # again -- see _uncited_bullets for what that costs, measured.
+        new_bullets += _uncited_bullets(
+            items, item_hashes,
+            covered={i for _, indices in parsed for i in indices},
+            prior_bullet_count=len(self._y_bullets) if self.reabstract else 0,
+        )
+        new_bullets = carried + new_bullets
 
-        for bullet in new_bullets:
-            embedding = None
-            try:
-                [embedding] = embed([bullet.text])
-            except EmbeddingUnavailable:
-                embedding = None  # store.py's Bullet.embedding=None is a
-                                   # valid state -- retrieval.py falls back.
+        if not self.reabstract:
+            new_bullets = self._shed_oldest(new_bullets)
+
+        for bullet, embedding in zip(new_bullets, _embed_each([b.text for b in new_bullets])):
             self.store.add_bullet(self.kind, self._generation, bullet.text, bullet.hash_refs, embedding)
 
         self.store.supersede_bullets(self.kind, before_generation=self._generation)

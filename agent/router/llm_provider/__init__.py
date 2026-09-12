@@ -65,6 +65,9 @@ FALLBACK_MODEL_SPEC = "inception:mercury-2.5"
 
 _PROVIDER_MODULES: dict[str, tuple[str, str]] = {
     "inception": (".inception_provider", "InceptionProvider"),
+    "anthropic": (".anthropic_provider", "AnthropicProvider"),
+    "openai": (".openai_provider", "OpenAIProvider"),
+    "gemini": (".gemini_provider", "GeminiProvider"),
 }
 
 

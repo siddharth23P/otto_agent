@@ -329,7 +329,9 @@ class OttoApp(App):
         except NoViableRoute as exc:
             self.call_from_thread(self._post, f"[red]no viable model for {task.value}: {exc}[/]")
             return
-        line = f"{task.value} -> {d.provider}:{d.model.id}" + (" (degraded)" if d.fell_back else "")
+        why = (" (degraded)" if d.fell_back else
+               " (on observed results)" if d.chosen_on_evidence else "")
+        line = f"{task.value} -> {d.provider}:{d.model.id}{why}"
         self.call_from_thread(self._post, f"[dim]{line}[/]")
 
     @work(thread=True)
