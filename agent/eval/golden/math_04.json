@@ -2,5 +2,5 @@
   "id": "math_04",
   "domain": "math",
   "prompt": "Solve for x: 3x + 7 = 22. Give the final numeric value of x.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\nassert any(abs(n - 5.0) < 1e-6 for n in nums), f'5 not found in {nums}'\nprint('OK')\n"
+  "checker": "answer_is(5.0)\nprint('OK')\n"
 }

@@ -2,5 +2,5 @@
   "id": "nphard_math_subsetsum_01",
   "domain": "math",
   "prompt": "Given the integers [1237, 2891, 3541, 4703, 5227, 6421, 7079, 8353, 9161, 10453], choose a subset whose sum is as large as possible without exceeding 33333. What is that largest achievable sum? Give the final numeric answer. It must be the true maximum, not merely a good one.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\n# exhaustive over all 2**10 subsets; largest sum <= 33333 is 33308, which the target does NOT equal -- reading the target off the\n# question is not an answer here.\nassert any(abs(n - 33308.0) < 1e-6 for n in nums), f'33308 not found in {nums}'\nprint('OK')\n"
+  "checker": "# 33333 is the TARGET, not the answer -- reading it off the question is\n# the mistake this decoy catches. True best over all 2**10 subsets is 33308.\nanswer_is(33308.0, decoys=[33333.0])\nprint('OK')\n"
 }

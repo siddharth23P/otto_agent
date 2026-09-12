@@ -71,11 +71,15 @@ def eval_memory_cmd(
     ] = None,
     x_budget: Annotated[
         Optional[int],
-        typer.Option(help="Override TieredQueue's X budget (tokens) -- smaller forces real compaction."),
+        typer.Option(help="TieredQueue's X budget (tokens). Defaults to the "
+                          "PRODUCTION budget, which LoCoMo's shorter "
+                          "conversations do not overflow -- so the default "
+                          "compacts nothing and the run is refused. Try 600."),
     ] = None,
     y_budget: Annotated[
         Optional[int],
-        typer.Option(help="Override TieredQueue's Y budget (tokens) -- smaller forces real compaction."),
+        typer.Option(help="TieredQueue's Y budget (tokens). Same as --x-budget: "
+                          "the production default never binds here. Try 1500."),
     ] = None,
     top_k: Annotated[int, typer.Option(help="How many bullets recall() considers per question (stage 1).")] = 5,
     max_chunks: Annotated[
@@ -144,6 +148,30 @@ def eval_memory_cmd(
         return
 
     summary = report.summary()
+
+    # REFUSE, rather than print a perfect-looking empty result. A run at the
+    # production budgets never compacts LoCoMo's shorter conversations, so
+    # every citation stays in the verbatim window, retrieval is never asked a
+    # question, and the table comes out `recalled 0%` beside `answerable
+    # 100%` -- which reads as a pass. The numbers are not wrong so much as
+    # measured off nothing, and printing them at all is what let this happen
+    # unnoticed. See memory_bench.NO_COMPACTION_RATIO.
+    if summary["conversation_count"] and not summary["recall_exercised"]:
+        ratio = summary["overall_compression_ratio"]
+        err.print(
+            "[bad]nothing was compacted at these budgets, so recall was never "
+            "exercised -- this run measured nothing and no coverage table is "
+            "printed for it.[/]\n"
+            f"[muted]final_view/raw token ratio "
+            f"{'-' if ratio is None else f'{ratio:.3f}'} over "
+            f"{summary['conversation_count']} conversation(s), at "
+            f"--x-budget {x_budget} --y-budget {y_budget}.[/]\n"
+            "[warn]re-run with smaller --x-budget/--y-budget -- e.g. "
+            "--x-budget 600 --y-budget 1500 -- so the conversations overflow "
+            "and the retrieval path actually runs.[/]"
+        )
+        raise typer.Exit(1)
+
     t = Table(box=box.SIMPLE, header_style="muted")
     t.add_column("category", style="spec")
     t.add_column("n", justify="right")
