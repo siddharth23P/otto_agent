@@ -1174,6 +1174,88 @@ def _blocks_to_text(content) -> str:
 _RAG_INDEXES: dict[tuple[str, str], "MemoryStore"] = {}
 
 
+#: A query that is one bare identifier, path or quoted string rather than a
+#: question -- `FALLOFF_RATIO`, `agent/pipeline/budget.py`, `"exit 3"`.
+_LITERAL = re.compile(r'^[\'\"]?[A-Za-z_][A-Za-z0-9_.:/-]*[\'\"]?$')
+
+
+def looks_like_a_literal(query: str) -> bool:
+    """Whether this is a string to find rather than a question to answer.
+
+    Measured on Otto's own `agent/` tree, four exact identifiers against four
+    questions about the same code:
+
+        query type     grep            semantic
+        exact token    4/4   0.2s      4/4   41.6s
+        conceptual     0/4   0.3s      4/4    2.5s
+
+    They are complementary, not competing. On an identifier the two find the
+    same files and grep is two orders of magnitude faster -- the semantic path
+    has to embed the whole workspace first, which is forty seconds nobody
+    needed. On a question grep finds NOTHING, because the words in the
+    question are not the words in the code.
+
+    The `rag` docstring used to say roughly this as advice, which left the
+    choice to the model on every call. This makes the tool decide, since the
+    query itself says which it is.
+
+    Deliberately narrow: one token, no spaces. Anything with a space is a
+    question, and anything ambiguous falls through to the semantic path, which
+    is slower but never wrong in the way grep is wrong here.
+    """
+    return bool(_LITERAL.match(query.strip()))
+
+
+def _grep_workspace(needle: str) -> ToolResult | None:
+    """Files containing `needle`, or None if grep could not be used.
+
+    Goes through the command runner when one is bound, so this works in the
+    container the same way every other tool does. None rather than a failure
+    on any trouble, so the caller falls through to the semantic path -- a slow
+    answer beats an error.
+    """
+    quoted = shlex.quote(needle.strip("'\""))
+    remote = current_command_runner()
+    if remote is not None:
+        try:
+            stdout, _, code = remote(f"grep -rln -e {quoted} . | head -n 40", 30.0)
+        except Exception:  # noqa: BLE001
+            return None
+        if code not in (0, 1):
+            return None
+        return _literal_result(needle, stdout)
+
+    root = current_workspace()
+    if root is None:
+        return None
+    try:
+        proc = subprocess.run(
+            ["grep", "-rln", "-e", needle.strip("'\""), "."],
+            cwd=root, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode not in (0, 1):
+        return None
+    return _literal_result(needle, proc.stdout)
+
+
+def _literal_result(needle: str, stdout: str) -> ToolResult:
+    files = [line for line in stdout.splitlines() if line.strip()][:40]
+    if not files:
+        return ToolResult(
+            stdout="",
+            stderr=(f"rag: nothing in the workspace contains {needle!r}. If you "
+                    "were asking a question rather than looking for that exact "
+                    "string, ask it in words and this will search by meaning."),
+            returncode=1,
+        )
+    return ToolResult(
+        stdout=f"files containing {needle!r}:\n" + "\n".join(files),
+        stderr="", returncode=0,
+    )
+
+
 def rag(query: str) -> ToolResult:
     """Search the CONTENTS of the files in this workspace, semantically.
 
@@ -1182,13 +1264,25 @@ def rag(query: str) -> ToolResult:
 
     Distinct from `recall_memory`, which searches what this CONVERSATION said
     earlier and then compacted away. This searches what is WRITTEN IN THE
-    FILES. When you want a specific string, `execute_bash` with grep is faster
-    and exact; reach for this when you do not know the word the code uses.
+    FILES.
+
+    Hand it either kind of query. A bare identifier or path is grepped, which
+    is exact and immediate; a question is answered by meaning. You do not have
+    to pick -- see `looks_like_a_literal` for the measurement that made this
+    the tool's job rather than yours.
 
     Requires a bound workspace, and returns a clean failure without one.
     """
     if not query.strip():
         return ToolResult(stdout="", stderr="rag: the query must not be empty", returncode=1)
+    if looks_like_a_literal(query):
+        # Grep it instead. See `looks_like_a_literal` for the measurement --
+        # on an exact identifier the two find the same files and grep is two
+        # orders of magnitude faster, while on a question grep finds nothing
+        # at all.
+        found = _grep_workspace(query.strip())
+        if found is not None:
+            return found
     root = current_workspace()
     if root is None:
         return ToolResult(

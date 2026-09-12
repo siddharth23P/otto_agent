@@ -141,3 +141,78 @@ def test_results_come_back_inline_rather_than_as_a_path_to_open(corpus):
     assert len(text) > 80, "recall returned a stub rather than the content"
     assert not text.strip().startswith("/"), "recall handed back a path"
     assert "\n" in text
+
+
+# --------------------------------------------------------------------------
+# Workspace files: where the two methods really are complementary
+# --------------------------------------------------------------------------
+#
+# The memory-store comparison above says semantic wins or ties. Workspace FILES
+# are the other surface, and the one the study actually tested -- a file is a
+# big lump of text and chunking it is the weak link. Measured on Otto's own
+# `agent/` tree, four exact identifiers against four questions about the same
+# code:
+#
+#     query type     grep            semantic
+#     exact token    4/4   0.2s      4/4   41.6s
+#     conceptual     0/4   0.3s      4/4    2.5s
+#
+# Complementary, not competing: grep is blind to paraphrase, and the semantic
+# path pays forty seconds to embed the workspace for something grep answers in
+# a fifth of a second. So `rag` decides from the query's shape rather than
+# leaving it to the model on every call.
+
+def test_an_identifier_is_grepped_not_embedded():
+    from agent.pipeline.tools import looks_like_a_literal
+
+    for query in ("FALLOFF_RATIO", "MIN_TURN_CALLS", "agent/pipeline/budget.py",
+                  "budget.py", "_before_the_falloff"):
+        assert looks_like_a_literal(query), query
+
+
+def test_a_question_is_answered_by_meaning():
+    from agent.pipeline.tools import looks_like_a_literal
+
+    for query in ("where is the retry budget configured",
+                  "what stops a page reaching the metadata endpoint",
+                  "retry budget", "how does compaction decide what to keep"):
+        assert not looks_like_a_literal(query), query
+
+
+def test_anything_ambiguous_falls_through_to_the_slower_path():
+    """A slow answer beats a wrong one. Grep is wrong in a way semantic is
+    not -- it finds nothing and says nothing was there."""
+    from agent.pipeline.tools import looks_like_a_literal
+
+    assert not looks_like_a_literal('"exit 3"')
+    assert not looks_like_a_literal("two words")
+
+
+def test_a_literal_with_no_matches_says_what_to_do_instead(tmp_path):
+    """The failure mode grep has and the embedding path does not: a miss
+    reads as an absence. The message has to offer the other route."""
+    from agent.pipeline.tools import rag
+    from agent.pipeline.workspace import bind_workspace
+
+    (tmp_path / "a.py").write_text("x = 1\n")
+    with bind_workspace(str(tmp_path)):
+        result = rag("NOT_IN_THIS_TREE_AT_ALL")
+
+    assert result.returncode == 1
+    assert "ask it in words" in result.stderr
+
+
+def test_a_literal_query_finds_the_file_that_holds_it(tmp_path):
+    from agent.pipeline.tools import rag
+    from agent.pipeline.workspace import bind_workspace
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "conf.py").write_text("FALLOFF_RATIO = 0.85\n")
+    (tmp_path / "other.py").write_text("unrelated = True\n")
+
+    with bind_workspace(str(tmp_path)):
+        result = rag("FALLOFF_RATIO")
+
+    assert result.returncode == 0
+    assert "conf.py" in result.stdout
+    assert "other.py" not in result.stdout
