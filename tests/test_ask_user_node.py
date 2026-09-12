@@ -289,6 +289,9 @@ def test_a_real_graph_run_pauses_on_ask_user_and_resumes_via_command(monkeypatch
     queue = [
         "- an 8-queens solution is produced",           # the run's checklist
         "ACTION: ask_user\nCODE:\nhow many queens?",   # the loop pauses
+        # The answer is part of the request, so the checklist is rewritten
+        # around it before the loop carries on -- nodes.py's _requested().
+        "- an 8-queens solution is produced",
         "FINAL:\n8-queens solution here",              # it carries on after the answer
         "FINAL:\nAPPROVE: yes\nWHY: looks right",      # evaluator
     ]
@@ -344,6 +347,7 @@ def test_the_resumed_loop_actually_sees_the_answer_it_paused_for(monkeypatch):
     queue = [
         "- an 8-queens solution is produced",
         "ACTION: ask_user\nCODE:\nhow many queens?",
+        "- an 8-queens solution is produced",   # the checklist, rewritten
         "FINAL:\n8-queens solution here",
         "FINAL:\nAPPROVE: yes\nWHY: looks right",
     ]
@@ -385,6 +389,7 @@ def test_the_answer_is_not_replayed_into_the_next_run_of_the_loop(monkeypatch):
     queue = [
         "- an 8-queens solution is produced",
         "ACTION: ask_user\nCODE:\nhow many queens?",
+        "- an 8-queens solution is produced",   # the checklist, rewritten
         "FINAL:\nfirst attempt",
         "FINAL:\nAPPROVE: no\nWHY: no board was printed",
         "FINAL:\nsecond attempt with a board",
@@ -629,3 +634,151 @@ def test_the_loop_is_told_the_answer_was_a_closing_one(monkeypatch):
     list(pn.app.stream(pn.Command(resume="nothing else"), config, stream_mode="updates"))
 
     assert any("stop asking" in m for m in seen[before])
+
+
+# --------------------------------------------------------------------------
+# _requested / the checklist following the answer. The reported failure: the
+# turn opened "hi", otto asked what was wanted, the person answered "analyse
+# my repository and plan improvements to the TUI", otto did exactly that over
+# 32 model calls -- and every bit of it was rejected, correctly by the
+# checklist's own lights, because the checklist said the task was to answer a
+# greeting. The run ended by saying hello, and the files it had written stayed
+# on disk.
+# --------------------------------------------------------------------------
+
+def test_the_request_is_just_the_message_when_nothing_was_asked():
+    assert pn._requested(_state(asked_qa=[])) == "solve N queens with brute force"
+
+
+def test_what_the_person_said_when_asked_becomes_part_of_the_request():
+    state = _state(
+        messages=[HumanMessage("hi")],
+        asked_qa=['you asked: "what can I help with?"\n'
+                  'the user answered: "plan improvements to the TUI"'],
+    )
+
+    requested = pn._requested(state)
+
+    assert "hi" in requested
+    assert "plan improvements to the TUI" in requested
+
+
+def test_the_request_keeps_every_answer_in_order():
+    state = _state(messages=[HumanMessage("hi")], asked_qa=["first pair", "second pair"])
+
+    requested = pn._requested(state)
+
+    assert requested.index("first pair") < requested.index("second pair")
+
+
+def test_ask_user_records_the_pair_for_the_request(monkeypatch):
+    monkeypatch.setattr(pn, "interrupt", lambda payload: "plan the TUI work")
+
+    result = pn.ask_user(_state(pending_question="what can I help with?"))
+
+    assert len(result.update["asked_qa"]) == 1
+    recorded = result.update["asked_qa"][0]
+    assert "what can I help with?" in recorded
+    assert "plan the TUI work" in recorded
+
+
+def test_the_checklist_is_rewritten_around_what_the_person_answered(monkeypatch):
+    """The fix for the reported failure, at the node.
+
+    A greeting's checklist must not be what real work is judged against. The
+    criteria call is asked for the WHOLE request, and the resulting checklist
+    replaces the one written from the opening word.
+    """
+    seen: list[str] = []
+
+    def fake_criteria(llm, task_text):
+        seen.append(task_text)
+        return ["a TUI improvement plan exists"]
+
+    monkeypatch.setattr(pn, "_criteria", fake_criteria)
+    # agent() resolves the judge's model before handing it to _criteria, and
+    # resolving it for real reaches the provider.
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: _FakeModel(""))
+    monkeypatch.setattr(pn, "_agent_loop",
+                        lambda *a, **kw: ("a plan", "final", pn.DEFAULT_MODE))
+
+    state = _state(
+        messages=[HumanMessage("hi")],
+        transcript=[{"type": "human", "content": "hi"}],
+        checklist=[{"text": "a greeting is returned", "status": "pending", "evidence": ""}],
+        user_answer="plan improvements to the TUI",
+        asked_qa=['you asked: "what can I help with?"\n'
+                  'the user answered: "plan improvements to the TUI"'],
+        mode=None,
+    )
+    result = pn.agent(state)
+
+    assert seen, "the criteria were never regenerated"
+    assert "plan improvements to the TUI" in seen[0], (
+        "the checklist was still derived from the opening word alone"
+    )
+    assert [item["text"] for item in result.update["checklist"]] == [
+        "a TUI improvement plan exists"
+    ]
+
+
+def test_the_checklist_is_left_alone_when_nobody_has_answered_anything(monkeypatch):
+    # The invariant this must not break: a checklist is written ONCE from the
+    # request, not rewritten while an attempt is being made at it.
+    monkeypatch.setattr(pn, "_criteria",
+                        lambda llm, task: pytest.fail("regenerated for no reason"))
+    monkeypatch.setattr(pn, "_agent_loop",
+                        lambda *a, **kw: ("an answer", "final", pn.DEFAULT_MODE))
+    existing = [{"text": "an 8-queens solution", "status": "pending", "evidence": ""}]
+
+    result = pn.agent(_state(
+        transcript=[{"type": "human", "content": "go"}],
+        checklist=existing, user_answer=None, asked_qa=[], mode=None,
+    ))
+
+    assert result.update["checklist"] == existing
+
+
+def test_a_closing_answer_does_not_rewrite_the_checklist(monkeypatch):
+    # "done" is the person winding the turn up, not adding to the request --
+    # criteria derived from it would be a checklist about saying goodbye.
+    monkeypatch.setattr(pn, "_criteria",
+                        lambda llm, task: pytest.fail("regenerated from a goodbye"))
+    monkeypatch.setattr(pn, "_agent_loop",
+                        lambda *a, **kw: ("an answer", "final", pn.DEFAULT_MODE))
+    existing = [{"text": "an 8-queens solution", "status": "pending", "evidence": ""}]
+
+    result = pn.agent(_state(
+        transcript=[{"type": "human", "content": "go"}],
+        checklist=existing, user_answer="nothing else", mode=None,
+        asked_qa=['you asked: "anything else?"\nthe user answered: "nothing else"'],
+    ))
+
+    assert result.update["checklist"] == existing
+
+
+def test_the_evaluator_judges_against_what_the_person_answered(monkeypatch):
+    # The other half: the judge's own prompt has to carry the answer as part
+    # of the request, or it rejects real work for not being a greeting.
+    replies = ["FINAL:\nAPPROVE: yes\nWHY: fine"]
+    seen: list[str] = []
+
+    class _Capturing(_FakeModel):
+        def stream(self, messages):
+            seen.append("\n".join(str(m.content) for m in messages))
+            yield from super().stream(messages)
+
+    monkeypatch.setattr(pn.ROUTER, "chat_model",
+                        lambda *a, **kw: _Capturing(replies[0]))
+
+    pn.evaluator(_state(
+        messages=[HumanMessage("hi")],
+        output="a 162-line TUI improvement plan",
+        checklist=[{"text": "a TUI plan exists", "status": "pending", "evidence": ""}],
+        asked_qa=['you asked: "what can I help with?"\n'
+                  'the user answered: "plan improvements to the TUI"'],
+    ))
+
+    assert any("plan improvements to the TUI" in text for text in seen), (
+        "the judge never saw what the person actually asked for"
+    )

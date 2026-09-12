@@ -104,6 +104,17 @@ class AgentState(TypedDict):
     #: answer. `context` is still written too, because that is what the
     #: evaluator (which rebuilds from state, not from a transcript) reads.
     user_answer: str | None
+    #: Every "you asked / the user answered" pair this turn, in order --
+    #: appended by ask_user(), accumulating like `board`.
+    #:
+    #: Deliberately separate from `context`, which also carries recalled
+    #: memory and anything a tool dug up. This is ONLY what the person
+    #: themselves said, and that distinction is load-bearing: nodes.py's
+    #: `_requested()` composes the task and these into what was actually
+    #: asked for, and the checklist is re-derived from it. An answer is new
+    #: input from the person, not an attempt at satisfying them, so deriving
+    #: criteria from it keeps the invariant the checklist exists for.
+    asked_qa: Annotated[list[str], operator.add]
     #: How many times THIS TURN has stopped and waited for the person --
     #: incremented by ask_user() as each pause is answered, reset to 0 by
     #: run.py's `_initial` at the top of every turn. Both loops refuse to
