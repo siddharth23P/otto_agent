@@ -18,6 +18,18 @@ gets stuck on something only the person can answer -- `_run_turn` is a
 collect an answer with `_ask_user`, and keep going via
 `resume_pipeline_stream()` for as long as the run keeps asking.
 
+A line that moves (2026-09-12, design call: "optimize latency and steps,
+and improve the tui"): the graph streams one update per NODE, and `agent`
+is a node that spends every model call and every tool call inside itself.
+Measured across the twenty golden items, that is 828 seconds of wall time,
+96% of it inside model requests, with nothing printed in the middle of any
+of them -- the longest item ran 131 seconds against a still terminal.
+`_run_turn` now binds agent/pipeline/progress.py for the length of the
+turn and keeps one transient Rich status line alive underneath it, saying
+what the run is doing and how long it has been doing it. Ctrl-C sets the
+same seam's cancel Event rather than killing the process, so a turn started
+by mistake ends within one model call instead of having to be waited out.
+
 Bounded conversation memory (2026-09-10, same day, Phase 2 of claude/
 otto-tiered-memory-design.md): `_run_turn` used to read `s.history[:-1]` --
 an unbounded, ever-growing raw list `chat()` appended this turn's own
@@ -31,6 +43,8 @@ builds its own `HumanMessage(text)` locally rather than reading it back off
 touches history at all.
 """
 
+import threading
+import time
 from collections import Counter
 
 import typer
@@ -41,6 +55,7 @@ from rich.panel import Panel
 from agent.cli.output import save_final
 from agent.cli.shell import Session, build_prompt_session, dispatch, render_update
 from agent.cli.ui import err, out
+from agent.pipeline.progress import Cancelled, Progress, bind_progress
 from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
 from agent.pipeline.state import AgentState
 
@@ -71,7 +86,108 @@ def _ask_user(prompt_session, question: str, choices: list[str]) -> str:
         return reply
 
 
+class _Line:
+    """One transient status line under a turn in flight.
+
+    Rich's `Console.status` already draws a spinner that clears itself, so
+    this is only the bookkeeping: what the run last reported, and a clock
+    that keeps moving through a ten-second model call that reports nothing
+    while it runs.
+
+    Every method here runs on the graph's own thread, which for the REPL is
+    the main thread -- the same one Rich is drawing from -- so there is
+    nothing to marshal and no lock to take.
+    """
+
+    def __init__(self, status) -> None:
+        self._status = status
+        self._started = time.monotonic()
+        self.phase = "reading your message"
+        self.model = ""
+        self.tool = ""
+        self.calls = 0
+
+    def __call__(self, update: Progress) -> None:
+        self.calls = update.calls or self.calls
+        if update.kind == "call_start":
+            self.model, self.tool = update.text, ""
+            self.phase = self.phase or "thinking"
+        elif update.kind == "phase":
+            self.phase, self.tool = update.text, ""
+        elif update.kind == "tool":
+            target = (update.detail or {}).get("target", "")
+            self.tool = f"{update.text} {target}".strip()
+        else:
+            # A streamed partial. Nothing to draw for it here -- the REPL
+            # prints the settled answer as one Markdown panel, and redrawing
+            # a growing block above a live prompt is what Rich's own docs
+            # warn against. Still worth the clock tick.
+            pass
+        self.draw()
+
+    def clock(self) -> str:
+        elapsed = int(time.monotonic() - self._started)
+        return f"{elapsed // 60}:{elapsed % 60:02d}"
+
+    def draw(self) -> None:
+        bits = [self.phase or "thinking"]
+        if self.tool:
+            bits.append(f"[chosen]{self.tool}[/]")
+        if self.model:
+            bits.append(f"[muted]{self.model}[/]")
+        if self.calls:
+            bits.append(f"[muted]{self.calls} calls[/]")
+        bits.append(f"[muted]{self.clock()}[/]")
+        bits.append("[muted]ctrl-c to stop[/]")
+        self._status.update(" · ".join(bits))
+
+
 def _run_turn(s: Session, text: str, prompt_session) -> None:
+    """One turn, under a live status line and a cancel key.
+
+    Ctrl-C inside a turn ends the turn, not the session. The REPL runs the
+    graph on the main thread, so an interrupt lands inside whatever model
+    call is in flight and there is nothing to cooperate with -- the cancel
+    Event is still set on the way out, because a run can be several frames
+    deep and the next `_call` must not spend again while the stack unwinds.
+    Ctrl-C at the prompt still exits, which is where a person means it.
+    """
+    cancel = threading.Event()
+    stopped = False
+    with err.status("", spinner="dots") as status:
+        line = _Line(status)
+        line.draw()
+        # Nothing reports anything during a ten-second model call, so the
+        # clock has to move on its own or the line reads as a hung process.
+        ticking = threading.Event()
+        clock = threading.Thread(target=_keep_time, args=(line, ticking), daemon=True)
+        clock.start()
+        try:
+            with bind_progress(line, cancel=cancel):
+                _drive_turn(s, text, prompt_session)
+        except (Cancelled, KeyboardInterrupt):
+            cancel.set()
+            stopped = True
+        finally:
+            ticking.set()
+            clock.join(timeout=2.0)
+    if stopped:
+        err.print("[warn]stopped[/]")
+    err.print(f"[muted]{line.calls} model calls · {line.clock()}[/]")
+
+
+def _keep_time(line: "_Line", done: threading.Event) -> None:
+    """Redraw the status line once a second until the turn ends.
+
+    A thread rather than a signal or an async task: the REPL has no event
+    loop of its own, and Rich's Live is already safe to update from another
+    thread.
+    """
+    while not done.wait(1.0):
+        line.draw()
+
+
+def _drive_turn(s: Session, text: str, prompt_session) -> None:
     tally: Counter = Counter()
     final: AgentState | None = None
     human_message = HumanMessage(text)

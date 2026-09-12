@@ -97,6 +97,9 @@ from agent.pipeline.tools import (
     reachable_tools,
     MUTATING, READ_ONLY, THIRD_PARTY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
 )
+from agent.pipeline.progress import (
+    check_cancelled, report as report_progress, watching as anyone_watching,
+)
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router import outcomes as seat_outcomes
@@ -762,12 +765,26 @@ def _call(llm, messages: list) -> str:
     budget = current_budget()
     current = llm
     for attempt in range(MAX_DIFFUSION_RETRIES):
+        # Before spending, not after: a run stopped from the front end should
+        # not pay for one more request on its way out. This is the only place
+        # a cancel can land, which bounds how long one takes to take effect at
+        # a single model call -- see agent/pipeline/progress.py.
+        check_cancelled()
         if budget is not None:
             budget.spend()
+        spent = 0 if budget is None else budget.calls
+        report_progress("call_start", _model_label(current), calls=spent)
         reply = None
         try:
             for chunk in current.stream(messages):
                 reply = chunk if reply is None else reply + chunk
+                # The reply as it stands, every frame, so a watcher can show
+                # the answer arriving instead of a spinner. Skipped entirely
+                # when nobody is watching -- _content_text on every chunk of
+                # every call is not free, and an eval run has no screen.
+                if anyone_watching():
+                    report_progress("partial", calls=spent,
+                                    partial=_content_text(reply.content))
         except ValueError as exc:
             # langchain_core raises ValueError("No generation chunks were
             # returned") from inside stream() when the provider yields nothing
@@ -1234,6 +1251,8 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
         if problem := _action_problem(tool_name, body, dispatch):
             evidence = problem
         else:
+            report_progress("tool", tool_name,
+                            detail={"target": _action_target(tool_name, body)})
             result = dispatch[tool_name](body)
             if actions is not None:
                 actions.append(_summarise_action(tool_name, body, result))
@@ -2038,6 +2057,8 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
         if problem := _action_problem(tool_name, body, dispatch):
             evidence = problem
         else:
+            report_progress("tool", tool_name,
+                            detail={"target": _action_target(tool_name, body)})
             result = dispatch[tool_name](body)
             ledger.record(tool_name, body, result.returncode)
             line = _summarise_action(tool_name, body, result)
@@ -2330,6 +2351,7 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
     # each. See AgentState.checklist.
     checklist = state.get("checklist")
     if checklist is None and not resuming:
+        report_progress("phase", "working out what done looks like")
         criteria = _criteria(ROUTER.chat_model(Task.EVALUATE), task_text)
         # Left as None when the rubric call itself failed, so the run keeps
         # the engineer prompt. Only a rubric that RAN and came back empty is
@@ -2713,6 +2735,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # has been carrying, so judge and actor cannot be working to different
     # bars, and a re-judgment after a rejection costs nothing to set up.
     # Generated here only for a caller that drove the evaluator directly.
+    report_progress("phase", "checking the answer holds up")
     checklist = state.get("checklist")
     if checklist is None:
         # Judging is the one place the two empties really are the same: with

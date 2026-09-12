@@ -59,6 +59,35 @@ says so in its own message rather than leaving a silent no-op, and the
 saved-file path (already printed after every turn) is the fallback either
 way.
 
+A screen that moves (2026-09-12, design call: "optimize latency and steps,
+and improve the tui"): until this, the entire middle of a turn was blank.
+The graph streams one update per NODE, `agent` is a node, and a run spends
+every model call and every tool call inside it -- measured across the twenty
+golden items, 828 seconds of wall time with 96% of it inside model requests
+and not one graph update in the middle of any of them. The longest item ran
+131 seconds against an unchanging screen, and the honest reading of "it is
+taking too long" is partly that nothing said otherwise.
+
+`#status`, below the transcript and above the input, is now live for the
+length of a turn: what the run is doing, which model is answering, how many
+model requests it has spent, what tool it is inside, and the elapsed clock.
+It is fed by `agent/pipeline/progress.py` -- a contextvar sink bound around
+the stream, in the same idiom as `bind_budget`/`bind_workspace` -- not by a
+new graph channel, because none of it is state.
+
+The answer streams too. Every `partial` update carries the WHOLE reply so
+far (a diffusing route's chunks are refinements, not slices), so once one
+contains `FINAL:` the text after it is mounted and replaced in place, and
+the answer appears as it is written rather than 30 to 130 seconds later in
+one block. `_STREAM_EVERY` throttles what crosses to the UI thread: chunks
+arrive far faster than a person can read, and marshalling every one of them
+spends the UI thread on frames nobody sees.
+
+And a turn can be stopped. `escape` sets the cancel Event the same seam
+binds; `_call` checks it before spending, so a stop lands within one model
+call and never pays for another. That is the difference between waiting out
+a 28-minute run started by accident and pressing a key.
+
 Mid-run questions (2026-09-10, same day, nodes.py's seventh refinement,
 design call: "widget with multi choice + text bar" for how the TUI should
 ask a question back): `AskUserModal`, below, is that widget -- an
@@ -77,6 +106,7 @@ waiting on a person) until the modal dismisses it.
 from __future__ import annotations
 
 import threading
+import time
 from collections import Counter
 from typing import Iterable
 
@@ -96,6 +126,7 @@ from agent.cli.context import AppContext
 from agent.cli.output import save_final
 from agent.cli.shell import Session, render_update
 from agent.cli.ui import THEME
+from agent.pipeline.progress import Cancelled, Progress, bind_progress
 from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
 from agent.router.mapping import Task
 from agent.router.router import NoViableRoute
@@ -191,16 +222,34 @@ class AskUserModal(ModalScreen[str]):
 # The app
 # --------------------------------------------------------------------------
 
+#: Seconds between answer frames that actually cross to the UI thread.
+#: Chunks arrive an order of magnitude faster than anyone reads, and
+#: marshalling every one of them spends the UI thread drawing frames nobody
+#: sees. A tenth of a second still reads as continuous typing.
+_STREAM_EVERY = 0.1
+
+#: Frames for the one-character spinner in the status line. Four is enough to
+#: read as motion and short enough that a stalled run is obvious -- a frozen
+#: spinner says "stuck", a missing one says nothing.
+_SPINNER = "|/-\\"
+
+
+def _clock(seconds: float) -> str:
+    return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+
+
 class OttoApp(App):
     TITLE = "otto"
     BINDINGS = [
         ("ctrl+n", "new_session", "New session"),
         ("ctrl+y", "copy_last", "Copy last answer"),
+        ("escape", "stop_turn", "Stop this turn"),
     ]
     DEFAULT_CSS = """
     #transcript { height: 1fr; }
     #transcript Collapsible { padding: 0; }
     .thinking-log { height: 12; }
+    #status { height: auto; padding: 0 1; color: $text-muted; }
     """
 
     def __init__(self, ctx: AppContext) -> None:
@@ -212,10 +261,34 @@ class OttoApp(App):
         #: Panel/Markdown wrapper. None before any turn has finished, or
         #: after one that produced nothing.
         self._last_output: str | None = None
+        #: Everything the status line draws, written from the worker thread
+        #: and read from the UI thread's one-second tick. Plain attributes
+        #: rather than a lock: each is a single assignment of an immutable
+        #: value, and the worst a torn read can do is show one stale field
+        #: for a tenth of a second.
+        self._busy = False
+        self._phase = ""
+        self._model = ""
+        self._tool = ""
+        self._calls = 0
+        self._started = 0.0
+        self._frame = 0
+        #: Set by `escape`, read inside `_call` before it spends again
+        #: (agent/pipeline/progress.py). One Event per turn -- reusing one
+        #: across turns would carry a stop into the next run.
+        self._cancel: threading.Event | None = None
+        #: The live answer block for the turn in flight, and when it was last
+        #: redrawn. Mounted the first time a reply contains FINAL:.
+        self._answer: Static | None = None
+        self._drawn_at = 0.0
+        #: This turn's collapsed thinking row, so it can be retitled with
+        #: what the turn cost once the turn is over.
+        self._thinking: Collapsible | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield VerticalScroll(id="transcript")
+        yield Static("", id="status")
         yield Input(placeholder="type a message… (ctrl+p for commands)", id="message-input")
         yield Footer()
 
@@ -232,6 +305,96 @@ class OttoApp(App):
         self.console.push_theme(THEME)
         self.query_one(Input).focus()
         self._post("[dim]otto:pipeline[/]")
+        # The clock has to tick on its own: between two model calls nothing
+        # reports anything for ten seconds at a stretch, and a status line
+        # that only moves when the run moves reads as a frozen app.
+        self.set_interval(1.0, self._tick)
+
+    # ---- the status line ----------------------------------------------
+
+    def _tick(self) -> None:
+        """Once a second, on the UI thread. Redraws the status line from
+        whatever the worker thread last wrote, so the elapsed clock and the
+        spinner keep moving through a long model call."""
+        if not self._busy:
+            return
+        self._frame += 1
+        self._draw_status()
+
+    def _draw_status(self) -> None:
+        if not self._busy:
+            self.query_one("#status", Static).update("")
+            return
+        parts = [f"[bold]{_SPINNER[self._frame % len(_SPINNER)]}[/]"]
+        if self._phase:
+            parts.append(self._phase)
+        if self._tool:
+            parts.append(f"[bold]{self._tool}[/]")
+        if self._model:
+            parts.append(f"[dim]{self._model}[/]")
+        if self._calls:
+            parts.append(f"[dim]{self._calls} calls[/]")
+        parts.append(f"[dim]{_clock(time.monotonic() - self._started)}[/]")
+        parts.append("[dim]esc to stop[/]")
+        self.query_one("#status", Static).update(" · ".join(parts))
+
+    def _on_progress(self, update: Progress) -> None:
+        """The progress sink, called on the WORKER thread. Does as little as
+        possible here and marshals the rest: everything below writes plain
+        attributes, and the once-a-second tick on the UI thread is what turns
+        them into pixels. The one exception is a streamed answer, which has
+        to mount and update a widget and so goes through call_from_thread --
+        throttled, or a fast stream floods the UI thread."""
+        self._calls = update.calls or self._calls
+        if update.kind == "call_start":
+            self._model = update.text
+            self._tool = ""
+            self._phase = self._phase or "thinking"
+        elif update.kind == "phase":
+            self._phase = update.text
+            self._tool = ""
+        elif update.kind == "tool":
+            target = (update.detail or {}).get("target", "")
+            self._tool = f"{update.text} {target}".strip()
+        elif update.kind == "partial":
+            self._stream_answer(update.partial)
+
+    def _stream_answer(self, partial: str) -> None:
+        """Show the answer as it is written, once there is an answer to show.
+
+        Every frame carries the WHOLE reply, not the next slice -- a
+        diffusing route's chunks are successive refinements of one answer --
+        so this replaces rather than appends. Before FINAL: appears the reply
+        is a tool call, which belongs in the thinking log and not on screen
+        as if it were the result.
+        """
+        marker = partial.find("FINAL:")
+        if marker < 0:
+            return
+        now = time.monotonic()
+        if now - self._drawn_at < _STREAM_EVERY:
+            return
+        self._drawn_at = now
+        self.call_from_thread(self._show_partial_answer,
+                              partial[marker + len("FINAL:"):].strip())
+
+    def _show_partial_answer(self, text: str) -> None:
+        if self._answer is None:
+            self._answer = Static("")
+            self.transcript.mount(self._answer)
+        self._answer.update(Panel(text, title="[dim]answering…[/]", border_style="dim"))
+        self.transcript.scroll_end(animate=False)
+
+    def action_stop_turn(self) -> None:
+        """`escape`. Cooperative: agent/pipeline/progress.py checks this
+        before every model request, so the stop lands within one call and the
+        run never pays for another. Saying so matters -- a key that looks
+        like it did nothing for ten seconds is worse than no key."""
+        if not self._busy or self._cancel is None:
+            return
+        self._cancel.set()
+        self._phase = "stopping after this call"
+        self._draw_status()
 
     @property
     def transcript(self) -> VerticalScroll:
@@ -269,16 +432,23 @@ class OttoApp(App):
         done.wait()
         return answer[0]
 
-    def _post_thinking(self, thinking_log: RichLog, title: str) -> None:
+    def _post_thinking(self, thinking_log: RichLog, title: str) -> Collapsible:
         """Mount one *thinking*-side block: a fresh RichLog, collapsed by
         default, that render_update() writes this turn's board lines and
         output previews into (module docstring). Collapsed rather than
         omitted -- the process is still one click away, just not what the
         user sees by default.
+
+        Returns the Collapsible so the caller can retitle it when the turn
+        ends: a row still reading "thinking…" an hour later says nothing
+        about which turn it belongs to, and a transcript of several says it
+        several times.
         """
         thinking_log.add_class("thinking-log")
-        self.transcript.mount(Collapsible(thinking_log, title=title, collapsed=True))
+        block = Collapsible(thinking_log, title=title, collapsed=True)
+        self.transcript.mount(block)
         self.transcript.scroll_end(animate=False)
+        return block
 
     # ---- the command palette (ctrl+p): the arrow-key menu ------------
 
@@ -380,18 +550,46 @@ class OttoApp(App):
         event.input.value = ""
         if not text:
             return
+        if self._busy:
+            # `exclusive=True` cancels the previous WORKER, and a worker
+            # running a thread cannot be cancelled out from under a blocking
+            # network call -- so a second submit used to leave two runs alive
+            # writing into the same transcript. Refuse, and say which key
+            # ends the one already going.
+            self._post("[yellow]a turn is already running -- esc to stop it[/]")
+            return
         self._post(f"[bold]you[/] {text}")
         self.run_turn(text)
 
     @work(thread=True, exclusive=True, group="turn")
     def run_turn(self, text: str) -> None:
+        self._cancel = threading.Event()
+        self._busy = True
+        self._phase = "reading your message"
+        self._model = self._tool = ""
+        self._calls = 0
+        self._started = time.monotonic()
+        self._answer = None
+        self._drawn_at = 0.0
+        self.call_from_thread(self._draw_status)
+        try:
+            with bind_progress(self._on_progress, cancel=self._cancel):
+                self._run_turn(text)
+        finally:
+            self._busy = False
+            elapsed = time.monotonic() - self._started
+            self.call_from_thread(self._draw_status)
+            self.call_from_thread(self._retitle_thinking, self._calls, elapsed)
+
+    def _run_turn(self, text: str) -> None:
         tally: Counter = Counter()
         # One fresh RichLog per turn, mounted collapsed right away so board
         # lines have somewhere to land as they stream in -- render_update()
         # (shell.py) is unchanged, it just writes into this instead of the
         # old shared transcript RichLog (module docstring).
         thinking_log = RichLog(wrap=True, markup=True, highlight=False)
-        self.call_from_thread(self._post_thinking, thinking_log, "thinking…")
+        self._thinking = self.call_from_thread(
+            self._post_thinking, thinking_log, "thinking…")
         human_message = HumanMessage(text)
         # Bounded, not the raw ever-growing list (agent/cli/chat.py's own
         # module docstring has the full Phase 2 reasoning -- shared 1:1
@@ -423,8 +621,11 @@ class OttoApp(App):
                         raw_output = (final.get("final_output") or "").strip()
                         code = raw_output or "*(no output produced)*"
                         self._last_output = raw_output or None
+                        # Replaces the streamed block in place when there is
+                        # one. Posting a second panel would leave the same
+                        # answer on screen twice, once raw and once rendered.
                         self.call_from_thread(
-                            self._post,
+                            self._settle_answer,
                             Panel(Markdown(code), title="[green]final[/]", border_style="green"),
                         )
                         self.session.record_turn(human_message, AIMessage(code) if raw_output else None)
@@ -439,8 +640,31 @@ class OttoApp(App):
                     node, delta = next(iter(update.items()))
                     self.call_from_thread(render_update, node, delta, tally, thinking_log.write)
                 stream = next_stream
+        except Cancelled:
+            # Asked for, not broken. Its own clause so a person who pressed
+            # escape is not shown a traceback for something they chose.
+            self.call_from_thread(self._post, "[yellow]stopped[/]")
         except Exception as exc:  # a provider error mid-turn must not crash the app
             self.call_from_thread(self._post, f"[red]{type(exc).__name__}: {exc}[/]")
+
+    def _retitle_thinking(self, calls: int, elapsed: float) -> None:
+        """What that turn cost, on the row that holds how it was spent. The
+        one number a person wants after the fact is on the collapsed row, so
+        reading it back does not mean expanding anything."""
+        if self._thinking is not None:
+            self._thinking.title = f"{calls} model calls · {_clock(elapsed)}"
+            self._thinking = None
+
+    def _settle_answer(self, panel: Panel) -> None:
+        """Turn the streamed block into the finished one, or mount it if the
+        answer never streamed (a run that died, or one whose reply arrived in
+        a single chunk)."""
+        if self._answer is not None:
+            self._answer.update(panel)
+            self._answer = None
+            self.transcript.scroll_end(animate=False)
+            return
+        self._post(panel)
 
 
 def tui(ctx: typer.Context) -> None:
