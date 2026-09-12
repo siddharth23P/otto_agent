@@ -2228,14 +2228,31 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
     stored = _revive(state.get("transcript"))
     resuming = bool(stored)
 
-    # The run's working state, written once from the task alone before any
-    # attempt exists. Nothing here can be shaped by an attempt trying to
+    # What the person said, and whether they have just said something new.
+    answered = state.get("user_answer")
+    # A closing answer ("done", "nothing else") is the person winding the turn
+    # up, not adding to the request -- re-deriving criteria from it would
+    # produce a checklist about saying goodbye.
+    redirected = bool(answered) and not _is_closing_answer(answered)
+
+    # The run's working state, written from what was ASKED FOR before any
+    # attempt at it exists. Nothing here can be shaped by an attempt trying to
     # satisfy it -- which is stronger than generating it after the fact, and
     # the same call now serves both the loop and the judgment instead of one
     # each. See AgentState.checklist.
+    #
+    # Rewritten when the person answers a question, and ONLY then. It used to
+    # be written once from `messages[-1]`, which meant a turn that opened "hi"
+    # and then received the real request as an ANSWER spent itself doing that
+    # work and had every bit of it rejected for not being a greeting -- see
+    # _requested() for the live run. An answer is the person talking, not an
+    # attempt at satisfying them, so this is still a checklist written from
+    # the request rather than from a candidate answer.
     checklist = state.get("checklist")
-    if checklist is None:
-        checklist = _new_checklist(_criteria(ROUTER.chat_model(Task.EVALUATE), task_text))
+    if checklist is None or redirected:
+        checklist = _new_checklist(
+            _criteria(ROUTER.chat_model(Task.EVALUATE), _requested(state))
+        )
 
     if resuming:
         messages = [
@@ -2248,7 +2265,6 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
         # this is the reply to it, and without this line the loop resumes
         # from a conversation identical to the one that asked and simply
         # asks again -- see AgentState.user_answer.
-        answered = state.get("user_answer")
         if answered:
             closing = (
                 "\n\n" + CLOSING_ANSWER_NOTE if _is_closing_answer(answered) else ""
@@ -2257,6 +2273,10 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
                 f"THE USER ANSWERED:\n{answered}\n\n"
                 "That answers the question you just asked. Carry on with the "
                 "task from here -- do not ask it again." + closing
+                + ("\n\nIt is also part of what you were asked for, so what "
+                   "has to be true when you are done has been rewritten "
+                   "around it:\n" + _render_checklist(checklist)
+                   if redirected and checklist else "")
             ))
         feedback = state.get("feedback") or ""
         if feedback:
@@ -2396,6 +2416,35 @@ def _settle(checklist: list[dict], verdict: "Verdict") -> list[dict]:
     return [{**item, "status": status, "evidence": evidence} for item in checklist]
 
 
+def _requested(state: AgentState) -> str:
+    """Everything the PERSON asked for: the opening message, plus whatever
+    they said when the run stopped to ask them something.
+
+    This exists because `messages[-1]` alone was being treated as the whole
+    request, and an ask_user answer can BE the request. Live: the turn opened
+    with "hi", otto asked what was wanted, the person answered "analyse my
+    repository and plan improvements to the TUI", otto did exactly that over
+    32 model calls -- and the evaluator rejected every bit of it, correctly by
+    its own lights, because the checklist said the task was to answer a
+    greeting. The run ended by saying hello, the work was thrown away, and the
+    files it had written stayed on disk.
+
+    An answer is new input from the person, NOT an attempt at satisfying them,
+    which is why deriving criteria from this keeps the invariant the checklist
+    exists for (AgentState.checklist): still written from what was asked,
+    before any attempt at it exists.
+    """
+    task_text = str(state["messages"][-1].content)
+    qa = [line for line in (state.get("asked_qa") or []) if line]
+    if not qa:
+        return task_text
+    return (
+        f"{task_text}\n\n"
+        "THEN THEY WERE ASKED, AND SAID -- this is part of the request, not "
+        "background:\n" + "\n\n".join(qa)
+    )
+
+
 def _criteria(llm, task_text: str) -> list[str]:
     """Phase one: the rubric, from the task alone.
 
@@ -2525,7 +2574,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # Generated here only for a caller that drove the evaluator directly.
     checklist = state.get("checklist")
     if checklist is None:
-        checklist = _new_checklist(_criteria(llm, task_text))
+        checklist = _new_checklist(_criteria(llm, _requested(state)))
     rubric = [item["text"] for item in checklist]
 
     system_prompt = EVALUATOR_PROMPT.format(
@@ -2541,7 +2590,10 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     human_body = "\n\n".join(part for part in (
         (f"CONVERSATION SO FAR:\n{_conversation_so_far(state)}"
          if _conversation_so_far(state) else ""),
-        f"ORIGINAL REQUEST:\n{task_text}",
+        # _requested(), not `task_text`: an ask_user answer can BE the
+        # request, and judging "analyse my repo and plan the TUI work" against
+        # the word "hi" is how a whole run's work came to be thrown away.
+        f"WHAT WAS ASKED FOR:\n{_requested(state)}",
         f"{human_label}:\n{output}",
         _actions_block(state),
         (f"MODES USED:\n" + "; ".join(state.get("mode_log") or [])
@@ -2720,6 +2772,10 @@ def ask_user(state: AgentState) -> Command[Literal["agent", "evaluator"]]:
         # MAX_USER_QUESTIONS. A question raised and then lost to a provider
         # error cost nobody anything and should not spend the budget.
         "asks": asked,
+        # What the PERSON said, kept apart from `context`'s grab-bag so that
+        # `_requested()` can compose the actual request out of it -- which is
+        # what the run's checklist gets re-derived from.
+        "asked_qa": [qa],
         "board": [f"you answered -- {role} is carrying on"],
     }
     # ...and, for the loop only, into `user_answer` as well. The evaluator

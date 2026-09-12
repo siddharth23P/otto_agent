@@ -130,6 +130,7 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = (), memory_context: 
         "pending_choices": None,
         "asking_role": None,
         "user_answer": None,
+        "asked_qa": [],
         # Per TURN, not per session: a new request gets its own budget of
         # questions (agent/pipeline/state.py's `asks`).
         "asks": 0,
