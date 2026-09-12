@@ -95,6 +95,10 @@ class Instance:
     def image(self) -> str:
         return image_for(self.instance_id)
 
+    @property
+    def runnable_image(self) -> tuple[str, bool]:
+        return resolve_image(self.instance_id)
+
 
 def _as_list(value) -> list[str]:
     """FAIL_TO_PASS arrives as a JSON string in the parquet, and as a list
@@ -151,17 +155,53 @@ def _download(path: Path) -> None:
         raise SweBenchUnavailable(f"could not fetch the dataset: {exc}") from exc
 
 
-def image_for(instance_id: str) -> str:
-    """The official image name for this instance, on this machine's
-    architecture.
+def image_name(instance_id: str, arch: str) -> str:
+    """The official image name for one architecture.
 
     The id is lowercased and its `__` separator becomes `_1776_`, which is the
     upstream convention -- Docker tags cannot carry a double underscore in the
     position SWE-bench's ids use it.
     """
-    arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
     slug = instance_id.lower().replace("__", "_1776_")
     return f"swebench/sweb.eval.{arch}.{slug}:latest"
+
+
+def host_arch() -> str:
+    return "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
+
+
+def image_for(instance_id: str) -> str:
+    """This machine's architecture. What to PULL is `resolve_image` below."""
+    return image_name(instance_id, host_arch())
+
+
+def resolve_image(instance_id: str) -> tuple[str, bool]:
+    """(image, emulated) -- the arm64 build when one exists, else x86_64.
+
+    Upstream publishes arm64 for only part of the set: of six instances tried
+    at random, two had one and four did not. Without this the harness reports
+    "pull access denied" for two thirds of the benchmark and calls it a
+    harness error, which reads as a broken integration rather than as a
+    missing build.
+
+    An x86_64 image on Apple silicon runs under emulation, several times
+    slower, so a time budget tuned for native will kill work that was going
+    fine. The flag exists so the caller can say so and widen the budget
+    rather than reporting a timeout as a failure.
+    """
+    native = image_name(instance_id, host_arch())
+    if host_arch() == "x86_64" or _manifest_exists(native):
+        return native, False
+    return image_name(instance_id, "x86_64"), True
+
+
+def _manifest_exists(image: str) -> bool:
+    """Whether the registry has this image, asked without downloading 3.5GB
+    to find out."""
+    try:
+        return _docker("manifest", "inspect", image, timeout=90).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def select(instances: list[Instance], *, repo: str | None = None,
@@ -186,16 +226,19 @@ def _docker(*args: str, timeout: float = 120) -> subprocess.CompletedProcess:
                           timeout=timeout)
 
 
-def start_container(instance: Instance, *, name: str | None = None) -> str:
-    """Start the instance's image and return the container id."""
+def start_container(instance: Instance, *, name: str | None = None) -> tuple[str, bool]:
+    """Start the instance's image. Returns (container name, emulated)."""
     name = name or f"otto-swe-{uuid.uuid4().hex[:10]}"
-    result = _docker("run", "-d", "--name", name, "-w", WORKDIR,
-                     instance.image, "sleep", "infinity", timeout=300)
+    image, emulated = instance.runnable_image
+    args = ["run", "-d", "--name", name, "-w", WORKDIR]
+    if emulated:
+        args += ["--platform", "linux/amd64"]
+    result = _docker(*args, image, "sleep", "infinity", timeout=600)
     if result.returncode != 0:
         raise SweBenchUnavailable(
-            f"could not start {instance.image}: {result.stderr.strip()[:300]}"
+            f"could not start {image}: {result.stderr.strip()[:300]}"
         )
-    return name
+    return name, emulated
 
 
 def stop_container(name: str) -> None:
@@ -299,7 +342,15 @@ def build_prompt(instance: Instance) -> str:
 #: unittest under the hood, and the official harness uses each project's own
 #: entry point; pytest reads unittest node ids too, which is what lets one
 #: command cover both.
-TEST_COMMAND = "python -m pytest -rA --tb=no -p no:cacheprovider {tests}"
+#: `--color=no` asks politely; `parse_report` strips the escapes anyway,
+#: because a project can force colour back on from its own config.
+TEST_COMMAND = ("python -m pytest -rA --tb=no --color=no -p no:cacheprovider "
+                "{tests}")
+
+#: Terminal colour and cursor escapes. pytest colourises its summary whenever
+#: a project's own config asks it to, regardless of whether anything is
+#: attached to the output.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 _STATUS = re.compile(r"^(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\s+(\S+)", re.M)
 
@@ -310,8 +361,17 @@ def parse_report(output: str) -> dict[str, str]:
     Parsed rather than trusting the exit code: a run where one unrelated test
     errors out has a non-zero exit and can still have every graded test
     passing, and the opposite is just as possible.
+
+    THE ESCAPES COME OFF FIRST, and that is not defensive tidying. astropy's
+    own setup.cfg turns colour on, so the summary arrives as
+    `\x1b[32mPASSED\x1b[0m astropy/...::\x1b[1mTestSingleTable::test_simple`
+    -- the status no longer starts the line and the node id has an escape in
+    the middle of it. Both halves of the pattern miss, every test reads as
+    not-passed, and the harness reports 0 of 141 passing on a repository
+    where nothing is wrong. Measured: that is exactly what two instances
+    scored before this line existed.
     """
-    return {node: status for status, node in _STATUS.findall(output)}
+    return {node: status for status, node in _STATUS.findall(_ANSI.sub("", output))}
 
 
 @dataclass
@@ -392,6 +452,9 @@ class InstanceOutcome:
     wall_time_s: float
     actions: int
     diff_lines: int
+    #: Ran under x86_64 emulation because no arm64 build exists. Several times
+    #: slower, so a timeout here is about the machine, not the agent.
+    emulated: bool = False
     answer: str = ""
     error: str = ""
     diff: str = ""
@@ -417,7 +480,7 @@ def run_instance(
 
     started = time.monotonic()
     deadline = Deadline.of(max_seconds)
-    name = start_container(instance)
+    name, emulated = start_container(instance)
     answer = error = ""
     state: dict = {}
     try:
@@ -455,6 +518,7 @@ def run_instance(
 
     return InstanceOutcome(
         instance_id=instance.instance_id,
+        emulated=emulated,
         resolved=verdict.resolved,
         grade=verdict,
         model_calls=int(state.get("model_calls") or 0),

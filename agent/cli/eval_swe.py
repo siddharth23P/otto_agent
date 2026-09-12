@@ -20,7 +20,7 @@ from typing_extensions import Annotated
 
 from agent.cli.ui import err, out
 from agent.eval.swe_bench import (
-    SweBenchUnavailable, image_for, load_dataset, run_instance, select,
+    SweBenchUnavailable, load_dataset, resolve_image, run_instance, select,
 )
 
 
@@ -69,7 +69,10 @@ def eval_swe_cmd(
     outcomes = []
     for i, item in enumerate(instances, 1):
         err.print(f"[{i}/{len(instances)}] {item.instance_id}  ({item.difficulty or 'unrated'})")
-        err.print(f"  image {image_for(item.instance_id)}")
+        image, emulated = resolve_image(item.instance_id)
+        err.print(f"  image {image}"
+                  + ("  [warn](x86_64 under emulation -- no arm64 build)[/]"
+                     if emulated else ""))
         try:
             outcome = run_instance(
                 item, max_seconds=max_seconds,
@@ -108,6 +111,7 @@ def eval_swe_cmd(
                 "fail_to_pass": [o.grade.fail_to_pass_passed, o.grade.fail_to_pass_total],
                 "pass_to_pass": [o.grade.pass_to_pass_passed, o.grade.pass_to_pass_total],
                 "diff_lines": o.diff_lines, "model_calls": o.model_calls,
+                "emulated": o.emulated,
                 "wall_time_s": round(o.wall_time_s, 1),
                 "error": o.error or o.grade.error,
             }
