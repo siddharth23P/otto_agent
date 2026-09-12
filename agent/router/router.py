@@ -6,8 +6,12 @@ from dataclasses import dataclass
 from langchain.chat_models import BaseChatModel
 
 from agent.router.llm_provider import reset as registry_reset
-from agent.router.llm_provider import get_provider, provider_class, provider_names
+from agent.router.llm_provider import get_provider
+from agent.router.llm_provider import provider_class, provider_names
+from agent.router.llm_provider.temperature import apply_to_params
 from agent.router.llm_provider.base import AuthError, Capability, CapabilityNotSupported, ModelInfo, ProviderError
+from agent.router import outcomes as seat_outcomes
+from agent.router import health as provider_health
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
 
 @dataclass(frozen=True,slots=True)
@@ -38,7 +42,22 @@ class RoutingDecision:
 
     @property
     def fell_back(self) -> bool:
-        return self.index > 0
+        """Something ahead of this candidate was TRIED and could not serve.
+
+        Not `index > 0`. Since agent/router/outcomes.py reorders the chain
+        from observed results, a later candidate can be chosen first on
+        purpose -- and reporting that as "degraded", which is what every
+        reader of this does, would call the router's best-evidenced choice a
+        failure. Degradation is about candidates that were skipped, so ask
+        that."""
+        return bool(self.skipped)
+
+    @property
+    def chosen_on_evidence(self) -> bool:
+        """Picked ahead of a candidate declared above it, nothing having
+        failed. The reason `otto route` can explain an order that does not
+        match mapping.py."""
+        return self.index > 0 and not self.skipped
     
 class NoViableRoute(ProviderError):
     def __init__(self, task: Task, skipped: tuple[Skip, ...]):
@@ -118,28 +137,36 @@ def _observe(name: str, *, model: str, input: Any,
 
 
 class Router:
-    """Otto is Inception-only in `TASK_ROUTES` (2026-09-09) -- every chat/plan/
-    reason/summarize chain now pins Mercury 2.5, and there is no second vendor
-    left to fail over to. `OPTIONAL` stays declared, just empty: Phase 8's
-    plain hive (`agent/graph/nodes.py`, `agent/graph/run.py` -- untouched by
-    this change) reads `ROUTER.secondary`/`ROUTER.REQUIRED` to give a
-    `secondary_seats` worth of clones a different vendor for diversity. With
-    `OPTIONAL` empty, `secondary` is always `None` and `run(..., 
-    secondary_seats=N)` for `N > 0` correctly raises its own clear
-    "No secondary model available" error instead of an AttributeError --
-    exactly the behavior it already had for "key not configured", now
-    permanent rather than incidental.
+    """Every configured provider is usable (2026-09-11).
+
+    This was a two-vendor router until now: `_usable()` admitted `REQUIRED` and
+    exactly one `secondary`, the first configured member of `OPTIONAL`, and
+    anything else with a valid key was skipped as "not the selected secondary".
+    That single-secondary rule existed to give Phase 8's plain hive
+    (`agent/graph/nodes.py`, `agent/graph/run.py`) one alternate vendor for
+    seat diversity -- and `agent/graph/` is now an empty package. The only
+    readers left were two display rows in `agent/cli/doctor.py`.
+
+    It has to go, because the routing table now names four vendors at once:
+    Anthropic judges and plans, OpenAI solves, Gemini summarises and reads
+    images, Inception keeps chat-fast plus the FIM/edit endpoints no other
+    vendor here serves. Under the old rule three of those four would silently
+    never be reached.
+
+    `REQUIRED` stays. Inception is still the one provider Otto cannot start
+    without -- it alone serves `Endpoint.FIM`/`Endpoint.EDIT`
+    (`mapping.py`'s `INCEPTION_ONLY_ENDPOINTS`), and a missing key there is a
+    broken install rather than a degraded one. Every other vendor is optional
+    in the real sense: configure it and its routes resolve, leave it out and
+    its routes are skipped with a legible reason.
     """
 
     REQUIRED = "inception"
-    OPTIONAL: tuple[str, ...] = ()
 
     def _snapshot(self) -> None:
         self._configured = tuple(p for p in provider_names() if self.catalogue.is_configured(p))
         if self.REQUIRED not in self._configured:
             raise AuthError("Otto requires Inception. Set INCEPTION_API_KEY in .env")
-        self.secondary = next((p for p in self.OPTIONAL if p in self._configured), None)
-        self.ignored = tuple(p for p in self.OPTIONAL if p in self._configured and p != self.secondary)
 
     def __init__(self, catalogue: Catalogue | None = None, *, strict: bool = False):
         self.catalogue = catalogue or RegistryCatalogue()
@@ -151,7 +178,7 @@ class Router:
         self._snapshot()
 
     def _usable(self, provider: str) -> bool:
-        return provider == self.REQUIRED or provider == self.secondary
+        return provider in self._configured
 
     def usable(self) -> tuple[str, ...]:
         return tuple(p for p in self._configured if self._usable(p))
@@ -165,7 +192,8 @@ class Router:
                 failures[name] = str(exc)
         return failures
     
-    def _match(self, c: Candidate, only: str | None = None) -> ModelInfo | str:
+    def _match(self, c: Candidate, only: str | None = None, *,
+               honour_cooldowns: bool = True) -> ModelInfo | str:
         provider = c.provider_name
         if only is not None and provider != only:
             return f"{provider} is not the pinned vendor"
@@ -180,6 +208,15 @@ class Router:
         model = self._select(pool, c)
         if model is None:
             return "no model matched"
+        # Last, and only when `cooling` is being honoured -- a candidate that
+        # is merely unwell is still the right answer when the alternative is
+        # no answer, so `resolve` re-runs the chain ignoring this if every
+        # candidate was skipped for it.
+        # Through the MODULE, not a name bound at import: `bind_health`
+        # swaps the module global, and a captured reference would
+        # silently keep consulting the one this process started with.
+        if honour_cooldowns and (why := provider_health.HEALTH.cooling(provider, model.id)):
+            return why
         return model
 
     def _select(self, pool, c: Candidate) -> ModelInfo | None:
@@ -211,16 +248,48 @@ class Router:
                     reverse=biggest)[0]
         
     def resolve(self, task: Task, *, only: str | None = None) -> RoutingDecision:
+        """The first viable candidate, preferring one that is not cooling.
+
+        Two passes, because a circuit breaker that leaves a task with no route
+        has turned a slow provider into a broken agent. The first pass skips
+        anything agent/router/health.py says is unwell; if that leaves nothing,
+        the second takes the chain as it stands. Cooldowns are a preference,
+        never a prohibition.
+        """
+        try:
+            return self._resolve(task, only=only, honour_cooldowns=True)
+        except NoViableRoute as exc:
+            if not any("cooling" in s.reason for s in exc.skipped):
+                raise
+            # Everything viable was merely unwell. Ask again anyway.
+            return self._resolve(task, only=only, honour_cooldowns=False)
+
+    def _resolve(self, task: Task, *, only: str | None,
+                 honour_cooldowns: bool) -> RoutingDecision:
         skips: list[Skip] = []
-        for i, c in enumerate(TASK_ROUTES[task]):
-            outcome = self._match(c, only=only)
+        declared = TASK_ROUTES[task]
+        # Declared order, re-ordered by what this installation has actually
+        # observed each seat's model achieve. A no-op until a (task, model)
+        # pair has enough runs behind it to be trusted, which is most of the
+        # time -- see agent/router/outcomes.py for why the bar is where it is.
+        chain = seat_outcomes.reorder(task.value, declared)
+        # `index` stays an index into the DECLARED chain, never into the tried
+        # order. Everything that reads it -- the tree `otto route`
+        # prints -- is asking "which candidate in mapping.py is this", and an
+        # index into a list the reader cannot see would answer a different
+        # question while looking like the same one.
+        position = {id(c): i for i, c in enumerate(declared)}
+        for tried, c in enumerate(chain):
+            i = position[id(c)]
+            outcome = self._match(c, only=only,
+                                  honour_cooldowns=honour_cooldowns)
             if isinstance(outcome, str):
                 skips.append(Skip(i, render(c), outcome))
                 continue
-            
-            if self.strict and i > 0:
+
+            if self.strict and tried > 0:
                 raise RoutingDegraded(task, tuple(skips))
-            
+
             return RoutingDecision(
                 task=task, provider=outcome.provider, model=outcome,
                 endpoint=c.endpoint, params=dict(c.params),
@@ -232,7 +301,21 @@ class Router:
         if d.endpoint is not Endpoint.CHAT:
             raise CapabilityNotSupported(f"{d.task.value} routes to {d.endpoint.value}, not chat")
         provider = get_provider(d.provider)
-        return provider.chat_model(d.model.id, **{**d.params, **overrides})
+        # Temperature is decided per MODEL, not per call site and not per
+        # vendor: Inception silently resets anything under 0.5 to 1.0, and
+        # OpenAI's reasoning models reject any value at all. See
+        # agent/router/llm_provider/temperature.py.
+        params = apply_to_params(d.provider, d.model.id, {**d.params, **overrides}, d.model)
+        llm = provider.chat_model(d.model.id, **params)
+        # Stamped so a failure downstream can name the vendor this came from:
+        # agent/pipeline/nodes.py's _call needs it to record a retirement
+        # against the right catalogue. Defensive, because not every chat class
+        # tolerates an unknown attribute.
+        try:
+            object.__setattr__(llm, "_otto_provider", d.provider)
+        except Exception:  # pragma: no cover -- slotted/frozen model classes
+            pass
+        return llm
     
     def chat_model(self, task: Task, *, only: str | None = None, **overrides) -> BaseChatModel:
         return self.model_for(self.resolve(task,only=only), **overrides)

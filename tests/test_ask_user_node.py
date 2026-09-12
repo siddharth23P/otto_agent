@@ -169,15 +169,16 @@ def test_ask_user_routes_back_to_whichever_role_asked(monkeypatch):
     assert result.goto == "finder"
 
 
-def test_ask_user_defaults_to_solver_if_asking_role_is_somehow_unset(monkeypatch):
-    # Defensive fallback, same "fail toward a safe default" spirit as
-    # _parse_router's own -- should never happen in practice (only
-    # ask_user() itself clears asking_role, and only after reading it).
+def test_ask_user_defaults_to_the_loop_if_asking_role_is_somehow_unset(monkeypatch):
+    # Defensive fallback -- should never happen in practice, since only
+    # ask_user() clears asking_role and only after reading it. The default is
+    # the working loop rather than the judge: an answer handed to the evaluator
+    # with nothing to judge would end the run.
     monkeypatch.setattr(pn, "interrupt", lambda payload: "8")
 
     result = pn.ask_user(_state(asking_role=None))
 
-    assert result.goto == "solver"
+    assert result.goto == "agent"
 
 
 def test_ask_user_writes_the_qa_into_context_not_messages(monkeypatch):
@@ -258,11 +259,13 @@ def _initial_state(text: str) -> dict:
 def test_a_real_graph_run_pauses_on_ask_user_and_resumes_via_command(monkeypatch):
     import uuid
 
+    # Three replies now, not five. The two router decisions are gone with the
+    # router: the loop asks, and after the answer it carries on in the SAME
+    # conversation rather than being re-dispatched into a fresh one.
     queue = [
-        "NODE: solver\nWHY: simple task",              # router's first 5-way decision
-        "ACTION: ask_user\nCODE:\nhow many queens?",   # solver's _tool_loop -> pauses
-        "FINAL:\n8-queens solution here",              # solver's fresh retry after resume
-        "NODE: evaluator\nWHY: judge it",              # router again
+        "- an 8-queens solution is produced",           # the run's checklist
+        "ACTION: ask_user\nCODE:\nhow many queens?",   # the loop pauses
+        "FINAL:\n8-queens solution here",              # it carries on after the answer
         "FINAL:\nAPPROVE: yes\nWHY: looks right",      # evaluator
     ]
 

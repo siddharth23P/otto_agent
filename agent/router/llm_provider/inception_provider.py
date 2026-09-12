@@ -263,6 +263,32 @@ def build_edit_prompt(
 # --------------------------------------------------------------------------
 
 
+#: Inception's documented temperature range for the chat endpoint. Their API
+#: reference is explicit that an out-of-range value is not clamped and not
+#: rejected -- it is "reset to default with warning", and the default for
+#: mercury-2.5 is 1.0.
+#:
+#: That silently inverts the intent of every low temperature this repo sets.
+#: agent/pipeline/nodes.py asks for 0.0 for the evaluator (a verdict should
+#: not be a dice roll), 0.2 for the router and summarizer, 0.3 for the finder
+#: and 0.4 for the planner. Every one of those was below the minimum, so every
+#: one was being served at 1.0 -- the most random setting available, for
+#: exactly the nodes written to be the most careful.
+#:
+#: Clamping sends 0.5 instead: the closest to what the caller asked for that
+#: the endpoint will honour. It cannot give them determinism, because this API
+#: does not offer it, but it stops "as deterministic as possible" from meaning
+#: "as random as possible".
+TEMPERATURE_RANGE = (0.5, 1.0)
+
+
+def _clamp_temperature(temperature: float | None) -> float | None:
+    if temperature is None:
+        return None
+    low, high = TEMPERATURE_RANGE
+    return min(max(temperature, low), high)
+
+
 class ChatInception(BaseChatModel):
     """LangChain chat model whose transport is the `inceptionai` SDK.
 
@@ -312,7 +338,7 @@ class ChatInception(BaseChatModel):
             "messages": [_to_sdk_message(m) for m in messages],
         }
         optional = {
-            "temperature": self.temperature,
+            "temperature": _clamp_temperature(self.temperature),
             "max_tokens": self.max_tokens,
             "diffusing": self.diffusing,
             "realtime": self.realtime,

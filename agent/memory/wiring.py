@@ -52,7 +52,7 @@ def summarize_for_memory(prompt: str) -> str:
     other graph call goes through, so a compaction counts against the
     same provider health/telemetry as everything else this session does.
     """
-    llm = ROUTER.chat_model(Task.SUMMARIZE, temperature=0.2)
+    llm = ROUTER.chat_model(Task.SUMMARIZE)
     return _call(llm, [SystemMessage(_SUMMARIZE_SYSTEM_PROMPT), HumanMessage(prompt)])
 
 

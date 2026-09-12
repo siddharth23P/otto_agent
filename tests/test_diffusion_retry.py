@@ -97,3 +97,122 @@ def test_non_diffusing_truncation_is_accepted_as_is():
 
     assert text == "normal streamed text"
     assert len(client.chat.completions.calls) == 1
+
+
+# ---- an empty stream from the provider ------------------------------------
+
+
+class _EmptyStreamLLM:
+    """Stands in for a provider that yields nothing: langchain_core raises
+    ValueError("No generation chunks were returned") from inside stream()
+    itself, so _call()'s `reply is None` branch never sees it."""
+
+    model = "mercury-2.5"
+    max_tokens = 1024
+    diffusing = True
+
+    def __init__(self, failures: int, then: str = ""):
+        self.remaining = failures
+        self.then = then
+        self.calls = 0
+
+    def stream(self, messages):
+        self.calls += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise ValueError("No generation chunks were returned")
+        yield SimpleNamespace(
+            content=self.then, response_metadata={"finish_reason": "stop"},
+        )
+
+    def model_copy(self, update):
+        return self
+
+
+def test_an_empty_stream_is_retried_and_then_succeeds():
+    llm = _EmptyStreamLLM(failures=1, then="the real answer")
+
+    assert _call(llm, [HumanMessage("hi")]) == "the real answer"
+    assert llm.calls == 2
+
+
+def test_a_persistently_empty_stream_returns_empty_rather_than_raising():
+    """It must not unwind the graph: an empty answer is a case every caller
+    here already handles (the unparseable-reply retry), an exception is not."""
+    llm = _EmptyStreamLLM(failures=MAX_DIFFUSION_RETRIES)
+
+    assert _call(llm, [HumanMessage("hi")]) == ""
+    assert llm.calls == MAX_DIFFUSION_RETRIES
+
+
+def test_an_unrelated_value_error_still_propagates():
+    class _Boom(_EmptyStreamLLM):
+        def stream(self, messages):
+            raise ValueError("something else entirely")
+            yield  # pragma: no cover
+
+    with pytest.raises(ValueError, match="something else entirely"):
+        _call(_Boom(failures=0), [HumanMessage("hi")])
+
+
+# ---- exceptions from a chat model Otto does not own -----------------------
+
+
+class _RaisingLLM:
+    """A chat model that raises a vendor SDK error out of .stream(), the way
+    ChatOpenAI / ChatAnthropic / ChatGoogleGenerativeAI do."""
+
+    max_tokens = 1024
+    diffusing = False
+
+    def __init__(self, exc, *, model_attr="model"):
+        self._exc = exc
+        setattr(self, model_attr, "some-vendor-model")
+
+    def stream(self, messages):
+        raise self._exc
+        yield  # pragma: no cover
+
+    def model_copy(self, update):
+        return self
+
+
+class _VendorRateLimit(Exception):
+    status_code = 429
+
+
+class _VendorAuth(Exception):
+    status_code = 401
+
+
+def test_a_vendor_sdk_error_becomes_a_provider_error():
+    """_run_role and evaluator catch only ProviderError, so an untranslated
+    vendor exception unwinds the whole graph instead of becoming a clean edge
+    back to the overseer."""
+    with pytest.raises(ProviderError):
+        _call(_RaisingLLM(_VendorRateLimit("slow down")), [HumanMessage("hi")])
+
+
+def test_the_translation_keeps_the_specific_subclass():
+    from agent.router.llm_provider.base import AuthError
+
+    with pytest.raises(AuthError):
+        _call(_RaisingLLM(_VendorAuth("bad key")), [HumanMessage("hi")])
+
+
+def test_an_already_translated_provider_error_is_not_rewrapped():
+    """Inception's own provider translates; re-wrapping would bury the
+    subclass the callers branch on."""
+    from agent.router.llm_provider.base import ProviderUnavailable
+
+    with pytest.raises(ProviderUnavailable):
+        _call(_RaisingLLM(ProviderUnavailable("inception is down")), [HumanMessage("hi")])
+
+
+def test_a_model_exposing_model_name_still_labels_correctly():
+    """ChatOpenAI exposes `model_name`, not `model` -- the plain attribute
+    access this replaced raised AttributeError there."""
+    from agent.pipeline.nodes import _model_label
+
+    assert _model_label(_RaisingLLM(_VendorAuth("x"), model_attr="model_name")) == "some-vendor-model"
+    assert _model_label(object()) == "object"

@@ -45,17 +45,26 @@ from agent.pipeline.run import _as_ask_event, _config, _graph_thread_id, _initia
 
 
 def test_initial_state_matches_the_agentstate_shape_with_empty_start_values():
+    """`plan`, `active_step` and `round` are gone: they belonged to the
+    seven-node graph that walked a JSON plan one step at a time, and nothing
+    has read or written them since planning became a MODE. They were seeded
+    here and declared in state.py and touched nowhere else."""
     state = _initial("do the thing")
+
+    from agent.pipeline.state import AgentState
+
+    assert set(state) <= set(AgentState.__annotations__), (
+        "_initial seeds a key AgentState does not declare"
+    )
+    for gone in ("plan", "active_step", "round"):
+        assert gone not in state
 
     assert [m.content for m in state["messages"]] == ["do the thing"]
     assert state["board"] == []
-    assert state["round"] == 0
     assert state["node"] is None
     assert state["feedback"] == ""
     assert state["output"] is None
     assert state["context"] == ""
-    assert state["plan"] is None
-    assert state["active_step"] is None
     assert state["node_error"] is None
     assert state["pending_question"] is None
     assert state["pending_choices"] is None
@@ -140,3 +149,128 @@ def test_as_ask_event_defaults_choices_to_empty_list_when_absent():
     ask = _as_ask_event(update, "thread-1")
 
     assert ask["__ask__"]["choices"] == []
+
+
+# --------------------------------------------------------------------------
+# _stream_events -- the loop rewrite's stream shape
+# --------------------------------------------------------------------------
+#
+# app.stream() yields a bare payload for one stream mode and a (mode, payload)
+# TUPLE for several, so asking for "custom" alongside "updates" changes the
+# shape every caller sees. _stream_events is the one place that knows it.
+#
+# Why "custom" is needed at all: "updates" emits once per node RETURN. That was
+# fine when a node returned every few seconds. With one long-running agent loop
+# it means nothing reaches the screen until the loop finishes -- `otto chat`
+# would sit silent for minutes and then print one panel.
+
+from agent.pipeline.run import _stream_events
+
+
+def test_a_custom_event_passes_straight_through():
+    """The loop emits these already node-shaped, so chat.py and tui.py need no
+    changes -- their `next(iter(update.items()))` still works."""
+    payload = {"agent": {"board": ["solve: execute_bash pytest -> exit 1"]}}
+    events = list(_stream_events([("custom", payload)], "t1"))
+    assert events == [(payload, False)]
+
+
+def test_an_ordinary_update_passes_through_too():
+    payload = {"evaluator": {"board": ["approved"]}}
+    assert list(_stream_events([("updates", payload)], "t1")) == [(payload, False)]
+
+
+def test_an_interrupt_in_the_updates_stream_becomes_an_ask_event():
+    update = {"__interrupt__": (Interrupt(value={"question": "which one?", "choices": ["a", "b"]}),)}
+    [(event, is_ask)] = list(_stream_events([("updates", update)], "thread-9"))
+    assert is_ask
+    assert event["__ask__"] == {"question": "which one?", "choices": ["a", "b"], "thread_id": "thread-9"}
+
+
+def test_a_custom_event_is_never_mistaken_for_an_interrupt():
+    """The loop's own events are not checked for `__interrupt__` -- only
+    LangGraph puts that key in an updates payload, and scanning custom
+    payloads for it would let a board line ending a run by accident."""
+    payload = {"agent": {"board": ["__interrupt__ is just text here"]}}
+    [(event, is_ask)] = list(_stream_events([("custom", payload)], "t1"))
+    assert not is_ask
+
+
+def test_live_events_arrive_before_the_node_returns():
+    """The ordering that makes this worth doing: custom events are yielded as
+    they happen, and the node's own update lands last."""
+    stream = [
+        ("custom", {"agent": {"board": ["step 1"]}}),
+        ("custom", {"agent": {"board": ["step 2"]}}),
+        ("updates", {"agent": {"board": ["done"]}}),
+    ]
+    boards = [e["agent"]["board"][0] for e, _ in _stream_events(stream, "t1")]
+    assert boards == ["step 1", "step 2", "done"]
+
+
+# --------------------------------------------------------------------------
+# _salvage / _paused -- a run must not lose work it already did
+# --------------------------------------------------------------------------
+#
+# Claw-Eval task C01 is why these exist. The agent had computed and verified a
+# mortgage comparison; then the model put prose where a file path goes,
+# Path.exists() raised OSError(ENAMETOOLONG), and 1096 seconds of correct work
+# was thrown away. The grader saw a conversation with no assistant messages at
+# all and scored completion 0.00.
+
+from agent.pipeline.run import _paused, _salvage
+
+
+def test_an_approved_answer_is_left_alone():
+    assert _salvage({"final_output": "the real answer", "output": "draft"})["final_output"] == "the real answer"
+
+
+def test_an_unapproved_candidate_is_promoted_rather_than_lost():
+    """`output` is the agent's own best attempt. Reporting it beats reporting
+    nothing, which is what a run that never reached approval used to do."""
+    assert _salvage({"final_output": None, "output": "best effort"})["final_output"] == "best effort"
+
+
+def test_a_blank_candidate_is_not_promoted_over_nothing():
+    assert not _salvage({"final_output": None, "output": "   "}).get("final_output")
+
+
+def test_a_crash_keeps_the_work_and_says_what_happened():
+    state = _salvage({"output": "verified numbers"}, OSError("File name too long"))
+    assert state["final_output"] == "verified numbers"
+    assert any("File name too long" in line for line in state["board"])
+
+
+def test_a_crash_with_nothing_reached_still_reports_the_failure():
+    state = _salvage({}, RuntimeError("boom"))
+    assert any("boom" in line for line in state["board"])
+
+
+def test_an_interrupt_is_detected_rather_than_read_as_a_finished_run():
+    """app.invoke returns NORMALLY on an interrupt, with final_output still
+    None, and says so nowhere a caller looks."""
+    assert _paused({"__interrupt__": [object()]})
+    assert _paused({"pending_question": "which one?"})
+
+
+def test_an_ordinary_finished_run_is_not_mistaken_for_a_pause():
+    assert not _paused({"final_output": "done", "pending_question": None})
+
+
+def test_a_question_nobody_can_answer_becomes_the_answer():
+    """`run_pipeline` has no resume path -- that is the streaming API. So a run
+    that stopped to ask something returns the question, which is both honest
+    and useful: the caller learns which decision is missing.
+
+    Live on Claw-Eval T026: the mutation gate correctly stopped the agent
+    guessing between three contacts named Zhang, it asked exactly as the grader
+    requires, and the task recorded no assistant output at all."""
+    state = _salvage({"pending_question": "which Zhang did you mean?",
+                      "pending_choices": ["Wei Zhang, Engineering", "Wei Zhang, Marketing"]})
+    assert "which Zhang did you mean?" in state["final_output"]
+    assert "Marketing" in state["final_output"]
+
+
+def test_a_real_answer_still_wins_over_a_pending_question():
+    state = _salvage({"output": "the real answer", "pending_question": "anything?"})
+    assert state["final_output"] == "the real answer"

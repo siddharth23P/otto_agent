@@ -42,7 +42,21 @@ CREATE TABLE IF NOT EXISTS chunks (
     hash TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
     content TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- 0,1,2,... in the order this `kind` first flushed them, so a chunk's
+    -- NEIGHBOURS are recoverable (chunks_near, below). A dialogue turn is a
+    -- poor retrieval unit on its own: the answer to "when did she join the
+    -- group?" is routinely in the turn AFTER the one that names it, so
+    -- retrieval.py returns each hit with the turns either side of it.
+    seq INTEGER,
+    -- Which model produced `embedding`; see _CHUNK_MIGRATIONS above.
+    embedding_model TEXT,
+    -- The chunk's own embedding, written at flush time (agent/memory/
+    -- queue.py) so retrieval.py can rank the raw text directly instead of
+    -- only ranking the bullets that summarize it. NULL is a valid state,
+    -- exactly as it is for a bullet -- the local model was unavailable
+    -- when this chunk was flushed (agent/memory/embeddings.py).
+    embedding BLOB
 );
 CREATE TABLE IF NOT EXISTS bullets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,15 +65,69 @@ CREATE TABLE IF NOT EXISTS bullets (
     text TEXT NOT NULL,
     hash_refs TEXT NOT NULL,
     embedding BLOB,
+    embedding_model TEXT,
     superseded INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bullets_kind_superseded ON bullets(kind, superseded);
+CREATE INDEX IF NOT EXISTS idx_chunks_kind_seq ON chunks(kind, seq);
 """
+
+#: Columns added to `chunks` after the first release of this schema. SQLite's
+#: CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a session DB
+#: written before they existed needs them added explicitly -- one ALTER each,
+#: skipped when already present. Existing rows keep NULL for both, which both
+#: readers already treat as "unknown", so an old DB degrades to the old
+#: behaviour rather than erroring.
+_CHUNK_MIGRATIONS = (
+    ("seq", "INTEGER"),
+    ("embedding", "BLOB"),
+    ("embedding_model", "TEXT"),
+)
+
+#: `bullets` carries an embedding too, so it needs the same stamp -- and had no
+#: migration of its own until now.
+_BULLET_MIGRATIONS = (("embedding_model", "TEXT"),)
+
+#: Which model produced a vector. Without it, two embedding spaces can be
+#: compared and the storage layer cannot tell: `_from_blob` infers length from
+#: the byte count, so a 384-dim and a 1536-dim vector are both just bytes.
+#:
+#: Mismatched dimensions at least raise -- and then get swallowed by the bare
+#: `except Exception` in agent/pipeline/tools.py, leaving recall quietly dead
+#: for the rest of the session. The worse case is a hosted model emitting the
+#: SAME dimension (Gemini can be asked for 384, OpenAI's can be truncated):
+#: nothing raises, the scores look plausible, and two unrelated spaces are
+#: ranked against each other. A dimension check would not catch that. The model
+#: name is the only thing that does.
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _to_blob(embedding: "np.ndarray | None") -> bytes | None:
+    return embedding.astype(np.float32).tobytes() if embedding is not None else None
+
+
+def _stamp(embedding: "np.ndarray | None", model: str | None) -> str | None:
+    """Which model to record for this vector.
+
+    Defaults to whatever the process is embedding with right now, so a caller
+    that simply passes a vector cannot forget to say where it came from -- the
+    failure that would reintroduce is silent, not loud.
+    """
+    if embedding is None:
+        return None
+    if model:
+        return model
+    from agent.memory.embeddings import current_model_name
+
+    return current_model_name()
+
+
+def _from_blob(blob: bytes | None) -> "np.ndarray | None":
+    return np.frombuffer(blob, dtype=np.float32) if blob is not None else None
 
 
 @dataclass(frozen=True)
@@ -77,6 +145,21 @@ class Bullet:
     #: embeddings.py's EmbeddingUnavailable) -- excluded from a semantic
     #: search's ranking, not an error.
     embedding: np.ndarray | None
+    #: Which model produced `embedding`; see Chunk.embedding_model.
+    embedding_model: str | None = None
+
+
+@dataclass(frozen=True)
+class Chunk:
+    """One permanently-stored raw item, with the position and embedding
+    retrieval.py needs to rank it and to find what sat either side of it."""
+    seq: int | None
+    hash: str
+    content: str
+    embedding: np.ndarray | None
+    #: Which model produced `embedding`. None for a vector written before this
+    #: column existed -- treated as "unknown space", i.e. not comparable.
+    embedding_model: str | None = None
 
 
 class MemoryStore:
@@ -85,7 +168,15 @@ class MemoryStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.executescript(_SCHEMA)
+        self._migrate_chunks()
         self._conn.commit()
+
+    def _migrate_chunks(self) -> None:
+        for table, migrations in (("chunks", _CHUNK_MIGRATIONS), ("bullets", _BULLET_MIGRATIONS)):
+            present = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            for column, sql_type in migrations:
+                if column not in present:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
 
     @classmethod
     def for_session(cls, session_id: str) -> "MemoryStore":
@@ -96,14 +187,72 @@ class MemoryStore:
 
     # ---- chunks (permanent, content-addressed raw text) ----------------
 
-    def add_chunk(self, kind: str, hash_: str, content: str) -> None:
+    def add_chunk(
+        self, kind: str, hash_: str, content: str, embedding: np.ndarray | None = None,
+        embedding_model: str | None = None,
+    ) -> None:
         """INSERT OR IGNORE -- a hash that's already stored is left exactly
-        as it was (dedup, not overwrite; see hashing.py's own docstring)."""
+        as it was (dedup, not overwrite; see hashing.py's own docstring), which
+        also means it keeps the `seq` it was first given: a turn repeated
+        verbatim much later stays one chunk, sitting where it first appeared.
+        """
         self._conn.execute(
-            "INSERT OR IGNORE INTO chunks (hash, kind, content, created_at) VALUES (?, ?, ?, ?)",
-            (hash_, kind, content, _now()),
+            "INSERT OR IGNORE INTO chunks "
+            "(hash, kind, content, created_at, seq, embedding, embedding_model) "
+            "VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM chunks WHERE kind = ?), ?, ?)",
+            (hash_, kind, content, _now(), kind, _to_blob(embedding),
+             _stamp(embedding, embedding_model)),
         )
         self._conn.commit()
+
+    def stale_vector_count(self, model: str) -> int:
+        """How many stored vectors were made by a different model.
+
+        Zero means nothing needs re-embedding. Anything else means recall is
+        silently degraded to unranked-most-recent for those rows, because
+        agent/memory/retrieval.py refuses to rank across embedding spaces.
+        """
+        rows = self._conn.execute(
+            "SELECT (SELECT COUNT(*) FROM chunks "
+            "        WHERE embedding IS NOT NULL AND IFNULL(embedding_model,'') != ?) "
+            "     + (SELECT COUNT(*) FROM bullets "
+            "        WHERE embedding IS NOT NULL AND IFNULL(embedding_model,'') != ?)",
+            (model, model),
+        ).fetchone()
+        return int(rows[0] or 0)
+
+    def reembed(self, embed_texts, model: str, *, batch: int = 64) -> int:
+        """Re-embed every stored vector that a different model produced, and
+        return how many were rewritten.
+
+        This exists because `add_chunk` is INSERT OR IGNORE keyed on a hash of
+        the TEXT alone: re-running against an existing store never overwrites,
+        so a stale vector would otherwise sit there forever, unrankable and
+        unmentioned.
+
+        `embed_texts` is a `list[str] -> list[np.ndarray]` callable -- the
+        caller's, not this module's, so the store keeps its promise of
+        depending on nothing that needs a network or a key.
+        """
+        rewritten = 0
+        for table, key in (("chunks", "hash"), ("bullets", "id")):
+            column = "content" if table == "chunks" else "text"
+            rows = self._conn.execute(
+                f"SELECT {key}, {column} FROM {table} "
+                f"WHERE embedding IS NOT NULL AND IFNULL(embedding_model,'') != ?",
+                (model,),
+            ).fetchall()
+            for start in range(0, len(rows), batch):
+                window = rows[start:start + batch]
+                vectors = embed_texts([r[1] for r in window])
+                for (identifier, _), vector in zip(window, vectors):
+                    self._conn.execute(
+                        f"UPDATE {table} SET embedding = ?, embedding_model = ? WHERE {key} = ?",
+                        (_to_blob(vector), model, identifier),
+                    )
+                    rewritten += 1
+            self._conn.commit()
+        return rewritten
 
     def get_chunks(self, hashes: list[str]) -> dict[str, str]:
         if not hashes:
@@ -114,17 +263,66 @@ class MemoryStore:
         ).fetchall()
         return dict(rows)
 
+    def chunk_hashes(self, kind: str) -> list[str]:
+        """Every stored hash of `kind`, oldest first.
+
+        For a store small enough to rank in full -- agent/memory/lessons.py's
+        bank, which is capped at three writes per run and deduplicated. The
+        conversation store is not small enough and does not use this.
+        """
+        rows = self._conn.execute(
+            "SELECT hash FROM chunks WHERE kind = ? ORDER BY seq", (kind,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_chunk_rows(self, kind: str, hashes: list[str]) -> list[Chunk]:
+        """The full `Chunk` records for `hashes`, oldest first -- what
+        retrieval.py ranks over once a bullet match has narrowed the store
+        down to a candidate set ("first pulling all the hash and compiling
+        the list then finding relevant information (not all)" -- the spec).
+        """
+        if not hashes:
+            return []
+        placeholders = ",".join("?" for _ in hashes)
+        rows = self._conn.execute(
+            f"SELECT seq, hash, content, embedding, embedding_model FROM chunks "
+            f"WHERE kind = ? AND hash IN ({placeholders}) ORDER BY seq",
+            [kind, *hashes],
+        ).fetchall()
+        return [Chunk(seq=r[0], hash=r[1], content=r[2], embedding=_from_blob(r[3]),
+                      embedding_model=r[4]) for r in rows]
+
+    def chunks_near(self, kind: str, seqs: list[int], window: int) -> list[Chunk]:
+        """Every chunk of `kind` within `window` positions of any of `seqs`,
+        oldest first, the hits themselves included and deduplicated -- the
+        turns either side of a match, which is where a dialogue's answer
+        very often actually sits (see the `seq` column's own note above).
+        """
+        wanted = {s + d for s in seqs for d in range(-window, window + 1) if s + d >= 0}
+        if not wanted:
+            return []
+        placeholders = ",".join("?" for _ in wanted)
+        rows = self._conn.execute(
+            f"SELECT seq, hash, content, embedding, embedding_model FROM chunks "
+            f"WHERE kind = ? AND seq IN ({placeholders}) ORDER BY seq",
+            [kind, *sorted(wanted)],
+        ).fetchall()
+        return [Chunk(seq=r[0], hash=r[1], content=r[2], embedding=_from_blob(r[3]),
+                      embedding_model=r[4]) for r in rows]
+
     # ---- bullets (the current, compacted-down summary of everything) ---
 
     def add_bullet(
         self, kind: str, generation: int, text: str,
         hash_refs: list[str], embedding: np.ndarray | None,
+        embedding_model: str | None = None,
     ) -> int:
-        blob = embedding.astype(np.float32).tobytes() if embedding is not None else None
         cur = self._conn.execute(
-            "INSERT INTO bullets (kind, generation, text, hash_refs, embedding, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (kind, generation, text, json.dumps(hash_refs), blob, _now()),
+            "INSERT INTO bullets "
+            "(kind, generation, text, hash_refs, embedding, embedding_model, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (kind, generation, text, json.dumps(hash_refs), _to_blob(embedding),
+             _stamp(embedding, embedding_model), _now()),
         )
         self._conn.commit()
         return cur.lastrowid
@@ -142,7 +340,7 @@ class MemoryStore:
 
     def current_bullets(self, kind: str) -> list[Bullet]:
         rows = self._conn.execute(
-            "SELECT id, kind, generation, text, hash_refs, embedding FROM bullets "
+            "SELECT id, kind, generation, text, hash_refs, embedding, embedding_model FROM bullets "
             "WHERE kind = ? AND superseded = 0 ORDER BY id",
             (kind,),
         ).fetchall()
@@ -150,7 +348,8 @@ class MemoryStore:
             Bullet(
                 id=r[0], kind=r[1], generation=r[2], text=r[3],
                 hash_refs=json.loads(r[4]),
-                embedding=(np.frombuffer(r[5], dtype=np.float32) if r[5] is not None else None),
+                embedding=_from_blob(r[5]),
+                embedding_model=r[6],
             )
             for r in rows
         ]

@@ -69,7 +69,12 @@ from typing import Callable
 
 from agent.memory.hashing import content_hash
 from agent.memory.queue import TieredQueue
-from agent.memory.retrieval import recall
+from agent.memory.retrieval import (
+    DEFAULT_MAX_CHUNKS,
+    DEFAULT_NEIGHBOUR_WINDOW,
+    DEFAULT_TOKEN_BUDGET,
+    recall,
+)
 from agent.memory.store import MemoryStore
 from agent.memory.tokens import count_tokens
 
@@ -274,7 +279,11 @@ def run_one_conversation(
     *,
     summarize: Callable[[str], str],
     top_k: int = 5,
+    max_chunks: int = DEFAULT_MAX_CHUNKS,
+    neighbour_window: int = DEFAULT_NEIGHBOUR_WINDOW,
+    token_budget: int = DEFAULT_TOKEN_BUDGET,
     store_path: Path | None = None,
+    keep_store: bool = False,
     max_turns: int | None = None,
     x_budget: int | None = None,
     y_budget: int | None = None,
@@ -286,6 +295,12 @@ def run_one_conversation(
     QA items whose evidence falls after the cutoff are simply skipped
     (their evidence never got appended, so scoring them would be
     meaningless either way).
+
+    `keep_store` leaves the SQLite file behind instead of deleting it, so the
+    same replay can be scored again under different retrieval settings without
+    paying for another pass of `summarize` -- which matters specifically for
+    `live=True`, where every compaction is a real LLM call and the chunks and
+    bullets it produced are the expensive part, not the scoring.
 
     `x_budget`/`y_budget` default to agent/memory/queue.py's own real
     production constants (X_BUDGET=24,000/Y_BUDGET=80,000) when left
@@ -334,7 +349,11 @@ def run_one_conversation(
 
         stored = all(_is_reachable(store, queue, text) for text in evidence_texts)
         visible_verbatim = all(_is_verbatim(queue, text) for text in evidence_texts)
-        recalled_text = recall(store, kind, qa["question"], top_k=top_k)
+        recalled_text = recall(
+            store, kind, qa["question"], top_k=top_k,
+            max_chunks=max_chunks, neighbour_window=neighbour_window,
+            token_budget=token_budget,
+        )
         recalled = any(_normalize(t) in _normalize(recalled_text) for t in evidence_texts)
 
         qa_results.append(QAResult(
@@ -349,7 +368,8 @@ def run_one_conversation(
     bullet_count = len(bullets)
     unparsed_bullet_count = sum(1 for b in bullets if _UNPARSED_BULLET.match(b.text))
     store.close()
-    path.unlink(missing_ok=True)
+    if not keep_store:
+        path.unlink(missing_ok=True)
 
     return ConversationResult(
         sample_id=sample["sample_id"], turn_count=turn_count, raw_tokens=raw_tokens,
@@ -444,6 +464,9 @@ def run_benchmark(
     *,
     live: bool = False,
     top_k: int = 5,
+    max_chunks: int = DEFAULT_MAX_CHUNKS,
+    neighbour_window: int = DEFAULT_NEIGHBOUR_WINDOW,
+    token_budget: int = DEFAULT_TOKEN_BUDGET,
     max_turns: int | None = None,
     x_budget: int | None = None,
     y_budget: int | None = None,
@@ -458,6 +481,12 @@ def run_benchmark(
     recall automatically (agent/memory/embeddings.py) -- `live` changes
     summary quality, not whether embeddings get attempted.
 
+    `top_k` is how many BULLETS recall() ranks (stage 1); `max_chunks` is how
+    many raw chunks it actually returns (stage 2's cap), and
+    `neighbour_window` how many chunks either side of each of those come with
+    it -- agent/memory/retrieval.py's own module docstring for why the last
+    two exist and what they were measured to be worth.
+
     `x_budget`/`y_budget`, left None, default to agent/memory/queue.py's
     own production constants inside run_one_conversation() -- pass smaller
     values for a "stress test" run that actually forces compaction (see
@@ -471,7 +500,9 @@ def run_benchmark(
 
     results = [
         run_one_conversation(
-            sample, summarize=summarize, top_k=top_k, max_turns=max_turns,
+            sample, summarize=summarize, top_k=top_k, max_chunks=max_chunks,
+            neighbour_window=neighbour_window, token_budget=token_budget,
+            max_turns=max_turns,
             x_budget=x_budget, y_budget=y_budget,
         )
         for sample in samples

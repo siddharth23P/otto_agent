@@ -14,6 +14,8 @@ never let a routing/provider failure crash the whole tool loop.
 """
 import pytest
 
+from conftest import posix_only
+
 from agent.pipeline import tools as pt
 from agent.pipeline.tools import TOOL_DISPATCH, TOOL_TIERS, execute_bash, rag, web_search
 from agent.router.llm_provider.base import ProviderError
@@ -27,6 +29,7 @@ def test_execute_bash_runs_a_real_command_and_captures_stdout():
     assert result.returncode == 0
 
 
+@posix_only
 def test_execute_bash_captures_a_nonzero_exit_and_stderr():
     result = execute_bash("echo oops 1>&2; exit 3")
 
@@ -42,29 +45,90 @@ def test_execute_bash_times_out_on_a_hanging_command():
     assert not result.ok
 
 
-def test_web_search_stub_fails_cleanly_with_a_legible_reason():
-    result = web_search("who won the game last night")
+def test_web_search_without_a_key_degrades_instead_of_crashing():
+    """No ANTHROPIC_API_KEY means the WEB route has no viable candidate -- and
+    it deliberately has no fallback, because a model with no web access would
+    answer from memory while looking like a search. That must reach the tool
+    loop as an ordinary failed call, not as an exception."""
+    result = web_search("what shipped in Python 3.14")
 
     assert not result.ok
-    assert result.returncode != 0
-    assert "not implemented" in result.stderr
-    assert "who won the game last night" in result.stderr
+    assert "web_search failed" in result.stderr
 
 
-def test_rag_stub_fails_cleanly_with_a_legible_reason():
-    result = rag("what does our onboarding doc say")
+def test_web_search_refuses_an_empty_query():
+    assert not web_search("   ").ok
+
+
+def test_rag_without_a_workspace_says_there_are_no_files():
+    """rag searches the FILES in the bound workspace; recall_memory searches
+    what this conversation said. Keeping those distinct in the failure text
+    matters as much as in the docstrings -- two tools that sound alike cost
+    tool-loop turns."""
+    result = rag("where is the retry budget configured")
 
     assert not result.ok
-    assert "not implemented" in result.stderr
+    assert "no workspace is bound" in result.stderr
 
 
-def test_all_seven_tools_are_registered_read_only():
+def test_rag_refuses_an_empty_query():
+    assert not rag("  ").ok
+
+
+def test_every_tool_is_registered_with_a_tier_and_dispatchable():
     assert set(TOOL_TIERS) == {
-        "execute_python", "execute_bash", "web_search", "rag",
+        "execute_python", "execute_bash", "web_search", "rag", "code_map",
         "complete_code", "predict_edit", "recall_memory",
+        "read_file", "list_files", "write_file", "edit_file", "view_image",
+        "browse", "browse_act", "look", "look_act",
     }
-    assert all(tier == "read_only" for tier in TOOL_TIERS.values())
     assert set(TOOL_DISPATCH) == set(TOOL_TIERS)
+
+
+def test_every_mutating_tool_is_held_before_it_runs():
+    """The invariant the tier system exists for, restated now that it has teeth.
+
+    It used to be "nothing reachable may be irreversible", enforced by asserting
+    the MUTATING tier was EMPTY -- which made the tier a naming convention with
+    a tripwire rather than a mechanism. Then `browse_act` arrived: clicking a
+    button on a live site genuinely is irreversible, and refusing to have such
+    a tool would have meant refusing to drive a browser at all.
+
+    So the invariant is now the stronger one it was always standing in for:
+    anything irreversible is HELD for a check before it runs
+    (nodes.py's `_mutates` and MUTATION_GATE_NOTE). A tier that no longer
+    matches the gate is the bug this catches.
+    """
+    from agent.pipeline import nodes as pn
+
+    for name, tier in TOOL_TIERS.items():
+        assert pn._mutates(name) == (tier == pt.MUTATING), (
+            f"{name} is tiered {tier} but the gate disagrees"
+        )
+    assert any(tier == pt.MUTATING for tier in TOOL_TIERS.values()), (
+        "no tool is MUTATING, so the gate is untested by this invariant"
+    )
+
+
+def test_a_workspace_write_is_not_treated_as_irreversible():
+    """Writing into a directory the caller opened and can throw away is
+    recoverable -- write it again. Gating it measurably cost a model call per
+    file and bought nothing."""
+    from agent.pipeline import nodes as pn
+
+    assert not pn._mutates("write_file")
+    assert not pn._mutates("edit_file")
+
+
+def test_every_workspace_tool_refuses_when_no_workspace_is_bound():
+    """What keeps this from widening an ordinary chat turn: a run that never
+    opened a workspace cannot write anywhere at all."""
+    workspace_tools = [name for name, tier in TOOL_TIERS.items() if tier == pt.WORKSPACE]
+    assert workspace_tools
+    for name in workspace_tools:
+        result = TOOL_DISPATCH[name]("some/path.txt\nbody")
+        assert not result.ok, f"{name} should refuse with no workspace bound"
+        assert "no workspace is bound" in result.stderr
 
 
 def test_recall_memory_fails_cleanly_with_no_store_bound_for_this_run():

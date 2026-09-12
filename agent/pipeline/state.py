@@ -1,59 +1,26 @@
-"""State schema for the overseer/planner/solver/summarizer/finder/evaluator
-graph (agent/pipeline/nodes.py).
+"""What one run carries between the two nodes.
 
-Second revision of this graph (2026-09-10, same day it replaced the
-orchestrator/worker/evaluate/subtask_consensus/synthesize swarm pipeline):
-ROUTER stopped being a one-shot dispatcher and became the overseer -- it is
-re-invoked after EVERY node (not just after an evaluator rejection) and
-decides the single next action from everything accumulated so far. Two
-fields exist because of that shift that didn't before: `context` (material
-finder/summarizer hand forward) and `plan`.
+`AgentState` is a TypedDict, not the conversation: the conversation lives in
+`transcript` as plain dicts, because LangGraph serialises state on every
+super-step and Langfuse serialises it into every span, so storing message
+OBJECTS would put the whole exchange through both on each pass.
 
-`round` is telemetry only now, not a budget -- there is deliberately no
-constant anywhere in this graph that caps how many times the overseer may
-retry a task (2026-09-10 design call: "we dont need any variable to limit
-number of rounds"). The only thing that can still end a run early is
-LangGraph's own recursion_limit (nodes.py's `_RECURSION_SAFETY_NET`), and
-that exists to catch a genuinely runaway loop (a bug), never to be the
-reason a real, converging request stops.
+The fields that decide behaviour rather than merely record it:
 
-Third refinement, same day: `plan` stopped being free text. It is a JSON-
-shaped list of step dicts once the evaluator approves it --
-`{"task": str, "route_to": str | None, "output": str | None}` each -- with
-`task` filled in by the planner and `route_to` filled in by the overseer,
-one step at a time, as it assigns each step to whichever of
-solver/summarizer/finder should execute it (agent/pipeline/nodes.py's
-STEP_TARGETS/STEP_ROUTE_PROMPT). `active_step` exists because of that: the
-index into `plan` of whichever step is currently in flight, so a role node
-revising a rejected final-answer judgment (which, once a plan is active, is
-really just the LAST step's output) knows which step's `output` to
-overwrite rather than only ever appending a fresh, disconnected context
-entry alongside a now-stale one.
+  checklist   what a correct answer must contain, written from the TASK before
+              any attempt exists and never rewritten. The evaluator scores
+              against it and the loop is shown it. A run holds one.
+  mode        which model and guidance the loop is running on now; `mode_log`
+              is every switch, which is also how `_record_seat` knows whether
+              a run was single-mode enough to credit anything.
+  model_calls what the run has spent, counted in REQUESTS.
+  actions     one line per tool call, which is what survives compaction and
+              what both the loop and the judge read instead of the transcript.
 
-Fifth refinement, same day (2026-09-10 design call: "if evaluator fails
-router should again go to planner for planning next steps based on
-current output"): a live run crashed the whole graph on an
-httpx.ReadTimeout raised mid-stream by the Inception provider, uncaught,
-all the way up through nodes.py's `_call`. `node_error` exists to turn
-that from a crash into a normal graph edge -- ANY node's own LLM call
-(a role node's, or the evaluator's) can raise a ProviderError (nodes.py's
-`_run_role`/`evaluator` now catch it instead of letting it propagate),
-and when that happens the node returns to router() with `node_error` set
-instead of a real `output`/verdict. router() checks `node_error` FIRST,
-ahead of everything else, and deterministically (no LLM call -- the LLM
-call is exactly what just failed) escalates to planner, discarding any
-active plan the same way an ordinary rejection-driven escalation already
-does. The failure text also gets written into `feedback` so planner sees
-it via the existing "PREVIOUS ATTEMPT BY <role>" background display
-(_role_body) alongside whatever `output` already existed -- the "based on
-current output" part of the request -- without needing a second display
-mechanism. See nodes.py's module docstring for the full reasoning.
-
-Seventh refinement, same day (nodes.py's module docstring has the full
-design discussion): `pending_question`/`pending_choices`/`asking_role`
-exist so a role node or the evaluator can pause the whole run -- via
-LangGraph's own interrupt()/Command(resume=...) -- and ask the person
-something it's genuinely stuck without, instead of guessing or looping.
+An earlier design had the overseer build a JSON `plan` of `PlanStep` dicts and
+walk it one step at a time, with `active_step` and `round` tracking where it
+was. That graph is gone -- planning is a MODE the one agent switches into --
+and those fields went with it rather than lingering as state nothing reads.
 """
 import operator
 from typing import Annotated
@@ -62,23 +29,6 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
 
 
-class PlanStep(TypedDict):
-    #: What this step needs to accomplish -- written by the planner, never
-    #: rewritten afterward (a step that turns out to be wrong is corrected
-    #: by re-planning from scratch, not edited in place; see router()'s
-    #: "escalating back to planner resets the whole plan" behavior).
-    task: str
-    #: Which specialist executes this step -- one of nodes.py's
-    #: STEP_TARGETS ("solver", "summarizer", "finder"; never "planner" or
-    #: "evaluator" -- no re-planning or per-step judgment mid-plan in this
-    #: design). None until the overseer assigns it, right before dispatch.
-    route_to: str | None
-    #: That specialist's result for this step. None means "not run yet" --
-    #: the sentinel _next_pending_step_index (nodes.py) scans for; an empty
-    #: string is a legitimate (if useless) completed result, not the same
-    #: as unset.
-    output: str | None
-
 
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
@@ -86,8 +36,6 @@ class AgentState(TypedDict):
     #: How many times the overseer has been invoked so far (starts at 0,
     #: incremented by router() on every call). Telemetry/tracing only --
     #: nothing in this graph reads it to force a stop; see the module
-    #: docstring.
-    round: int
     #: Whichever node MOST RECENTLY produced `output` -- one of ROLE_NODES
     #: (nodes.py), or None before anything has run. Set by that node itself
     #: (self-reported), not predicted by router() ahead of time. `_run_role`
@@ -118,19 +66,6 @@ class AgentState(TypedDict):
     #: plan execution), so later steps can see earlier steps' results.
     #: Empty string until any of the above has run.
     context: str
-    #: The approved plan, as a list of PlanStep dicts -- None until the
-    #: evaluator approves one (see evaluator()'s plan-judging mode, which
-    #: parses the planner's raw JSON-ish output into this shape). A task
-    #: the overseer judges as not needing one just never sets this and
-    #: goes straight to solver.
-    plan: list[PlanStep] | None
-    #: Index into `plan` of whichever step is currently in flight -- None
-    #: when no plan is active, or once every step has run (there's no
-    #: "current" step left; the overseer moves on to evaluator). Set by
-    #: router() right before dispatching a step's route_to; read by
-    #: _run_role to know which PlanStep's `output` to fill in (and, on a
-    #: revise, which one to overwrite rather than append a new one).
-    active_step: int | None
     #: Set (to a short description of what failed and where) when a node's
     #: own LLM call raised a ProviderError instead of producing a real
     #: output/verdict -- a provider/network failure (a timeout, an outage),
@@ -157,4 +92,79 @@ class AgentState(TypedDict):
     pending_question: str | None
     pending_choices: list[str] | None
     asking_role: str | None
+    #: One compact line per tool call any role has made, across the WHOLE
+    #: run -- "solver: write_file main.c.rs -> ok (56 lines)",
+    #: "solver: execute_bash rustc main.c.rs -> exit 1: error[E0433]...".
+    #:
+    #: A role's tool conversation lives in a local list inside _tool_loop and
+    #: is thrown away when that node returns, so a re-invoked role used to
+    #: start blind: it could see the task, the plan, the gathered context and
+    #: a rejected attempt, but nothing about what it had actually DONE.
+    #: Measured on a hard task: the solver wrote the same file 166 times over
+    #: five overseer rounds, a different draft each time, never compiling any
+    #: of them -- each round genuinely did not know the work had been tried.
+    #: This is what it reads instead (nodes.py's _role_body).
+    #:
+    #: Accumulating (operator.add) like `board`, and deliberately separate
+    #: from it: `board` is a human-readable narration of which node ran,
+    #: this is the agent's own record of what it did and what came back.
+    actions: Annotated[list[str], operator.add]
+    #: The agent loop's OWN conversation -- system prompt, every model reply,
+    #: every tool result -- carried across node returns instead of discarded.
+    #:
+    #: This is the field the loop rewrite exists for. Before it, every node
+    #: rebuilt `[SystemMessage, HumanMessage]` from scratch and the tool
+    #: conversation died with the node, so a re-invoked role paid to re-derive
+    #: what the last one had just learned. `actions` above was the patch for
+    #: that: a lossy one line per call, which is what you can afford to carry
+    #: when the real thing is gone. Both survive, and they are complementary --
+    #: this one is verbatim and recent, `actions` is lossy and whole-run.
+    #:
+    #: NO REDUCER, deliberately. `board` and `actions` accumulate because many
+    #: nodes append to them; a transcript is last-write-wins, like `context`
+    #: and `output`, because the loop owns the whole list and hands back the
+    #: version it finished with.
+    #:
+    #: Two shapes that must never enter it, both silent failures rather than
+    #: loud ones. A SystemMessage anywhere after the opening run: langchain's
+    #: Anthropic adapter raises on non-consecutive system messages and its
+    #: Gemini adapter hoists a mid-list one out of position or drops it. And an
+    #: empty AIMessage: `_call` returns "" on an empty stream, Anthropic
+    #: rejects empty text blocks, and in a list that never resets one of those
+    #: breaks every later Anthropic call for the rest of the run.
+    transcript: list[AnyMessage] | None
+    #: Which mode the loop is working in -- a key of agent/pipeline/modes.py's
+    #: MODES, naming both the model answering and the guidance it is under.
+    #: Survives an evaluator rejection, so a run that switched to `plan` and
+    #: got rejected resumes planning rather than silently reverting.
+    mode: str | None
+    #: One line per accepted or refused mode swap, for the board and for
+    #: telemetry -- "call 7: solve -> plan (needs ordering first)". Accumulating
+    #: like `board`, because it is a narration of what happened rather than a
+    #: current value. Read by `_score` so "did the model park on one model?" is
+    #: a number rather than an argument.
+    mode_log: Annotated[list[str], operator.add]
+    #: How many model requests this run has spent. Replaces `round` as the
+    #: number worth tracing: with one loop there are no overseer rounds to
+    #: count, and calls are the thing that maps to both latency and spend.
+    model_calls: int
+    #: How many times the evaluator has rejected an answer in this run. Bounded
+    #: so judgment cannot eat the whole budget -- see nodes.py's MAX_REJECTIONS.
+    rejections: int
+    #: What this run has to be true at the end, as records rather than prose.
+    #: `[{"text": str, "status": "pending"|"met"|"blocked", "evidence": str}]`.
+    #:
+    #: This is the run's working STATE, and it is deliberately not the
+    #: conversation. The measured case: in one ablation a verified working
+    #: state was worth +24 points where an experience library over the same
+    #: task was worth +2, and injecting more library text with no state signal
+    #: scored 16 points BELOW state alone. What matters is knowing what is
+    #: still open, not having more to read.
+    #:
+    #: Written once at the start of a run, from the task alone, before any
+    #: attempt exists -- so nothing here can be shaped by an attempt trying to
+    #: satisfy it. The loop reads it to know what is left; the evaluator judges
+    #: against it and is the only thing that may change a status, because an
+    #: executor's claim about its own work is not evidence.
+    checklist: list[dict] | None
     final_output: str | None
