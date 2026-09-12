@@ -618,11 +618,12 @@ CONTRAST_NOTE = (
 #: Deliberately not a separate prompt or a separate path. One line, added only
 #: when the run has already established there is nothing to verify, so a task
 #: that merely looks chatty never sees it.
-CONVERSATION_NOTE = (
-    "There is nothing to check here -- this is conversation, not a task. "
-    "Answer it directly in your next reply with FINAL:, briefly and like a "
-    "person. Do not use a tool, do not look anything up, and do not go "
-    "looking for work to do."
+CONVERSATION_PROMPT = (
+    "You are Otto. This turn is conversation, not a task: the criteria pass "
+    "found nothing to check in it.\n\n"
+    "Answer directly and briefly, like a person. Do not use a tool, do not "
+    "look anything up, and do not go looking for work to do.\n\n"
+    "Reply with exactly\nFINAL:\n<your answer>"
 )
 
 #: The whole agent, in one prompt.
@@ -1424,10 +1425,24 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
         f"TASK:\n{task_text}",
         _lessons_block(task_text),
         _render_checklist(checklist),
-        CONVERSATION_NOTE if checklist == [] else "",
     ) if part)
 
     note = render_note()
+    # A turn with no criteria has already been established to hold no task, so
+    # it gets a prompt its own size instead of the engineer one.
+    #
+    # The old shape was a 227-character note arguing, from inside a
+    # HumanMessage, against 3,500 characters of system prompt telling the
+    # model to go find out what state the system is in and offering it
+    # seventeen tools. Roughly 3,200 characters of that turn were spent
+    # setting up an argument with themselves.
+    #
+    # One-way on purpose: this prompt still ends in FINAL:, so a task
+    # misclassified as chatter costs a short answer rather than a refusal to
+    # work.
+    if checklist == []:
+        return [SystemMessage(CONVERSATION_PROMPT), HumanMessage(body)]
+
     # Composed here, once, from what this run can actually reach -- and NOT
     # recomposed per turn: the resume branch rebuilds this same string and a
     # system message that changed between calls would defeat prefix caching.

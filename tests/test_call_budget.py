@@ -310,17 +310,35 @@ def test_a_run_that_died_is_still_judged(monkeypatch):
     assert model.calls > 2, "a dead run skipped the judge"
 
 
-def test_the_conversational_note_is_only_added_when_there_is_no_task():
-    """One line, added only when the run has already established there is
-    nothing to verify, so a task that merely looks chatty never sees it."""
+def test_a_turn_with_no_task_never_sees_the_engineer_prompt():
+    """It used to. A 227-character note argued, from inside a HumanMessage,
+    against 3,500 characters of system prompt telling the model to go find out
+    what state the system is in and offering it seventeen tools -- so roughly
+    3,200 characters of the turn went on setting up an argument with
+    themselves. The turn gets a prompt its own size now."""
     seeded = pn._seed_transcript({"messages": [HumanMessage("hi")]}, "hi", [])
     body = "\n".join(pn._content_text(m.content) for m in seeded)
-    assert "this is conversation, not a task" in body
 
-    with_task = pn._seed_transcript(
+    assert pn.CONVERSATION_PROMPT in body
+    assert "You are an engineer with a shell" not in body
+    assert "execute_bash" not in body, "a greeting was offered a tool menu"
+    assert sum(len(pn._content_text(m.content)) for m in seeded) < 900
+
+
+def test_a_turn_with_a_task_still_gets_the_whole_prompt():
+    """The control. Criteria exist, so this is work, and it pays for the
+    habits, the ladder and the protocol."""
+    seeded = pn._seed_transcript(
         {"messages": [HumanMessage("fix it")]}, "fix it",
         [{"text": "it works", "status": "pending", "evidence": ""}],
     )
-    assert "this is conversation" not in "\n".join(
-        pn._content_text(m.content) for m in with_task
-    )
+    body = "\n".join(pn._content_text(m.content) for m in seeded)
+
+    assert "You are an engineer with a shell" in body
+    assert pn.CONVERSATION_PROMPT not in body
+
+
+def test_the_conversation_path_can_still_answer():
+    """One-way on purpose: a task misclassified as chatter costs a short
+    answer, not a refusal to work."""
+    assert "FINAL:" in pn.CONVERSATION_PROMPT
