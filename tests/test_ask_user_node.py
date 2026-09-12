@@ -691,12 +691,12 @@ def test_the_checklist_is_rewritten_around_what_the_person_answered(monkeypatch)
     """
     seen: list[str] = []
 
-    def fake_criteria(llm, task_text):
+    def fake_rubric(llm, task_text):
         seen.append(task_text)
-        return ["a TUI improvement plan exists"]
+        return pn.Rubric(["a TUI improvement plan exists"])
 
-    monkeypatch.setattr(pn, "_criteria", fake_criteria)
-    # agent() resolves the judge's model before handing it to _criteria, and
+    monkeypatch.setattr(pn, "_rubric", fake_rubric)
+    # agent() resolves the judge's model before handing it to _rubric, and
     # resolving it for real reaches the provider.
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: _FakeModel(""))
     monkeypatch.setattr(pn, "_agent_loop",
@@ -725,7 +725,7 @@ def test_the_checklist_is_rewritten_around_what_the_person_answered(monkeypatch)
 def test_the_checklist_is_left_alone_when_nobody_has_answered_anything(monkeypatch):
     # The invariant this must not break: a checklist is written ONCE from the
     # request, not rewritten while an attempt is being made at it.
-    monkeypatch.setattr(pn, "_criteria",
+    monkeypatch.setattr(pn, "_rubric",
                         lambda llm, task: pytest.fail("regenerated for no reason"))
     monkeypatch.setattr(pn, "_agent_loop",
                         lambda *a, **kw: ("an answer", "final", pn.DEFAULT_MODE))
@@ -742,7 +742,7 @@ def test_the_checklist_is_left_alone_when_nobody_has_answered_anything(monkeypat
 def test_a_closing_answer_does_not_rewrite_the_checklist(monkeypatch):
     # "done" is the person winding the turn up, not adding to the request --
     # criteria derived from it would be a checklist about saying goodbye.
-    monkeypatch.setattr(pn, "_criteria",
+    monkeypatch.setattr(pn, "_rubric",
                         lambda llm, task: pytest.fail("regenerated from a goodbye"))
     monkeypatch.setattr(pn, "_agent_loop",
                         lambda *a, **kw: ("an answer", "final", pn.DEFAULT_MODE))
