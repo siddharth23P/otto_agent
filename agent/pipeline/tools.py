@@ -997,6 +997,18 @@ def look(question: str) -> ToolResult:
         )
     except ProviderError as exc:
         return _workspace_failure("look", f"could not look at the screen: {exc}")
+    except Exception as exc:
+        # The same clause view_image has, and for the same reason: this path
+        # reaches the vendor's own SDK, so it meets exceptions Otto does not
+        # own. Without it a vendor 400 -- "unable to process input image",
+        # which is what a capture of a blank or half-drawn screen gets --
+        # unwound the whole tool loop instead of arriving as one failed call.
+        # Translating rather than swallowing is what lets a model the vendor
+        # says is permanently unusable be remembered instead of picked again
+        # by the next fallback in this run.
+        return _workspace_failure(
+            "look", f"could not look at the screen: {_translated(llm, exc)}",
+        )
     return ToolResult(stdout=_clip(answer), stderr="", returncode=0)
 
 
