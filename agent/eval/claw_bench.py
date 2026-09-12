@@ -554,6 +554,11 @@ class TaskOutcome:
     #: cannot distinguish a real gain from judge variance, and completion is
     #: LLM-judged for 260 of the 300 tasks.
     trials: list = field(default_factory=list)
+    #: The run's tool-call lines, verbatim. What agent/eval/failures.py reads
+    #: to say what KIND of failure this was and what its tools cost per seat,
+    #: with no model call -- a score alone says something got worse without
+    #: saying what broke.
+    actions: list = field(default_factory=list)
 
 
 def _final_text(state: dict | None) -> str:
@@ -632,6 +637,10 @@ def run_one(
     history: list = []
     turn_text = prompt
     checklist: list = []
+    #: Every tool-call line the run produced, across all its turns -- the
+    #: input agent/eval/failures.py classifies a failure KIND and a per-seat
+    #: tool spend out of. Accumulated rather than counted (see below).
+    action_lines: list[str] = []
     model_calls = 0
 
     with tempfile.TemporaryDirectory(prefix="otto-claw-") as scratch:
@@ -653,10 +662,18 @@ def run_one(
                             turn_text, max_steps=task.environment.max_turns * 3,
                         )
                         turns += len(actions)
+                        action_lines.extend(actions)
                     else:
                         state = run_pipeline(turn_text, session_id=session_id, history=history)
                         answer = _final_text(state)
-                        turns += len(state.get("actions") or ()) if state else 0
+                        step_actions = list((state or {}).get("actions") or ())
+                        turns += len(step_actions)
+                        # The LINES, not only how many. agent/eval/failures.py
+                        # classifies a failure's KIND and totals tool spend per
+                        # seat out of exactly this text, with no model call --
+                        # and a count alone throws that away, so a regression
+                        # says something got worse without saying what broke.
+                        action_lines.extend(step_actions)
                         # The criteria the run worked against and how they
                         # settled. Without this a low score is undiagnosable
                         # from the trace: you can see what the agent did and
@@ -733,6 +750,7 @@ def run_one(
         "user_agent_rounds": rounds_used,
         "user_agent_max_rounds": max_rounds,
         "user_agent_done": ua_done,
+        "actions": action_lines,
     }
 
 
@@ -966,6 +984,9 @@ def _run_task_once(
     if meta["error"] and not outcome.error:
         outcome.error = meta["error"]
     outcome.checklist = meta.get("checklist") or []
+    # Set here rather than in the constructor: the outcome is built from the
+    # graded trace, and the action record comes back on `meta` from the run.
+    outcome.actions = list(meta.get("actions") or ())
     outcome.model_calls = meta.get("model_calls") or 0
     return outcome
 

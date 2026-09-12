@@ -328,3 +328,58 @@ def test_repeated_trials_report_a_real_run_not_an_average():
     assert outcome.task_score == 0.5, "reported a score no trial actually got"
     assert outcome.trials == [0.9, 0.2, 0.5]
     assert calls == [10, 30, 50], "trials reused each other's service ports"
+
+
+# --------------------------------------------------------------------------
+# The action record reaching the report. The failure taxonomy and the tool
+# tally (agent/eval/failures.py) read the LINES, and the outcome used to keep
+# only how many there were.
+# --------------------------------------------------------------------------
+
+def test_the_summary_tags_the_kinds_of_failure_it_saw():
+    from agent.cli import eval_claw
+
+    class _O:
+        def __init__(self, task_id, passed, actions):
+            self.task_id = task_id
+            self.passed = passed
+            self.actions = actions
+            self.trials = [1.0 if passed else 0.0]
+            self.task_score = self.completion = self.robustness = 0.5
+            self.communication = 0.5
+            self.error = ""
+            self.wall_time_s = 1.0
+            self.model_calls = 1
+
+    summary = eval_claw._summary([
+        _O("T001", True, ["solve: write_file a.py -> ok: wrote a.py (3 lines)"]),
+        _O("T002", False, ["solve: read_file a.py -> ok: 1"]),
+        _O("T003", False, []),
+    ])
+
+    kinds = summary["failures"]["failures_by_kind"]
+    assert kinds["zero_write"] == 1
+    assert kinds["no_actions"] == 1
+    # The passing run is not in the failure distribution...
+    assert summary["failures"]["runs_by_kind"]["zero_write"] == ["T002"]
+    # ...but its tools still count towards what the menu cost.
+    assert summary["tool_cost"]["calls"] == 2
+
+
+def test_the_summary_survives_outcomes_with_no_action_record():
+    # Outcomes recorded before this existed, and the single-agent path.
+    from agent.cli import eval_claw
+
+    class _Bare:
+        task_id = "T001"
+        passed = False
+        trials = [0.0]
+        task_score = completion = robustness = communication = 0.0
+        error = ""
+        wall_time_s = 1.0
+        model_calls = 1
+
+    summary = eval_claw._summary([_Bare()])
+
+    assert summary["failures"]["failures_by_kind"]["no_actions"] == 1
+    assert summary["tool_cost"]["calls"] == 0
