@@ -92,6 +92,18 @@ class AgentState(TypedDict):
     pending_question: str | None
     pending_choices: list[str] | None
     asking_role: str | None
+    #: What the person actually typed, on its way back to the loop that
+    #: asked -- set by ask_user() only when it is handing back to `agent`,
+    #: read and cleared by agent() on its very next run.
+    #:
+    #: `context` alone was not enough, and the gap was a real bug: agent()'s
+    #: resume path rebuilds its conversation from `transcript`, which is the
+    #: one place the Q&A was NOT written, so the loop came back from the
+    #: pause with exactly the prompt that had just produced the question and
+    #: asked it again -- six times over in a live session, ignoring every
+    #: answer. `context` is still written too, because that is what the
+    #: evaluator (which rebuilds from state, not from a transcript) reads.
+    user_answer: str | None
     #: One compact line per tool call any role has made, across the WHOLE
     #: run -- "solver: write_file main.c.rs -> ok (56 lines)",
     #: "solver: execute_bash rustc main.c.rs -> exit 1: error[E0433]...".

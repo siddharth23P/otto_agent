@@ -1748,6 +1748,15 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
         dead_replies = 0
 
         if tool_name == "ask_user":
+            # Write the question into the transcript BEFORE unwinding. The
+            # agent node persists `messages` on its way out to the ask_user
+            # node, so a transcript that does not contain the question comes
+            # back from the pause byte-identical to the one that produced it --
+            # same prompt, same question, forever. Live-tested: six identical
+            # asks in a row, each answer ignored (the other half of that fix is
+            # the answer itself, spliced back in by agent() on resume).
+            if text:
+                messages.append(AIMessage(text))
             question, choices = _parse_ask_user_body(body)
             raise NeedsUserInput(question or "(no question given)", choices)
 
@@ -2091,6 +2100,18 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
             *(SystemMessage(extra) for extra in (workspace_note(), render_note()) if extra),
             *stored,
         ]
+        # Coming back from an ask_user pause. The transcript above already
+        # ends with the question (_agent_loop appends it before unwinding);
+        # this is the reply to it, and without this line the loop resumes
+        # from a conversation identical to the one that asked and simply
+        # asks again -- see AgentState.user_answer.
+        answered = state.get("user_answer")
+        if answered:
+            messages.append(HumanMessage(
+                f"THE USER ANSWERED:\n{answered}\n\n"
+                "That answers the question you just asked. Carry on with the "
+                "task from here -- do not ask it again."
+            ))
         feedback = state.get("feedback") or ""
         if feedback:
             messages.append(HumanMessage(
@@ -2112,6 +2133,10 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
             "checklist": checklist,
             "mode": mode,
             "model_calls": budget.calls if budget else state.get("model_calls") or 0,
+            # Consumed above (or there was none). It is spliced into the
+            # transcript now, so leaving it set would replay it into the next
+            # run of this node as well.
+            "user_answer": None,
         }
         if actions:
             update["actions"] = actions
@@ -2520,23 +2545,35 @@ def ask_user(state: AgentState) -> Command[Literal["agent", "evaluator"]]:
     # reads state["messages"][-1] as THE TASK for the whole turn;
     # appending onto it would silently replace the actual task the next
     # time anything looked (module docstring). `context` already means
-    # "material gathered so far for planner/solver to use" and is already
-    # shown to every prompt below via "CONTEXT GATHERED SO FAR:" -- the
-    # role that asked sees this Q&A as ordinary background on its next
-    # (fresh) attempt, the same way it would see anything finder dug up.
+    # "material gathered so far for planner/solver to use" and is shown by
+    # every prompt REBUILT FROM STATE via "CONTEXT GATHERED SO FAR:" -- the
+    # evaluator sees this Q&A as ordinary background, the same way it would
+    # see anything else gathered along the way.
+    #
+    # That last clause is narrower than it once read, and the difference was
+    # a bug. The loop does NOT rebuild from state: it resumes from
+    # `transcript`, which nothing here writes. `user_answer` below is the
+    # other half.
     prior = state.get("context") or ""
     qa = f'you asked: "{question}"\nthe user answered: "{answer}"'
     role = state.get("asking_role") or "agent"
-    return Command(
-        update={
-            "context": f"{prior}\n\n{qa}" if prior else qa,
-            "pending_question": None,
-            "pending_choices": None,
-            "asking_role": None,
-            "board": [f"you answered -- {role} is carrying on"],
-        },
-        goto=role,
-    )
+    update = {
+        "context": f"{prior}\n\n{qa}" if prior else qa,
+        "pending_question": None,
+        "pending_choices": None,
+        "asking_role": None,
+        "board": [f"you answered -- {role} is carrying on"],
+    }
+    # ...and, for the loop only, into `user_answer` as well. The evaluator
+    # rebuilds its prompt from state on every run, so `context` above reaches
+    # it; the loop does NOT -- it resumes from `transcript`, where none of
+    # this is written, and so came back and asked the same question again
+    # (AgentState.user_answer has the whole failure). Set only when handing
+    # back to `agent`, so an answer the EVALUATOR asked for cannot turn up in
+    # the loop's conversation as a reply to a question it never asked.
+    if role == "agent":
+        update["user_answer"] = str(answer)
+    return Command(update=update, goto=role)
 
 
 g = StateGraph(AgentState)
