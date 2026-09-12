@@ -43,6 +43,24 @@ def _async_test(fn):
     return wrapper
 
 
+async def _until(pilot, predicate, what: str, timeout: float = 15.0):
+    """Pump the UI until `predicate()` holds, or fail saying what was awaited.
+
+    A real deadline rather than `for _ in range(40): await pilot.pause()`. The
+    iteration-count form is a bet on how fast the runner is, and this file
+    already lost that bet once: a fixed 0.4s window passed on Linux and
+    Windows and failed on a loaded macOS runner at 3 steps of 5. Everything
+    here waits on a pipeline stub or a worker thread, so what it is really
+    waiting for is a scheduler, and only wall time bounds that honestly.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        await pilot.pause()
+        if predicate():
+            return
+    raise AssertionError(f"timed out after {timeout}s waiting for {what}")
+
+
 # --------------------------------------------------------------------------
 # The Textual behaviours the fixes depend on. Asserted, not assumed.
 # --------------------------------------------------------------------------
@@ -87,27 +105,48 @@ async def test_modal_input_submitted_bubbles_to_the_app():
 async def test_exclusive_does_not_stop_a_running_thread_worker():
     """Why run_turn no longer carries exclusive=True and `_turn_running`
     exists instead: Worker.cancel() cancels the asyncio task wrapping
-    run_in_executor, and the executor thread runs to completion regardless."""
+    run_in_executor, and the executor thread runs to completion regardless.
+
+    Gated on events rather than sleeps. An earlier version raced two workers
+    and asserted how far each had got inside a fixed 0.4s window, which is a
+    claim about CI scheduling, not about Textual -- it passed on Linux and
+    Windows and failed on a loaded macOS runner at 3 steps of 5. The claim
+    that actually matters needs no clock: a worker that has been cancelled
+    still reaches its own last line.
+    """
     from textual import work
 
-    steps: list[tuple[int, int]] = []
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
 
     class Host(App):
         @work(thread=True, exclusive=True, group="turn")
-        def go(self, n: int) -> None:
-            for i in range(5):
-                time.sleep(0.02)
-                steps.append((n, i))
+        def first(self) -> None:
+            entered.set()
+            release.wait(10)
+            finished.set()
+
+        @work(thread=True, exclusive=True, group="turn")
+        def second(self) -> None:
+            pass
 
     app = Host()
     async with app.run_test() as pilot:
-        app.go(1)
-        await asyncio.sleep(0.03)
-        app.go(2)  # "exclusive" -- supposedly cancels the first
-        await asyncio.sleep(0.4)
+        worker = app.first()
+        await asyncio.to_thread(entered.wait, 10)
 
-    assert len([s for n, s in steps if n == 1]) == 5
-    assert len([s for n, s in steps if n == 2]) == 5
+        app.second()  # same group + exclusive: Textual cancels `worker`
+        await _until(pilot, lambda: worker.is_cancelled, "Textual to mark the worker cancelled")
+
+        # ...and the thread underneath it is still sitting there, very much
+        # alive, waiting to be let go.
+        assert not finished.is_set()
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 10), (
+            "a cancelled thread worker still runs to completion -- which is "
+            "why a second turn used to start a second pipeline run"
+        )
 
 
 @_async_test
@@ -263,12 +302,8 @@ async def test_a_second_enter_mid_turn_starts_no_second_run(monkeypatch, tmp_pat
         assert any("still working on the previous message" in t for t in _texts(app))
 
         release.set()
-        for _ in range(40):
-            await pilot.pause()
-            if not app._turn_running:
-                break
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
 
-        assert app._turn_running is False
         assert box.disabled is False
         assert box.placeholder == OttoApp.IDLE_PLACEHOLDER
         assert runs == ["first message"]
@@ -294,18 +329,12 @@ async def test_answering_a_mid_run_question_does_not_start_a_new_turn(monkeypatc
     async with app.run_test() as pilot:
         app.message_box.value = "do the thing"
         await pilot.press("enter")
-        for _ in range(40):
-            await pilot.pause()
-            if isinstance(app.screen, tui_mod.AskUserModal):
-                break
-        assert isinstance(app.screen, tui_mod.AskUserModal)
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.AskUserModal),
+                     "the question modal")
 
         app.screen.query_one(Input).value = "the second one"
         await pilot.press("enter")
-        for _ in range(60):
-            await pilot.pause()
-            if not app._turn_running:
-                break
+        await _until(pilot, lambda: not app._turn_running, "the resumed turn to finish")
 
         assert starts == ["do the thing"]
         assert resumes == ["the second one"]
@@ -343,10 +372,7 @@ async def test_thinking_block_is_open_while_running_and_shut_after(monkeypatch, 
         assert len(log.lines) > 0, "board lines must render while the turn runs"
 
         release.set()
-        for _ in range(60):
-            await pilot.pause()
-            if not app._turn_running:
-                break
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
 
         assert block.collapsed is True
         assert "steps" in block.title
@@ -364,12 +390,8 @@ async def test_a_failing_turn_still_hands_the_session_back(monkeypatch, tmp_path
     async with app.run_test() as pilot:
         app.message_box.value = "hi"
         await pilot.press("enter")
-        for _ in range(60):
-            await pilot.pause()
-            if not app._turn_running:
-                break
+        await _until(pilot, lambda: not app._turn_running, "the failed turn to release the session")
 
-        assert app._turn_running is False
         assert app.message_box.disabled is False
         assert any("provider exploded" in t for t in _texts(app))
 
@@ -391,10 +413,7 @@ async def test_the_workspace_reaches_the_pipeline_and_the_screen(monkeypatch, tm
         assert any(str(tmp_path) in t for t in _texts(app)), "say it up front"
         app.message_box.value = "fix the tests"
         await pilot.press("enter")
-        for _ in range(60):
-            await pilot.pause()
-            if not app._turn_running:
-                break
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
         assert passed == [str(tmp_path)]
 
 
@@ -426,10 +445,7 @@ async def test_changing_the_workspace_is_refused_mid_turn(monkeypatch, tmp_path)
         assert app.session.workspace == tmp_path
 
         release.set()
-        for _ in range(40):
-            await pilot.pause()
-            if not app._turn_running:
-                break
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
 
 
 @_async_test
@@ -504,10 +520,8 @@ async def test_scoring_does_not_block_the_ui_thread(monkeypatch, tmp_path):
         assert "ui still responsive" in _texts(app)
 
         release.set()
-        for _ in range(40):
-            await pilot.pause()
-            if any("scored 1" in t for t in _texts(app)):
-                break
+        await _until(pilot, lambda: any("scored 1" in t for t in _texts(app)),
+                     "the score to be posted")
 
     assert app.ctx.scores == [
         {"name": "user_feedback", "value": 1.0, "data_type": "NUMERIC",
