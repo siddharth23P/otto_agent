@@ -86,6 +86,34 @@ WRAP_UP_NOTE = (
     "actually written, and give your FINAL answer now."
 )
 
+#: How much of a run's budget is reconnaissance, before any of it is spent
+#: committing to an approach.
+#:
+#: Habits 1 and 3 in the agent prompt already say to find out what state the
+#: system is in before concluding, and to look wide before looking narrow.
+#: That is the right instinct stated as guidance the model may or may not
+#: follow. The failure it targets has a name -- premature exploitation,
+#: committing to training-time priors before learning what the environment
+#: actually allows -- and making exploration a phase with its own budget,
+#: spent BEFORE execution, was worth +6.3 to +11.7 points.
+#:
+#: Small, because the same work reports that naive exploration HURT. A fifth
+#: of the budget is enough to read the code a change touches and see what is
+#: actually running; more than that is the exploration becoming the task.
+#:
+#: Zero disables it, and that is the control the measurement needs.
+RECON_FRACTION = float(os.environ.get("OTTO_RECON_FRACTION", "0.2"))
+
+#: Said once, when the reconnaissance stretch ends. Not a prohibition -- the
+#: agent can still look at things afterwards -- but the point at which looking
+#: stops being the job.
+RECON_NOTE = (
+    "You have looked around enough. From here, work from what you have "
+    "found rather than gathering more: make the change, run the thing, and "
+    "check it. Look something up again only when a specific question blocks "
+    "you, not to be thorough."
+)
+
 Phase = Literal["ok", "wrap_up", "spent"]
 
 
@@ -116,6 +144,8 @@ class Budget:
     #: turn would be told to wrap up the moment it started.
     turn_start_calls: int = field(default=0)
     turn_wrap_at: float | None = field(default=None)
+    #: So the end-of-reconnaissance note is said once, like the wrap-up one.
+    recon_warned: bool = field(default=False)
 
     @classmethod
     def of(
@@ -240,6 +270,20 @@ class Budget:
         visible to the ceiling that is meant to stop it."""
         self.calls += 1
 
+    def recon_once(self) -> str | None:
+        """The note to append when the reconnaissance stretch ends, once.
+
+        Paired with `wrap_up_once`: one marks the end of looking, the other
+        the end of working. Both are said a single time, because a reminder
+        repeated every iteration is one the model stops reading.
+        """
+        if self.recon_warned or self.in_recon():
+            return None
+        if self.max_model_calls is None and self.hard_at is None:
+            return None  # no budget, so no stretches to be past
+        self.recon_warned = True
+        return RECON_NOTE
+
     def phase(self) -> Phase:
         """Where this run is: working, wrapping up, or done.
 
@@ -269,6 +313,27 @@ class Budget:
         if self.wrap_up_at is not None and now >= self.wrap_up_at:
             return "wrap_up"
         return "ok"
+
+    def in_recon(self) -> bool:
+        """Whether this run is still in its opening, looking-around stretch.
+
+        Its own predicate rather than a value from `phase()`. Reconnaissance
+        is about the START of a run and wrapping up is about its END -- the
+        same axis, but callers ask different questions of it, and adding a
+        fourth value to a Literal that `spent()` and `wrap_up_once()` already
+        switch on would have changed what a fresh budget reports to every
+        existing reader. It did, and two tests said so.
+        """
+        if RECON_FRACTION <= 0:
+            return False
+        if self.max_model_calls is not None:
+            return self.calls < self.max_model_calls * RECON_FRACTION
+        if self.hard_at is not None and self.wrap_up_at is not None:
+            # No call ceiling, so measure against the clock: the recon stretch
+            # is the same fraction of the run's total span.
+            span = (self.hard_at - self.wrap_up_at) / (1 - WRAP_UP_FRACTION)
+            return time.monotonic() < self.hard_at - span * (1 - RECON_FRACTION)
+        return False
 
     def wrap_up_once(self) -> str | None:
         """The note to append, the first time the run enters its last stretch.

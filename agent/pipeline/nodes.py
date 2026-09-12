@@ -1792,9 +1792,12 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
                 if not output:
                     output = _answer_from_what_is_here(llm, messages)
                 return output, "budget", mode
-            note = budget.wrap_up_once()
-            if note:
-                messages.append(HumanMessage(note))
+            # Two notes, one per stretch: the end of looking around, and the
+            # end of working. Each said once -- a reminder repeated every
+            # iteration is one the model stops reading.
+            for note in (budget.recon_once(), budget.wrap_up_once()):
+                if note:
+                    messages.append(HumanMessage(note))
 
         text = _call(llm, messages)
         # Resolved against what this run can actually call, which includes

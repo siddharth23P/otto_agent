@@ -363,3 +363,83 @@ def test_the_floor_does_not_resurrect_an_exhausted_run():
 
     budget.begin_turn(3)
     assert budget.spent(), "the floor handed out budget the run did not have"
+
+
+# --------------------------------------------------------------------------
+# Reconnaissance as a stretch, not a habit
+# --------------------------------------------------------------------------
+#
+# The prompt's diagnostic habits already say to find out what state the system
+# is in before concluding. That is guidance the model may or may not follow.
+# The failure it targets is premature exploitation -- committing to
+# training-time priors before learning what the environment actually allows --
+# and making exploration a budgeted phase before execution was worth +6.3 to
+# +11.7 points. The same work found naive exploration HURT, which is why this
+# is a fifth of the budget and not a third.
+
+def test_a_run_opens_in_reconnaissance():
+    budget = Budget(max_model_calls=50)
+
+    assert budget.in_recon()
+
+
+def test_reconnaissance_is_a_fifth_of_the_budget():
+    budget = Budget(max_model_calls=50)
+    looking = 0
+    for _ in range(50):
+        if budget.in_recon():
+            looking += 1
+        budget.spend()
+
+    assert looking == int(50 * bd.RECON_FRACTION)
+
+
+def test_the_end_of_looking_is_announced_once():
+    """Paired with the wrap-up note: one marks the end of looking, the other
+    the end of working. A reminder repeated every iteration is one the model
+    stops reading."""
+    budget = Budget(max_model_calls=20)
+    while budget.in_recon():
+        budget.spend()
+
+    assert budget.recon_once() is not None
+    assert budget.recon_once() is None
+
+
+def test_nothing_is_announced_while_still_looking():
+    budget = Budget(max_model_calls=20)
+
+    assert budget.in_recon()
+    assert budget.recon_once() is None
+
+
+def test_a_run_with_no_budget_has_no_stretches():
+    """An unbounded run cannot be a fifth of the way through anything."""
+    budget = Budget()
+
+    assert not budget.in_recon()
+    assert budget.recon_once() is None
+
+
+def test_reconnaissance_can_be_turned_off(monkeypatch):
+    """Zero disables it, which is the control the measurement needs."""
+    monkeypatch.setattr(bd, "RECON_FRACTION", 0.0)
+
+    assert not Budget(max_model_calls=50).in_recon()
+
+
+def test_it_is_not_a_fourth_phase():
+    """Reconnaissance is about the START of a run and wrapping up about its
+    END -- the same axis, different questions. Adding a value to the Literal
+    that `spent()` and `wrap_up_once()` switch on changed what a fresh budget
+    reported to every existing reader, and two tests said so."""
+    assert Budget(max_model_calls=50).phase() == "ok"
+
+
+def test_the_loop_says_both_notes_once_each():
+    import inspect
+
+    from agent.pipeline import nodes as pn
+
+    source = inspect.getsource(pn._agent_loop)
+    assert "budget.recon_once(), budget.wrap_up_once()" in source
