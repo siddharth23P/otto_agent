@@ -2287,7 +2287,11 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
     # each. See AgentState.checklist.
     checklist = state.get("checklist")
     if checklist is None:
-        checklist = _new_checklist(_criteria(ROUTER.chat_model(Task.EVALUATE), task_text))
+        criteria = _criteria(ROUTER.chat_model(Task.EVALUATE), task_text)
+        # Left as None when the rubric call itself failed, so the run keeps
+        # the engineer prompt. Only a rubric that RAN and came back empty is
+        # evidence that the turn holds no task.
+        checklist = None if criteria is None else _new_checklist(criteria)
 
     if resuming:
         # The same composition the seed used. Both read `reachable_tools()`
@@ -2519,16 +2523,20 @@ def _settle(checklist: list[dict], verdict: "Verdict") -> list[dict]:
     return [{**item, "status": status, "evidence": evidence} for item in checklist]
 
 
-def _criteria(llm, task_text: str) -> list[str]:
+def _criteria(llm, task_text: str) -> list[str] | None:
     """Phase one: the rubric, from the task alone.
 
     A separate call on purpose. Criteria written while looking at an answer
     are criteria the answer happens to meet, which is the failure mode that
     makes a self-judging loop measure zero.
 
-    Fails soft: a provider hiccup here must not cost the judgment. An empty
-    rubric degrades the evaluator to what it was before this change, which is
-    worse but not broken.
+    Fails soft: a provider hiccup here must not cost the judgment. But it
+    returns None when the CALL failed and [] when the call ran and found
+    nothing to check, and those two are not the same fact. [] is evidence the
+    turn holds no task; None is evidence of nothing at all. The agent node
+    reads them apart -- it seeds a conversation prompt on [] -- so collapsing
+    them would let one exhausted API key strip a real task of its prompt, its
+    habits and its tools.
     """
     try:
         reply = _call(llm, [
@@ -2537,7 +2545,7 @@ def _criteria(llm, task_text: str) -> list[str]:
         ])
     except ProviderError as exc:
         logger.warning("rubric generation failed, judging without one: %s", exc)
-        return []
+        return None
     return _parse_rubric(reply)
 
 
@@ -2653,7 +2661,9 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # Generated here only for a caller that drove the evaluator directly.
     checklist = state.get("checklist")
     if checklist is None:
-        checklist = _new_checklist(_criteria(llm, task_text))
+        # Judging is the one place the two empties really are the same: with
+        # no criteria to read, this falls back to the bare request either way.
+        checklist = _new_checklist(_criteria(llm, task_text) or [])
     rubric = [item["text"] for item in checklist]
 
     system_prompt = EVALUATOR_PROMPT.format(

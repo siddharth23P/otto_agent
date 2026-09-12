@@ -342,3 +342,28 @@ def test_the_conversation_path_can_still_answer():
     """One-way on purpose: a task misclassified as chatter costs a short
     answer, not a refusal to work."""
     assert "FINAL:" in pn.CONVERSATION_PROMPT
+
+
+def test_a_failed_rubric_call_does_not_demote_a_task_to_chatter(monkeypatch):
+    """An empty checklist means two different things and only one of them is
+    evidence. A rubric that RAN and found nothing to check says the turn holds
+    no task; a rubric CALL that died says nothing at all. Collapsing them let
+    one exhausted API key seed a real task with the conversation prompt --
+    no habits, no ladder, no tools -- which is how it was found."""
+    def dead(llm, messages, **kw):
+        raise pn.ProviderError("credit balance is too low")
+
+    monkeypatch.setattr(pn, "_call", dead)
+    assert pn._criteria(object(), "fix the failing test") is None
+
+    seeded = pn._seed_transcript(
+        {"messages": [HumanMessage("fix it")]}, "fix it", None,
+    )
+    body = "\n".join(pn._content_text(m.content) for m in seeded)
+    assert "You are an engineer with a shell" in body
+    assert pn.CONVERSATION_PROMPT not in body
+
+
+def test_a_rubric_that_ran_and_found_nothing_still_means_no_task():
+    """The other half of the same distinction."""
+    assert pn._parse_rubric("this is just a greeting") == []
