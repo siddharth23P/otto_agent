@@ -48,7 +48,15 @@ def test_the_threshold_is_below_one_not_equal_to_it():
 # --------------------------------------------------------------------------
 
 class _Outcome:
-    def __init__(self, trials):
+    #: `task_id` and `actions` are needed because _summary also builds the
+    #: failure distribution (agent/eval/failures.py) out of every outcome it
+    #: is handed. A stub without them passed until the two landed together.
+    _next_id = 0
+
+    def __init__(self, trials, actions=()):
+        type(self)._next_id += 1
+        self.task_id = f"T{type(self)._next_id:03d}"
+        self.actions = list(actions)
         self.trials = list(trials)
         self.task_score = sum(trials) / len(trials)
         self.completion = self.robustness = self.communication = self.task_score
