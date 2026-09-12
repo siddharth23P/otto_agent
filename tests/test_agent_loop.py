@@ -1370,8 +1370,13 @@ def test_the_first_provider_failure_is_still_retried(monkeypatch):
         "node": "agent",
     })
 
-    assert command.goto == "agent"
+    assert command.goto == "evaluator", (
+        "the agent was sent to rework an answer nobody rejected"
+    )
     assert command.update["judge_errors"] == 1
+    assert "feedback" not in command.update, (
+        "a provider failure was handed to the agent as if it were a verdict"
+    )
 
 
 def test_a_failed_rubric_is_not_retried_on_every_pass(monkeypatch):

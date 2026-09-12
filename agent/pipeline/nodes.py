@@ -2713,7 +2713,7 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     ))
 
 
-def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_user"]]:
+def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end__", "ask_user"]]:
     task_text = state["messages"][-1].content
     node = state.get("node") or "agent"
     output = state.get("output") or ""
@@ -2737,10 +2737,18 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
     # Generated here only for a caller that drove the evaluator directly.
     report_progress("phase", "checking the answer holds up")
     checklist = state.get("checklist")
-    if checklist is None:
+    if checklist is None and not state.get("judge_errors"):
         # Judging is the one place the two empties really are the same: with
         # no criteria to read, this falls back to the bare request either way.
+        #
+        # `not judge_errors` because this node retries itself on a provider
+        # failure, and a rubric call that just failed against this same model
+        # is not going to succeed a second later. Without the clause the
+        # retry paid for it again: measured across the twenty golden items
+        # with the Anthropic key exhausted, sixty rubric calls for twenty
+        # runs, every one of them refused.
         checklist = _new_checklist(_criteria(llm, task_text) or [])
+    checklist = checklist or []
     rubric = [item["text"] for item in checklist]
 
     system_prompt = EVALUATOR_PROMPT.format(
@@ -2789,7 +2797,6 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
         # `feedback` so planner sees it the same way it would see any
         # other specialist's rejected attempt, via _role_body's existing
         # background display.
-        what = "plan" if judging_plan else "output"
         errors = (state.get("judge_errors") or 0) + 1
         if errors > MAX_JUDGE_ERRORS:
             # The bound this edge never had. A provider that just refused is
@@ -2814,18 +2821,20 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
                 },
                 goto=END,
             )
+        # Back to the judge, not to the agent. This used to hand the failure
+        # to the agent as `feedback`, from a design where a planner read it
+        # the way it read any other rejected attempt -- there is no planner in
+        # this graph any more, and the agent has nothing to fix: there was no
+        # verdict. It reworked a perfectly good answer at two model calls a
+        # time in response to a message that says, in its own words, "not a
+        # real rejection". Retrying the judge costs one call instead of three.
         return Command(
             update={
                 "node_error": f"evaluator: {exc}",
                 "judge_errors": errors,
-                "feedback": (
-                    f"the evaluator was interrupted by a provider/network "
-                    f"failure before it could judge {node}'s {what} -- not "
-                    f"a real rejection: {exc}"
-                ),
                 "board": [f"evaluator failed with a provider error: {exc}"],
             },
-            goto="agent",
+            goto="evaluator",
         )
     # _parse_approval defaults to approve=False whenever "APPROVE:" isn't
     # found in `reply` at all (e.g. _tool_loop exhausted on unparseable
