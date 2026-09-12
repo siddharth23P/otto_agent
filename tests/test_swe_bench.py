@@ -275,3 +275,44 @@ def test_an_x86_host_never_probes_for_arm64(monkeypatch):
 
     image, emulated = sb.resolve_image("django__django-10097")
     assert ".x86_64." in image and not emulated
+
+
+def test_tests_are_named_by_file_not_by_node_id():
+    """Given explicit node ids pytest is all-or-nothing: if one does not
+    resolve -- a parametrisation that moved, an id recorded from a slightly
+    different tree -- it prints "no tests ran" and every id in the batch
+    scores as not-passed. Measured on astropy-13236: 644 PASS_TO_PASS tests,
+    one bad id, 0/644 on an UNCHANGED repository."""
+    assert sb.files_of([
+        "astropy/table/tests/test_mixin.py::test_ndarray_mixin[True]",
+        "astropy/table/tests/test_mixin.py::test_attributes",
+        "astropy/table/tests/test_table.py::TestMeta::test_non_mapping_set[a, b]",
+    ]) == ["astropy/table/tests/test_mixin.py", "astropy/table/tests/test_table.py"]
+
+
+def test_a_file_that_will_not_import_costs_only_its_own_tests():
+    assert "--continue-on-collection-errors" in sb.TEST_COMMAND
+
+
+def test_a_stale_node_id_only_costs_itself(instance):
+    """The property the file-level run buys. A name nothing reports is not a
+    pass, and it takes nothing else down with it."""
+    ran = _report(["t/test_a.py::test_one", "t/test_b.py::test_three"])
+    verdict = sb.grade("c", instance, run=_runner(ran))
+
+    assert verdict.fail_to_pass_passed == 1      # test_two never appeared
+    assert verdict.pass_to_pass_passed == 1
+    assert not verdict.resolved
+
+
+def test_grading_does_not_run_on_the_agents_clock():
+    """`run_instance` used one runner for both phases, so once the agent's
+    budget was spent every grading command was refused -- astropy-13398 spent
+    1649s, changed nothing, and was scored "test patch would not apply: the
+    time budget for this instance is spent", which is not a verdict about the
+    work at all."""
+    import inspect
+
+    source = inspect.getsource(sb.run_instance)
+    assert "GRADING_BUDGET_S" in source
+    assert "ungated" in source

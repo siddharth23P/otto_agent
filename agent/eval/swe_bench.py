@@ -64,6 +64,12 @@ WORKDIR = "/testbed"
 #: grading run itself.
 COMMAND_TIMEOUT_S = 900
 
+#: Grading's own budget, separate from the agent's. Some of these suites take
+#: several minutes and one of them has 644 tests in its PASS_TO_PASS set; a
+#: grader sharing the agent's clock scores "out of time" instead of scoring
+#: the work.
+GRADING_BUDGET_S = 2400.0
+
 #: Default wall-clock budget for one instance's AGENT phase, before grading.
 #: Generous because these are real bugs in unfamiliar codebases, and bounded
 #: because a stuck run must not hold a container open forever.
@@ -344,8 +350,33 @@ def build_prompt(instance: Instance) -> str:
 #: command cover both.
 #: `--color=no` asks politely; `parse_report` strips the escapes anyway,
 #: because a project can force colour back on from its own config.
+#:
+#: Tests are named by FILE, not by node id, and that is the difference
+#: between a working grader and one that reports nonsense. Given explicit
+#: node ids pytest is all-or-nothing: if ONE of them does not resolve -- a
+#: parametrisation that moved, an id the dataset recorded from a slightly
+#: different tree -- it prints "no tests ran" and every id in the batch
+#: scores as not-passed. Measured on astropy-13236: 644 PASS_TO_PASS tests,
+#: one bad id, 0/644 on an UNCHANGED repository.
+#:
+#: Running the files and looking the ids up afterwards costs some extra
+#: tests and cannot be sabotaged by one stale name.
+#: `--continue-on-collection-errors` is the same argument one level up: a
+#: file that will not import should cost its own tests, not the whole run.
 TEST_COMMAND = ("python -m pytest -rA --tb=no --color=no -p no:cacheprovider "
-                "{tests}")
+                "--continue-on-collection-errors {tests}")
+
+#: How many test FILES go in one pytest invocation. Bounded so a suite that
+#: hangs costs one batch rather than the whole grading run.
+FILES_PER_BATCH = 20
+
+
+def files_of(node_ids) -> list[str]:
+    """The distinct files named by these node ids, in first-seen order."""
+    seen: dict[str, None] = {}
+    for node in node_ids:
+        seen.setdefault(node.split("::", 1)[0], None)
+    return list(seen)
 
 #: Terminal colour and cursor escapes. pytest colourises its summary whenever
 #: a project's own config asks it to, regardless of whether anything is
@@ -413,11 +444,15 @@ def grade(name: str, instance: Instance, *, run) -> Grade:
     if not wanted:
         return Grade(False, 0, 0, 0, 0, error="the instance names no tests")
 
-    stdout, stderr, _ = run(
-        TEST_COMMAND.format(tests=" ".join(shlex.quote(t) for t in wanted)),
-        COMMAND_TIMEOUT_S,
-    )
-    report = parse_report(stdout + "\n" + stderr)
+    files = files_of(wanted)
+    report: dict[str, str] = {}
+    for start in range(0, len(files), FILES_PER_BATCH):
+        batch = files[start:start + FILES_PER_BATCH]
+        stdout, stderr, _ = run(
+            TEST_COMMAND.format(tests=" ".join(shlex.quote(f) for f in batch)),
+            COMMAND_TIMEOUT_S,
+        )
+        report.update(parse_report(stdout + "\n" + stderr))
 
     f2p = [t for t in instance.fail_to_pass if report.get(t) == "PASSED"]
     p2p = [t for t in instance.pass_to_pass if report.get(t) == "PASSED"]
@@ -505,10 +540,18 @@ def run_instance(
                     error = f"{type(exc).__name__}: {exc}"
                     logger.warning("%s raised: %s", instance.instance_id, error)
 
+        # Grading gets its OWN runner with no deadline. `run` carries the
+        # AGENT's clock, and once that is spent it refuses every command --
+        # including `git apply` and the test suite. An instance that used its
+        # full budget was therefore scored "test patch would not apply: the
+        # time budget for this instance is spent", which is not a verdict
+        # about the work at all. Measured: astropy-13398 spent 1649s, changed
+        # nothing, and was graded on a refusal rather than on its own tests.
+        ungated = container_runner(name, Deadline.of(GRADING_BUDGET_S))
         # Read the diff BEFORE the test patch goes in, so it is the agent's
         # work and not the agent's work plus the grader's.
-        diff = diff_of(run)
-        verdict = grade(name, instance, run=run)
+        diff = diff_of(ungated)
+        verdict = grade(name, instance, run=ungated)
     finally:
         stop_container(name)
 
