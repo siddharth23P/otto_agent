@@ -92,6 +92,24 @@ PROCEDURAL_TOP_K = 1
 #: memory/queue.py's X_BUDGET/Y_BUDGET) rather than a second unbounded dump.
 DEFAULT_MAX_CHUNKS = 20
 
+#: How far below the best match a chunk may score and still be worth
+#: returning, as a fraction of that best score.
+#:
+#: This turns `max_chunks` from a quota into a ceiling: a query whose evidence
+#: is genuinely spread across many chunks still gets them, and one whose answer
+#: is in the first two stops there instead of padding the prompt to twenty.
+#:
+#: 0.85 rather than something tighter because these are cosine similarities on
+#: a self-similar stream, where the spread between a decisive chunk and a
+#: near-duplicate is small by construction -- a tight ratio would cut the
+#: second hop of a multi-hop question, which is the case this is meant to help.
+FALLOFF_RATIO = 0.85
+
+#: Never return fewer than this, however sharp the falloff. A threshold that
+#: could return one chunk would make an oddly-worded query worse than the fixed
+#: cap it replaced.
+MIN_CHUNKS = 3
+
 #: How many chunks either side of each selected chunk to include (see the
 #: module docstring). 2 means "the two turns before and the two after".
 #:
@@ -209,7 +227,41 @@ def _rank_chunks(chunks: list[Chunk], query_vec, max_chunks: int, model: str = "
     matrix = np.stack([c.embedding for c in embeddable])
     norms = np.linalg.norm(matrix, axis=1) * (np.linalg.norm(query_vec) or 1.0)
     scores = (matrix @ query_vec) / np.where(norms == 0, 1.0, norms)
-    return [embeddable[i] for i in np.argsort(-scores)[:max_chunks]]
+    order = np.argsort(-scores)[:max_chunks]
+    keep = _before_the_falloff(scores[order])
+    return [embeddable[i] for i in order[:keep]]
+
+
+def _before_the_falloff(ranked_scores) -> int:
+    """How many of the ranked chunks to keep, stopping where they stop helping.
+
+    `max_chunks` is a fixed number and a fixed number is wrong in both
+    directions: too shallow for a multi-hop question whose second piece of
+    evidence ranks low, too noisy for a single-fact lookup where everything
+    after the first match is filler. Agent memory is a bounded, highly
+    self-similar stream, so the hard part is telling decisive evidence from
+    near-duplicates rather than finding relevant text at all.
+
+    The cheap version of "expand while the next piece reduces uncertainty",
+    needing no extra model call: keep taking chunks while they score close to
+    the best one, and stop at the first that does not. A run of near-equal
+    scores is a genuine multi-hop spread and is kept; a cliff after the first
+    is the single-fact case and the tail is dropped.
+
+    Never returns fewer than MIN_CHUNKS. A threshold that can return one chunk
+    would make a slightly-odd query worse than the fixed cap it replaced, and
+    the floor costs almost nothing when the tail is cheap.
+    """
+    if len(ranked_scores) <= MIN_CHUNKS:
+        return len(ranked_scores)
+    best = float(ranked_scores[0])
+    if best <= 0:
+        return len(ranked_scores)  # nothing to measure a fall against
+    floor = best * FALLOFF_RATIO
+    for position, score in enumerate(ranked_scores):
+        if float(score) < floor:
+            return max(MIN_CHUNKS, position)
+    return len(ranked_scores)
 
 
 def _select(
