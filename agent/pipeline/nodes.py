@@ -1827,6 +1827,7 @@ _EVIDENCE_MESSAGES = 6
 def _clip_evidence(text: str) -> str:
     if len(text) <= _EVIDENCE_CHARS:
         return text
+    half = _EVIDENCE_CHARS // 2
     return (
         f"{text[:half]}\n... [{len(text) - _EVIDENCE_CHARS} characters omitted] "
         f"...\n{text[-half:]}"

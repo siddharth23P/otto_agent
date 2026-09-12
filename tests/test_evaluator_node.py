@@ -147,6 +147,27 @@ def test_the_evaluator_no_longer_judges_blind(monkeypatch):
     assert "test_auth" in human, "the judge cannot see the gathered context"
 
 
+def test_evidence_too_long_to_show_is_clipped_from_both_ends(monkeypatch):
+    """The clip is only ever reached by a run whose evidence overflows, so a
+    broken one leaves every short run passing and every real one crashing --
+    which is how a NameError in it shipped. A judge that sees only the head
+    is told what was attempted and never how it came out."""
+    fake = _FakeModel("FINAL:\nAPPROVE: yes\nWHY: fine")
+    _install(monkeypatch, fake)
+    long_result = "first line\n" + "x" * (pn._EVIDENCE_CHARS * 2) + "\nlast line"
+
+    pn.evaluator(_state(
+        node="agent",
+        output="the suite passes",
+        transcript=[{"kind": "human", "content": long_result}],
+    ))
+
+    _, human = fake.calls[1]
+    assert "first line" in human, "the clip kept only the tail"
+    assert "last line" in human, "the clip kept only the head"
+    assert "characters omitted" in human
+
+
 def test_a_third_rejection_lets_the_answer_stand_rather_than_spending_the_budget(monkeypatch):
     """Judgment is worth paying for; judgment without a bound is a way to spend
     a whole run re-reading one answer. The board says it was not verified."""
