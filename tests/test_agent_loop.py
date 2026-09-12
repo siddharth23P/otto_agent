@@ -1150,3 +1150,105 @@ def test_what_is_carried_is_bounded():
     assert "step 19" in carried
     assert "step 0 " not in carried
     assert len(carried) < 20 * 500
+
+
+# --------------------------------------------------------------------------
+# Settling criteria from the record, not only from the verdict
+# --------------------------------------------------------------------------
+
+def test_a_criterion_whose_artefact_was_written_stops_being_open():
+    """The checklist is re-stated every REMINDER_EVERY iterations while items
+    are open. Without this a run keeps being nagged about something it did
+    twenty actions ago, which is how a reminder becomes wallpaper -- the exact
+    failure the reminder exists to prevent."""
+    checklist = [
+        {"text": "a report exists at report.md", "status": "pending", "evidence": ""},
+        {"text": "the totals are correct", "status": "pending", "evidence": ""},
+    ]
+
+    settled = pn._note_evidence(checklist, ["solve: write_file report.md ok (42 lines)"])
+
+    assert [i["status"] for i in settled] == ["seen", "pending"]
+    assert "report.md" in settled[0]["evidence"]
+
+
+def test_it_stops_short_of_saying_the_criterion_is_met():
+    """A successful write is environment-grounded -- it is a returncode, not
+    the agent's account of itself -- but it says the artefact EXISTS, not that
+    its contents satisfy anything. A wrong `seen` costs a missing nag; a wrong
+    `met` would cost the next attempt skipping what is actually absent."""
+    settled = pn._note_evidence(
+        [{"text": "report.md holds the Q3 totals", "status": "pending", "evidence": ""}],
+        ["solve: write_file report.md ok"],
+    )
+
+    assert settled[0]["status"] == "seen"
+    assert settled[0]["status"] != "met"
+
+
+def test_a_failed_write_grounds_nothing():
+    settled = pn._note_evidence(
+        [{"text": "a report exists at report.md", "status": "pending", "evidence": ""}],
+        ["solve: write_file report.md failed: no such directory"],
+    )
+
+    assert settled[0]["status"] == "pending"
+
+
+def test_reading_a_file_is_not_evidence_that_it_was_produced():
+    """A criterion about a report is not satisfied by having looked at one."""
+    settled = pn._note_evidence(
+        [{"text": "a report exists at report.md", "status": "pending", "evidence": ""}],
+        ["solve: read_file report.md ok", "solve: list_files . ok"],
+    )
+
+    assert settled[0]["status"] == "pending"
+
+
+def test_an_unrelated_path_does_not_settle_a_criterion():
+    settled = pn._note_evidence(
+        [{"text": "a report exists at report.md", "status": "pending", "evidence": ""}],
+        ["solve: write_file scratch/notes.txt ok"],
+    )
+
+    assert settled[0]["status"] == "pending"
+
+
+def test_a_criterion_naming_no_path_is_left_alone():
+    """Most criteria are about values and behaviour, not files. Matching them
+    on prose would mark work done that nobody did."""
+    settled = pn._note_evidence(
+        [{"text": "the reported total is what the code prints", "status": "pending",
+          "evidence": ""}],
+        ["solve: write_file report.md ok"],
+    )
+
+    assert settled[0]["status"] == "pending"
+
+
+def test_a_settled_criterion_is_not_re_opened():
+    already = [{"text": "x at a.py", "status": "met", "evidence": "judge said so"}]
+
+    assert pn._note_evidence(already, ["solve: write_file a.py ok"]) == already
+
+
+def test_an_acted_on_criterion_is_not_listed_as_still_open():
+    """The point of the whole thing: the reminder names what is left."""
+    checklist = [
+        {"text": "a report exists at report.md", "status": "seen", "evidence": "wrote report.md"},
+        {"text": "the totals are correct", "status": "pending", "evidence": ""},
+    ]
+
+    reminder = pn._reminders(pn.REMINDER_EVERY, checklist)
+
+    assert "the totals are correct" in reminder
+    assert "report.md" not in reminder
+
+
+def test_the_loop_settles_the_checklist_as_it_goes():
+    """Not a unit of `_note_evidence`: the loop has to actually call it, or
+    the mechanism exists and nothing drives it."""
+    import inspect
+
+    source = inspect.getsource(pn._agent_loop)
+    assert "_note_evidence(checklist, actions)" in source

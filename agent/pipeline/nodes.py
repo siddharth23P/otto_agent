@@ -532,6 +532,27 @@ DISTIL_PROMPT = (
     '[{{"cue": "...", "action": "...", "outcome": "worked"}}]'
 )
 
+#: Asked only of a run that was REJECTED AND RETRIED.
+#:
+#: Automatically extracted principles scale and come out too generic to act
+#: on; hand-authored ones are actionable and do not scale. The ingredient that
+#: closes the gap is contrastive analysis -- naming one aspect and comparing a
+#: better attempt against a worse one on it, rather than describing the better
+#: one alone.
+#:
+#: A retried run contains both attempts by construction, so this costs nothing
+#: extra to ask: no second call, no second trajectory, just the comparison made
+#: explicit instead of left implied by an outcome label. On a run that was
+#: accepted first time there is nothing to compare and this is not sent.
+CONTRAST_NOTE = (
+    "Because there were two attempts, say what CHANGED between them. Pick the "
+    "one aspect that actually differed -- what was checked, what order things "
+    "were done in, what assumption was dropped -- and write the lesson as that "
+    "contrast: what the weaker attempt did, and what the better one did "
+    "instead. A lesson that describes only the better attempt is the generic "
+    "kind nobody can act on."
+)
+
 #: The whole agent, in one prompt.
 #:
 #: This replaces PLANNER_PROMPT, SOLVER_PROMPT, SUMMARIZER_PROMPT and
@@ -1210,6 +1231,8 @@ def _reminders(iteration: int, checklist: list[dict] | None) -> str:
     if iteration == 0 or iteration % REMINDER_EVERY:
         return ""
     parts = [TOOL_BUILDING_NOTE]
+    # `seen` is not open. Something has already been written for it, and
+    # re-listing it is how a reminder turns into wallpaper.
     open_items = [i for i in (checklist or []) if i.get("status") == "pending"]
     if open_items:
         parts.append(
@@ -1817,6 +1840,12 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
         # The LIVE checklist, not state's. On a first run the loop builds it
         # and state still holds None, so reading state here silently reminded
         # the model of nothing -- caught by a test, not by reading.
+        # Settle what the action record already grounds, before deciding what
+        # is still worth re-stating. A criterion whose artefact was written
+        # twenty actions ago is not open, and nagging about it is how the
+        # reminder becomes wallpaper.
+        if checklist is not None:
+            checklist[:] = _note_evidence(checklist, actions)
         reminder = _reminders(iteration, checklist)
         if reminder:
             evidence += "\n\n" + reminder
@@ -2173,6 +2202,76 @@ def _new_checklist(criteria: list[str]) -> list[dict]:
     return [{"text": c, "status": "pending", "evidence": ""} for c in criteria]
 
 
+#: A path-shaped token inside a criterion: something with a slash or a dot in
+#: it and no whitespace. Deliberately narrow -- this is used to decide that a
+#: criterion has been ACTED ON, and a looser pattern would match ordinary
+#: prose and mark work done that nobody did.
+_PATH_IN_TEXT = re.compile(r"[A-Za-z0-9_./~-]*[/.][A-Za-z0-9_./~-]*[A-Za-z0-9_]")
+
+#: Tools whose SUCCESS is evidence that a named artefact now exists. Reading a
+#: file is not: a criterion about a report is not satisfied by having looked
+#: at one.
+_PRODUCING_TOOLS = ("write_file", "edit_file", "predict_edit")
+
+
+def _note_evidence(checklist: list[dict] | None, actions: list[str] | None) -> list[dict]:
+    """Attach grounded evidence to criteria that have already been acted on.
+
+    NOT a judgment, and deliberately not a `met`. A successful write to the
+    exact path a criterion names is environment-grounded -- it is a returncode,
+    not the agent's account of itself -- but it says the artefact exists, not
+    that its contents satisfy anything. So this records `seen` and leaves the
+    verdict to the evaluator, which is the only thing allowed to say `met`.
+
+    What it buys is an honest reminder block. Criteria are re-stated every
+    REMINDER_EVERY iterations while they are open, and without this a run
+    keeps being nagged about something it did twenty actions ago -- which is
+    how a reminder becomes wallpaper, the exact failure the reminder exists to
+    prevent. Grounding the next step in what is still outstanding rather than
+    in the whole history is what makes a long-horizon advantage grow instead
+    of decay.
+
+    A wrong `seen` costs a missing nag; a wrong `met` would cost the next
+    attempt skipping the thing that is actually absent. Only one of those is
+    worth the risk, which is why this stops short of the stronger claim.
+    """
+    if not checklist or not actions:
+        return checklist or []
+    done = {
+        target
+        for line in actions
+        for target in (_produced_path(line),)
+        if target
+    }
+    if not done:
+        return checklist
+    updated = []
+    for item in checklist:
+        if item.get("status") != "pending":
+            updated.append(item)
+            continue
+        hit = next((p for p in _PATH_IN_TEXT.findall(item.get("text", "")) if p in done), "")
+        updated.append({**item, "status": "seen", "evidence": f"wrote {hit}"} if hit else item)
+    return updated
+
+
+def _produced_path(action_line: str) -> str:
+    """The path a successful producing action wrote, or "".
+
+    Reads the one-line action record `_summarise_action` writes, because that
+    is what survives compaction -- the transcript it came from may be gone.
+    """
+    if " ok " not in f" {action_line} " and "returncode: 0" not in action_line:
+        # `_summarise_action` marks a failure explicitly; anything that says
+        # so is not evidence of anything existing.
+        if "failed" in action_line or "error" in action_line.lower():
+            return ""
+    if not any(tool in action_line for tool in _PRODUCING_TOOLS):
+        return ""
+    found = _PATH_IN_TEXT.findall(action_line)
+    return found[0] if found else ""
+
+
 def _render_checklist(checklist: list[dict] | None) -> str:
     """The working state as the loop sees it: what is settled and what is not.
 
@@ -2181,7 +2280,8 @@ def _render_checklist(checklist: list[dict] | None) -> str:
     """
     if not checklist:
         return ""
-    mark = {"met": "[done]", "blocked": "[blocked]", "pending": "[  ]"}
+    mark = {"met": "[done]", "blocked": "[blocked]", "seen": "[acted on]",
+            "pending": "[  ]"}
     lines = []
     for item in checklist:
         line = f"{mark.get(item.get('status'), '[  ]')} {item.get('text', '')}"
@@ -2297,9 +2397,14 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
         return []
     if not (evidence := _evidence_tail(state)) and not state.get("actions"):
         return []
+    # A retried run holds BOTH a worse attempt and a better one, which is the
+    # one situation where the comparison can be asked for rather than implied.
+    rejections = state.get("rejections") or 0
     body = "\n\n".join(part for part in (
         f"TASK:\n{state['messages'][-1].content}",
         f"HOW IT WENT: {'the answer was accepted' if succeeded else 'it was NOT accepted'}",
+        (f"IT WAS REJECTED AND RETRIED {rejections} time(s). The earlier attempt "
+         f"and the later one are both above.\n{CONTRAST_NOTE}" if rejections else ""),
         _actions_block(state),
         f"THE END OF THE WORKING:\n{evidence}" if evidence else "",
     ) if part)

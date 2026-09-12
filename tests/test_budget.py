@@ -182,3 +182,114 @@ def test_a_harness_budget_is_not_replaced_by_the_default():
     from agent.pipeline import run
 
     assert "current_budget() or default_budget()" in inspect.getsource(run.run_pipeline)
+
+
+# --------------------------------------------------------------------------
+# Multi-turn rationing
+# --------------------------------------------------------------------------
+#
+# A multi-turn task is many runs sharing one budget, and nothing stopped the
+# first run taking all of it. Measured on Claw-Eval: C03 and C04 each reached
+# ~930 seconds and ~46 model calls and then stopped answering, with the graders
+# saying so outright -- "failed to provide a response to the final three user
+# prompts", "failed to provide the actual Python script requested". C04 scored
+# 1.00 on gathering requirements and 0.10 on content, which is exactly the
+# shape of a run that spent everything before the conversation reached its
+# point.
+
+def test_each_turn_gets_a_share_rather_than_the_lot():
+    budget = Budget(max_model_calls=60)
+    spent_per_turn = []
+
+    for turns_left in (3, 2, 1):
+        budget.begin_turn(turns_left)
+        before = budget.calls
+        while not budget.spent():
+            budget.spend()
+        spent_per_turn.append(budget.calls - before)
+
+    assert spent_per_turn == [20, 20, 20]
+    assert budget.calls == 60
+
+
+def test_a_turn_that_finishes_early_hands_its_share_forward():
+    """Recomputed from what is actually left, not from a fixed slice, so a
+    cheap first turn buys the last one more room."""
+    budget = Budget(max_model_calls=60)
+
+    budget.begin_turn(3)
+    for _ in range(4):          # used 4 of its 20
+        budget.spend()
+    budget.begin_turn(2)
+
+    assert budget.turn_max_calls == 4 + (60 - 4) // 2
+
+
+def test_the_last_turn_may_use_everything_that_is_left():
+    budget = Budget(max_model_calls=30)
+    budget.begin_turn(1)
+
+    assert budget.turn_max_calls == 30
+
+
+def test_an_ordinary_single_turn_run_is_unchanged():
+    """Every `otto chat` turn and most benchmark tasks never call
+    `begin_turn`, and must behave exactly as before."""
+    budget = Budget(max_model_calls=10)
+
+    assert budget.turn_max_calls is None
+    while not budget.spent():
+        budget.spend()
+    assert budget.calls == 10
+
+
+def test_a_later_turn_is_not_told_to_wrap_up_the_moment_it_starts():
+    """The wrap-up point is a fraction of THIS turn's share. Measured against
+    the whole run instead, turn two would open past 80% and be told to finish
+    before it had done anything."""
+    budget = Budget(max_model_calls=100)
+    budget.begin_turn(2)
+    while not budget.spent():
+        budget.spend()
+
+    budget.begin_turn(1)
+    assert budget.phase() == "ok", "turn two opened in wrap-up"
+
+
+def test_every_turn_gets_its_own_wrap_up_note():
+    """Said once per RUN, a later turn would never be told to finish."""
+    budget = Budget(max_model_calls=20)
+
+    budget.begin_turn(2)
+    while budget.phase() != "wrap_up":
+        budget.spend()
+    assert budget.wrap_up_once() is not None
+    assert budget.wrap_up_once() is None, "said twice in one turn"
+
+    budget.begin_turn(1)
+    while budget.phase() != "wrap_up":
+        budget.spend()
+    assert budget.wrap_up_once() is not None, "turn two was never told to finish"
+
+
+def test_the_run_ceiling_still_wins_over_a_turn_share():
+    """A turn cannot be granted budget the run does not have."""
+    budget = Budget(max_model_calls=5)
+    budget.begin_turn(1)
+    while not budget.spent():
+        budget.spend()
+
+    budget.begin_turn(1)
+    assert budget.spent(), "a new turn resurrected an exhausted run"
+
+
+def test_the_harness_rations_per_turn():
+    """Not a unit of Budget: the claw harness has to actually call it, once
+    per turn, or the ceiling exists and nothing sets it."""
+    import inspect
+
+    from agent.eval import claw_bench
+
+    source = inspect.getsource(claw_bench.run_one)
+    assert "begin_turn" in source
+    assert "max_rounds - rounds_used + 1" in source

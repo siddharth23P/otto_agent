@@ -89,6 +89,16 @@ class Budget:
     #: So the wrap-up note is said once rather than on every iteration, which
     #: would be both noise and a growing prompt.
     warned: bool = field(default=False)
+    #: Ceilings for the CURRENT turn of a multi-turn task, set by
+    #: `begin_turn`. None on an ordinary single-turn run, which is every
+    #: `otto chat` turn and most benchmark tasks.
+    turn_max_calls: int | None = field(default=None)
+    turn_hard_at: float | None = field(default=None)
+    #: Where the current turn began, so its wrap-up point is a fraction of
+    #: THIS turn's share rather than of the whole run -- otherwise a later
+    #: turn would be told to wrap up the moment it started.
+    turn_start_calls: int = field(default=0)
+    turn_wrap_at: float | None = field(default=None)
 
     @classmethod
     def of(
@@ -124,6 +134,42 @@ class Budget:
         task ends."""
         return cls.of(max(monotonic_deadline - time.monotonic(), 1.0), **kwargs)
 
+    def begin_turn(self, turns_left: int) -> None:
+        """Ration what is left across this turn and the ones still to come.
+
+        A multi-turn task is many runs sharing one budget, and nothing stopped
+        the first run taking all of it. Measured on Claw-Eval: C03 and C04 each
+        reached ~930 seconds and ~46 model calls and then stopped answering,
+        and the graders said so in as many words -- "failed to provide a
+        response to the final three user prompts", "failed to provide the
+        actual Python script requested". C04 scored 1.00 on gathering
+        requirements and 0.10 on content, which is the shape of a run that
+        spent everything before the conversation reached its point.
+
+        An equal share rather than anything cleverer. The alternative is
+        guessing which turn deserves more, and a wrong guess starves exactly
+        the turn that mattered -- where an equal share at least leaves every
+        turn able to answer.
+
+        The ceilings are absolute rather than relative so `phase()` stays a
+        comparison: a turn ends when `calls` reaches the number this set.
+        Calling it again for the next turn recomputes from what is actually
+        left, so a turn that finished early hands its unused share forward.
+        """
+        # Each turn gets its own wrap-up note. Said once per RUN, a later turn
+        # would never be told to finish.
+        self.warned = False
+        turns_left = max(1, int(turns_left))
+        self.turn_start_calls = self.calls
+        if self.max_model_calls is not None:
+            remaining = max(self.max_model_calls - self.calls, 0)
+            self.turn_max_calls = self.calls + max(1, remaining // turns_left)
+        if self.hard_at is not None:
+            now = time.monotonic()
+            share = max(self.hard_at - now, 0.0) / turns_left
+            self.turn_hard_at = now + share
+            self.turn_wrap_at = now + share * WRAP_UP_FRACTION
+
     def spend(self) -> None:
         """Record one model request. Called from `_call`, once per HTTP
         request rather than once per logical call, so a retry storm is
@@ -131,15 +177,32 @@ class Budget:
         self.calls += 1
 
     def phase(self) -> Phase:
-        """Where this run is: working, wrapping up, or done."""
+        """Where this run is: working, wrapping up, or done.
+
+        The turn ceilings are checked alongside the run's own, and "spent" on
+        a turn ceiling is not the end of the task -- the harness starts the
+        next turn, which calls `begin_turn` and raises them again.
+        """
+        now = time.monotonic()
         if self.max_model_calls is not None and self.calls >= self.max_model_calls:
             return "spent"
-        if self.hard_at is not None and time.monotonic() >= self.hard_at:
+        if self.hard_at is not None and now >= self.hard_at:
             return "spent"
+        if self.turn_max_calls is not None and self.calls >= self.turn_max_calls:
+            return "spent"
+        if self.turn_hard_at is not None and now >= self.turn_hard_at:
+            return "spent"
+
+        if self.turn_max_calls is not None:
+            share = self.turn_max_calls - self.turn_start_calls
+            if self.calls >= self.turn_start_calls + share * WRAP_UP_FRACTION:
+                return "wrap_up"
         if self.max_model_calls is not None:
             if self.calls >= self.max_model_calls * WRAP_UP_FRACTION:
                 return "wrap_up"
-        if self.wrap_up_at is not None and time.monotonic() >= self.wrap_up_at:
+        if self.turn_wrap_at is not None and now >= self.turn_wrap_at:
+            return "wrap_up"
+        if self.wrap_up_at is not None and now >= self.wrap_up_at:
             return "wrap_up"
         return "ok"
 

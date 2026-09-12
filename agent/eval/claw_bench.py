@@ -67,7 +67,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
-from agent.pipeline.budget import Budget, bind_budget
+from agent.pipeline.budget import Budget, bind_budget, current_budget
 from agent.pipeline.execution import bind_command_runner
 from agent.pipeline.toolkit import (
     ExtraTool, bind_extra_tools, json_body, validate_against,
@@ -647,7 +647,16 @@ def run_one(
             # ran 1096 seconds against a 900-second budget without it firing.
             with bind_workspace(scratch), bind_command_runner(runner), \
                     bind_extra_tools(tools), bind_budget(Budget.until(deadline.hard_at)):
+                budget = current_budget()
                 while True:
+                    # Ration what is left across the turns still to come. One
+                    # budget is bound for the whole task, and nothing stopped
+                    # the first turn spending all of it: C03 and C04 each hit
+                    # ~930s and ~46 calls and then stopped answering, with the
+                    # graders saying so outright. `+ 1` because the turn about
+                    # to run is one of the ones still to come.
+                    if budget is not None:
+                        budget.begin_turn(max_rounds - rounds_used + 1)
                     if architecture == "single":
                         answer, actions = run_single_agent(
                             turn_text, max_steps=task.environment.max_turns * 3,
