@@ -116,7 +116,30 @@ class Lesson:
     outcome: str = "worked"
 
     def rendered(self) -> str:
-        return f"When {self.cue}: {self.action} [{self.outcome}]"[:MAX_LESSON_CHARS]
+        """The stored form, which `_parse` has to be able to read back.
+
+        The parts are trimmed to fit the budget JOINTLY, rather than the
+        assembled string being sliced at the end. Slicing the whole thing cut
+        the trailing `[outcome]` off any lesson over the limit, and `_parse`
+        requires that suffix -- so a long lesson was written to the bank and
+        could never be read out of it again. A silent, permanent slot loss
+        with no error anywhere, measured on a 400-character pair.
+        """
+        frame = len("When : [] ") + len(self.outcome)
+        room = max(0, MAX_LESSON_CHARS - frame)
+        cue, action = self.cue, self.action
+        if len(cue) + len(action) > room:
+            # Halve the budget between them, then give whatever one of them
+            # does not need to the other -- a short cue should not force a
+            # long action to be cut.
+            share = room // 2
+            if len(cue) <= share:
+                action = action[: room - len(cue)]
+            elif len(action) <= share:
+                cue = cue[: room - len(action)]
+            else:
+                cue, action = cue[:share], action[: room - share]
+        return f"When {cue}: {action} [{self.outcome}]"
 
 
 #: "nobody has said" -- distinct from an explicit None, which means OFF.

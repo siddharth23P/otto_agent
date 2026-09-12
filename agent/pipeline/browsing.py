@@ -57,6 +57,120 @@ READ_OPS = ("open", "read", "find", "back")
 ACT_OPS = ("click", "type", "submit")
 
 
+#: Schemes `open` will follow. Everything else -- `file:`, `data:`, `ftp:`,
+#: `chrome:` -- is refused before the browser sees it.
+#:
+#: `file:///etc/passwd` through a browser is a file read with extra steps, and
+#: the digest comes back to the model as ordinary tool output.
+ALLOWED_SCHEMES = ("http", "https")
+
+#: Networks `open` will not reach.
+#:
+#: This is the SSRF half, and it matters more here than in an ordinary HTTP
+#: client because of WHO chooses the URL. The agent picks it, and the agent
+#: reads web pages -- so a page it has already opened can tell it to open
+#: something else, which is indirect prompt injection with a network request
+#: on the end of it. `169.254.169.254` is the cloud metadata endpoint on every
+#: major provider and hands out credentials to anything that asks.
+#:
+#: Link-local, loopback and the three private ranges, plus the IPv6 forms.
+#: Blocked by parsed address rather than by string matching, and the host is
+#: NORMALISED first -- browsers accept `http://2130706433/` and
+#: `http://0177.0.0.1/` as 127.0.0.1, and `ipaddress` does not, so without
+#: that step both walk straight past this list. Measured on the first draft of
+#: exactly this function.
+BLOCKED_NETWORKS = (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "169.254.0.0/16", "0.0.0.0/8", "100.64.0.0/10",
+    "::1/128", "fc00::/7", "fe80::/10",
+)
+
+
+#: Names that mean loopback or metadata without being addresses. Short on
+#: purpose: this is not an attempt at a name blocklist, which cannot work,
+#: only a refusal of the handful anybody actually types.
+BLOCKED_HOSTS = frozenset({
+    "localhost", "ip6-localhost", "ip6-loopback",
+    "metadata.google.internal", "metadata.goog", "instance-data",
+})
+
+
+def _as_address(host: str):
+    """`host` as an IP address, accepting the forms a browser accepts.
+
+    `ipaddress` takes dotted quads and IPv6. A browser also takes a bare
+    integer (`2130706433`) and octal or hex octets (`0177.0.0.1`,
+    `0x7f.0.0.1`), all of which mean 127.0.0.1 -- so a check that only asks
+    `ipaddress` lets every one of them through. Returns None when the host is
+    a name rather than any form of address.
+    """
+    import ipaddress
+
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    if host.isdigit():  # bare integer form
+        try:
+            return ipaddress.ip_address(int(host))
+        except ValueError:
+            return None
+    parts = host.split(".")
+    if len(parts) == 4:  # octal or hex octets
+        try:
+            octets = [int(p, 0) if p.lower().startswith("0x")
+                      else int(p, 8) if p.startswith("0") and p != "0"
+                      else int(p) for p in parts]
+        except ValueError:
+            return None
+        if all(0 <= o <= 255 for o in octets):
+            return ipaddress.ip_address(".".join(str(o) for o in octets))
+    return None
+
+
+def check_url(url: str) -> str:
+    """Why this URL must not be opened, or "" if it may be.
+
+    Refused BEFORE the driver script is built, so a rejected URL never reaches
+    the container at all.
+
+    Hostnames that are not literal addresses are allowed through: resolving
+    them here would be a check against a different answer from the one the
+    container's own resolver gives, and a name that resolves to a blocked
+    address from inside the container is a DNS-rebinding problem this cannot
+    honestly solve from out here. What it does stop is the direct form, which
+    is the one that actually gets used.
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError as exc:
+        return f"that is not a URL ({exc})"
+
+    if parts.scheme.lower() not in ALLOWED_SCHEMES:
+        return (f"{parts.scheme or 'that'}: is not a scheme this opens -- "
+                f"only {' and '.join(ALLOWED_SCHEMES)}")
+    host = (parts.hostname or "").strip("[]")
+    if not host:
+        return "that URL names no host"
+    if host.lower() in BLOCKED_HOSTS or host.lower().endswith(".localhost"):
+        return f"{host} is a loopback or metadata name this will not open"
+
+    address = _as_address(host)
+    if address is None:
+        return ""  # a name, not a literal address -- see the docstring
+    # An IPv4 address wrapped in IPv6 (`::ffff:127.0.0.1`) is the v4 address.
+    if getattr(address, "ipv4_mapped", None) is not None:
+        address = address.ipv4_mapped
+    for network in BLOCKED_NETWORKS:
+        if address in ipaddress.ip_network(network):
+            return (f"{host} is on a network this will not open ({network}) -- "
+                    "loopback, private and cloud-metadata addresses are refused")
+    return ""
+
+
 def parse_op(body: str, allowed: tuple[str, ...]) -> tuple[str, str] | str:
     """`(operation, argument)` from a CODE: body, or why it is not one."""
     head, _, rest = body.strip().partition("\n")

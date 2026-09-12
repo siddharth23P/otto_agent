@@ -45,17 +45,26 @@ from agent.pipeline.run import _as_ask_event, _config, _graph_thread_id, _initia
 
 
 def test_initial_state_matches_the_agentstate_shape_with_empty_start_values():
+    """`plan`, `active_step` and `round` are gone: they belonged to the
+    seven-node graph that walked a JSON plan one step at a time, and nothing
+    has read or written them since planning became a MODE. They were seeded
+    here and declared in state.py and touched nowhere else."""
     state = _initial("do the thing")
+
+    from agent.pipeline.state import AgentState
+
+    assert set(state) <= set(AgentState.__annotations__), (
+        "_initial seeds a key AgentState does not declare"
+    )
+    for gone in ("plan", "active_step", "round"):
+        assert gone not in state
 
     assert [m.content for m in state["messages"]] == ["do the thing"]
     assert state["board"] == []
-    assert state["round"] == 0
     assert state["node"] is None
     assert state["feedback"] == ""
     assert state["output"] is None
     assert state["context"] == ""
-    assert state["plan"] is None
-    assert state["active_step"] is None
     assert state["node_error"] is None
     assert state["pending_question"] is None
     assert state["pending_choices"] is None

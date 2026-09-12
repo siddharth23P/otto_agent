@@ -176,3 +176,64 @@ def test_an_operation_with_no_argument_parses():
 
 def test_an_empty_body_is_explained():
     assert isinstance(browsing.parse_op("   ", browsing.READ_OPS), str)
+
+
+# --------------------------------------------------------------------------
+# Where it is allowed to go
+# --------------------------------------------------------------------------
+#
+# The agent chooses this URL, and the agent reads web pages -- so a page it
+# has already opened can steer the next request. That is indirect prompt
+# injection with a network call on the end of it, which is why the check is on
+# the production path and not only in a test.
+
+def test_only_http_and_https_are_opened():
+    """`file:///etc/passwd` through a browser is a file read with extra steps,
+    and the digest comes back as ordinary tool output."""
+    for url in ("file:///etc/passwd", "data:text/html,<b>x",
+                "ftp://example.com/x", "chrome://settings"):
+        assert browsing.check_url(url), url
+
+
+def test_the_cloud_metadata_endpoint_is_refused():
+    """169.254.169.254 hands out credentials to anything that asks, on every
+    major provider."""
+    assert browsing.check_url("http://169.254.169.254/latest/meta-data/")
+
+
+def test_loopback_and_private_ranges_are_refused():
+    for url in ("http://127.0.0.1:8080/", "http://[::1]/", "https://10.1.2.3/",
+                "http://192.168.0.5/", "http://172.16.9.9/"):
+        assert browsing.check_url(url), url
+
+
+def test_the_obfuscated_forms_of_localhost_are_refused():
+    """A browser resolves all three of these to 127.0.0.1 and `ipaddress` does
+    not parse any of them, so a check that only asked `ipaddress` let every
+    one through. Measured on the first draft of this function."""
+    for url in ("http://2130706433/", "http://0177.0.0.1/", "http://0x7f.0.0.1/",
+                "http://[::ffff:127.0.0.1]/"):
+        assert browsing.check_url(url), url
+
+
+def test_loopback_and_metadata_by_NAME_are_refused():
+    for url in ("http://localhost:9000/", "http://foo.localhost/",
+                "http://metadata.google.internal/computeMetadata/v1/"):
+        assert browsing.check_url(url), url
+
+
+def test_an_ordinary_public_url_is_allowed():
+    for url in ("https://example.com", "https://sub.example.com/a?b=c",
+                "http://93.184.216.34/"):
+        assert browsing.check_url(url) == "", url
+
+
+def test_a_refused_url_never_reaches_the_container():
+    """Checked before the driver script is built, so the request is not made
+    and then discarded -- it is not made."""
+    runner = _fake_browser()
+    with bind_command_runner(runner):
+        result = pt.browse("open http://169.254.169.254/latest/meta-data/")
+
+    assert result.returncode == 1
+    assert "command" not in runner.seen, "the driver ran anyway"

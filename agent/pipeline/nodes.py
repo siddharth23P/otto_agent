@@ -1,296 +1,70 @@
-"""The overseer/planner/solver/summarizer/finder/evaluator graph.
+"""One agent, one evaluator, and the seams that keep them honest.
 
-Second revision of this graph (2026-09-10, same day the first revision
-replaced the orchestrator/worker/evaluate/subtask_consensus/synthesize swarm
-pipeline). The first revision's ROUTER was a one-shot dispatcher: decide once,
-run one specialist, judge once, re-decide only on rejection. This revision
-changes what ROUTER *is*, per that day's second design discussion:
+The graph is `agent -> evaluator -> END`, with an `ask_user` pause. It used to
+be seven nodes -- an overseer re-invoked after every step, four specialists and
+a judge -- and collapsing it is the largest measured change in this file:
+node boundaries were 45-69% of a run's wall time against 0.1-0.4 seconds of
+actual tool execution per task, and three of every five model calls were
+overhead. Mean score went 0.54 to 0.62 on the measured tasks.
 
-  * ROUTER is the OVERSEER now, not a one-shot dispatcher. It is re-invoked
-    after EVERY node -- not just after an evaluator rejection -- and decides
-    the single next action from everything accumulated so far: gathered
-    context, an approved plan (if any), the most recent pending output, and
-    the most recent rejection feedback (if any). Five targets, not four:
-    planner, solver, summarizer, finder, or evaluator. Sending something to
-    evaluator is now itself a decision the overseer makes explicitly, not
-    something that happens automatically after every specialist run -- a
-    finder call that only gathered background material, say, should usually
-    go straight to whichever specialist needs it next, not to the evaluator.
+WHAT A RUN DOES, in order.
 
-  * No cap on how many times the overseer may retry a task (design call:
-    "we dont need any variable to limit number of rounds a agent runs for").
-    `round` (AgentState) is telemetry now, incremented on every overseer
-    invocation, read by nothing that decides to stop. The only backstop left
-    is LangGraph's own recursion_limit, sized generously by
-    _RECURSION_SAFETY_NET below and by agent/pipeline/run.py's `_config` --
-    infra insurance against a genuinely runaway loop (a bug), never a
-    business rule a real, converging request is expected to hit.
+1. `_criteria` writes down what a correct answer must contain, FROM THE TASK
+   ALONE, before any attempt exists. Its own call, its own prompt. This is the
+   only information in the whole judgment the actor did not produce, and it is
+   why the evaluator is worth its calls: self-refinement without external
+   information measures at -2.5% to 0% over five turns, where the same models
+   reach 90-98% given an external checklist.
 
-  * Retry-same-specialist is the DEFAULT policy on a rejection, not a
-    hardcoded rule (design call: "we dont have overlap between specialist so
-    retry with same specialist with feedback rather than different"). It
-    lives entirely in ROUTER_PROMPT's wording below, with one deliberate,
-    explicit exception: if the feedback shows a task was attempted without a
-    plan and that was the actual problem, the overseer is told to dispatch
-    to planner instead, even though a different specialist tried it --
-    "learn from its mistake for which task required planning and which did
-    not," scoped to THIS run only (see the note at the bottom of this
-    docstring on the larger, cross-turn version of that same idea).
+2. `_agent_loop` runs one conversation until it answers, pauses, or runs out
+   of budget. The protocol is text -- `ACTION:` then `CODE:` -- not native
+   tool calling, which is deliberate: programmatic tool calling matches or
+   beats JSON in 11 of 14 models, and under fan-out JSON collapses from 100%
+   to 0% between 70 and 72 tools where the code path holds.
 
-  * planner / solver / summarizer / finder -- same ACTION/tool-then-FINAL
-    loop as before (_tool_loop), same six tools. What changed is what they
-    hand back: every one of them now returns to "router" (not "evaluator")
-    when done, and self-reports its own identity into `state["node"]` --
-    the overseer no longer predicts ahead of time who is about to run, it
-    only decides who runs next. See agent/pipeline/state.py for the full
-    field-by-field reasoning, and the third-refinement note below for how
-    `context` gets written during plan execution specifically.
+   Inside it, four things earn their place:
 
-  * evaluator is dual-mode now, not single-mode: it judges a PLAN
-    (`state["node"] == "planner"`) or a candidate FINAL ANSWER (anything
-    else) -- different question, different prompt. Approving a plan sets
-    `state["plan"]` and returns to the overseer (there is more work left --
-    the plan hasn't been executed yet); approving a final answer sets
-    `state["final_output"]` and ends the run. Rejecting either always
-    returns to the overseer with the reason -- there is no longer an
-    exhaustion branch that gives up after N rounds (removed along with
-    MAX_DISPATCH_ROUNDS, see above).
+   - `_parse_worker_reply` validates on the EMIT path. A tool name wrapped in
+     backticks, bold, prose or a typo resolves instead of costing a round trip
+     to be told it does not exist, and whichever of ACTION/FINAL comes first
+     wins so an answer is never silently discarded in favour of a trailing
+     suggestion.
+   - The mutation gate holds a tool that cannot be undone, once per target,
+     BEFORE it runs. Mutating actions are 14-18% of steps and one mutating
+     mistake cuts success odds 55-96%, so the gate is cheap and precisely
+     aimed. `TOOL_TIERS` is what it reads.
+   - `_switch_mode` changes model and guidance without changing node. Modes
+     are (task, guidance, depth); escalating restarts from the seed and
+     carries the last thing produced, de-escalating keeps everything. A
+     stronger model handed a weaker one's trajectory recovers 47% of the gain
+     at 4-6x the cost, which is why the directions differ.
+   - `_compact` shrinks old tool results for free and keeps the full text
+     retrievable through `recall_memory`.
 
-Third refinement, same day: a plan stopped being free text the moment it's
-approved. PLANNER_PROMPT now asks for a JSON array of `{"task": ...}`
-objects; evaluator(), on approving one, parses it (_parse_plan_steps) into
-a list of PlanStep dicts (agent/pipeline/state.py) --
-`{"task", "route_to": None, "output": None}` each -- and CLEARS
-`state["active_step"]` back to None. From there, executing the plan is
-deterministic/assignment-driven, not re-litigated through the general
-overseer prompt on every round:
+3. The evidence gate. An answer that changed code with nothing run since is
+   held once and asked for the check -- no model call unless it fires, prose
+   edits exempt, and "there is nothing to run here" accepted. See
+   agent/pipeline/evidence.py for why this is structural rather than a prompt.
 
-  * router() first checks for an ACTIVE, feedback-free plan
-    (`state["plan"]` is a non-empty list and `state["feedback"]` is empty).
-    If so, it finds the first step whose `output` is still None
-    (_next_pending_step_index) and:
-      - if there isn't one (every step has run), it dispatches straight to
-        evaluator for the whole-answer judgment -- no LLM call needed, the
-        decision is unambiguous once the plan says "done".
-      - if there is one, it makes a NARROWER LLM call (STEP_ROUTE_PROMPT,
-        restricted to STEP_TARGETS = solver/summarizer/finder -- no
-        re-planning or per-step judgment mid-plan in this design), writes
-        the chosen specialist into that step's own `route_to`, and
-        dispatches there.
-    The general ROUTER_PROMPT (all five targets) is only consulted again
-    either before any plan exists (the very first decision on a request)
-    or after a REJECTION (deciding how to retry) -- both cases where real
-    judgment, not just plan bookkeeping, is needed. A rejection while a
-    plan is active is really a rejection of the LAST step's output (see
-    below), so the general prompt's existing "retry same specialist by
-    default, escalate to planner if it needed one" policy still applies
-    unchanged; if it picks "planner" while an old plan is still hanging
-    around, router() resets `plan`/`active_step` to None first -- the old
-    plan turned out to be the problem, not just one step of it, so this
-    starts over rather than leaving stale step state behind.
+4. `evaluator` scores the answer against the criteria from step 1, separates
+   "not met" from "blocked by the environment", and may check one thing with a
+   tool. It is capped at MAX_EVALUATOR_ITERATIONS because, given a tool budget
+   and no cap, it spent it: 24 calls on a task the loop did in six.
 
-  * `active_step` (state.py) tracks which step is currently in flight.
-    _run_role checks it: when set, this call is executing (or REVISING,
-    after a rejection) that specific step, so its output overwrites that
-    step's `output` in `state["plan"]` -- not just the flat `state["output"]`
-    used outside plan execution -- and a labeled "step N (role): task ->
-    result" entry is always appended onto `context` (overriding that role's
-    own normal context_op, e.g. summarizer's usual "replace", for the
-    duration of plan execution -- erasing earlier steps' results because
-    the current step happens to be a summarizer step would defeat the whole
-    point of sequencing). This is the concrete mechanism behind point 4's
-    "big task -> plan -> later steps build on earlier ones' results."
+5. `_distil` leaves at most three transferable lessons behind, on a cheaper
+   seat than the executor. `_record_seat` credits the model that produced the
+   answer, but only when the run used ONE mode -- crediting any of several is
+   guessing, and a log that mis-attributes cannot be trusted to change routing.
 
-Fourth refinement, same day: both of the overseer's LLM calls (the general
-5-way decision and the narrower per-step assignment) now retry IN PLACE
-(_decide, _MAX_ROUTER_PARSE_RETRIES) if the reply doesn't parse at all,
-before falling back to _parse_router's "default to solver" safety net.
-Observed live: the model occasionally rambles instead of the required
-two-line NODE:/WHY: format -- most often the very first time a PENDING
-OUTPUT shows up in its prompt (i.e. right when it should say "evaluator"
-for the first time) -- rather than genuinely being unsure. Silently
-defaulting to solver in that case doesn't just misroute once: it burns an
-entire extra specialist round (a full ACTION/FINAL tool loop) to recover,
-every time it happens. A retry of just the one small router call is far
-cheaper and, empirically, usually succeeds on the first retry.
+WHAT IS BOUND, NOT IMPORTED. Every seam this file depends on is a contextvar
+so a harness can redirect it per run without the graph knowing: the workspace,
+the command runner (a container, for the benchmarks), extra tools, the spend
+budget, the memory store, and the lesson bank. That is what lets Claw-Eval and
+SWE-bench run Otto's real graph rather than a copy of it.
 
-Fifth refinement, same day (design call, verbatim: "if evaluator fails
-router should again go to planner for planning next steps based on
-current output"): a live run crashed with an uncaught httpx.ReadTimeout,
-raised mid-stream deep inside the Inception provider (solver's own call,
-that time -- not evaluator's), propagating all the way up through this
-file's `_call` and out of `app.invoke()` entirely. Two things changed:
-
-  * agent/router/llm_provider/inception_provider.py's `_stream` only
-    translated exceptions raised by the initial `client.chat.completions.
-    create(...)` call into ProviderError -- NOT exceptions raised while
-    iterating the returned stream itself (`for chunk in stream:`), which
-    is exactly where a read timeout happens (the request already
-    succeeded; the response body is still arriving). That gap is now
-    closed: the iteration is wrapped the same way the initial call is,
-    and raw httpx errors (not just the SDK's own InceptionError subtree)
-    are translated too, since a read timeout mid-stream surfaces as a raw
-    httpx.ReadTimeout, never one of the SDK's own wrapped types. The
-    invariant this restores (base.py's own docstring already states it):
-    nothing but ProviderError should ever cross the provider boundary.
-
-  * With that invariant actually holding, `_run_role` and `evaluator`
-    (below) now catch ProviderError around their own `_tool_loop` call
-    instead of letting it crash the graph. Rather than a real output or
-    verdict, they return to router() with `state["node_error"]` set
-    (state.py) -- and router() checks that FIRST, ahead of both the
-    plan-execution shortcut and the general 5-way decision, escalating to
-    planner DETERMINISTICALLY (no LLM call -- an LLM call is exactly what
-    just failed) with any active plan discarded, same as an ordinary
-    rejection-driven escalation. The literal request said "if evaluator
-    fails" -- but the crash that prompted it happened in solver, and
-    there's no principled reason a specialist's own network hiccup should
-    be handled differently from the evaluator's, so this is general: any
-    of the five nodes' own LLM call failing routes back to planner the
-    same way. "based on current output" is handled by reusing
-    _role_body's existing "PREVIOUS ATTEMPT BY <role>" background display
-    -- the failing node writes a plain-language explanation into
-    `feedback` (state["output"] itself is left untouched by the failure),
-    so planner sees exactly what a different specialist's rejected
-    attempt already looks like to it, just with a failure reason instead
-    of an evaluator's.
-
-Sixth refinement, same day, live-tested: "Hi" / "Solve N Queens with
-brute force" / "improve above solution" -- the third turn had no idea
-what "above solution" was and looped trying to guess. Root cause: every
-turn started `state["messages"]` from scratch (agent/pipeline/run.py's
-`_initial()` only ever seeded it with the CURRENT turn's text), even
-though chat.py's/tui.py's own `Session.history` was already tracking the
-whole conversation client-side -- it just never got handed to the graph.
-Two halves, both needed: run.py's new `history` parameter actually feeds
-prior turns into `state["messages"]`; `_conversation_so_far()` (below)
-is what makes every prompt-builder in THIS file (`_router_body`,
-`_step_route_body`, `_role_body`, and evaluator()'s own human_body) show
-it, as a "CONVERSATION SO FAR:" block ahead of TASK:/ORIGINAL REQUEST:.
-Without both halves this doesn't work -- state carrying the messages but
-no prompt ever displaying them would be just as blind as before.
-Deliberately NOT a fix for "the model asks the user a clarifying question
-mid-run" (there was no such capability anywhere in this graph yet, a
-separate and larger gap the same live test surfaced) -- this only made
-sure the model has what it needs to not HAVE to ask in a case like
-"improve above solution", where the answer was one turn away the whole
-time. See the seventh refinement, directly below, for that other gap.
-
-Seventh refinement, same day, same live test's other half (verbatim:
-"it got stuck in a loop trying to find what above solution is and was
-thinking to ask user but it didnt have that capability... not able to ask
-something to user mid thinking if it get's confused"): planner / solver /
-summarizer / finder / evaluator can now genuinely pause a run and ask the
-person something, instead of guessing or looping. Scoped with the person
-before building it (three separate calls, all "any node can ask" /
-"widget with multi choice + text bar" / "LangGraph interrupt()/
-Command(resume=...)"):
-
-  * `ask_user` joins the six existing tools (execute_python, execute_bash,
-    web_search, rag, complete_code, predict_edit) as a seventh ACTION any
-    of the five nodes above may reach for, mid-_tool_loop, exactly like
-    any other tool -- see PLANNER_PROMPT/SOLVER_PROMPT/SUMMARIZER_PROMPT/
-    FINDER_PROMPT/EVALUATOR_PROMPT's shared wording on when to use it
-    (sparingly -- it pauses the whole run and costs the person real time).
-
-  * Unlike every other tool, though, `ask_user` cannot just hand a result
-    back into _tool_loop's own local `messages` list and keep going --
-    the answer has to come from an actual human, which means the WHOLE
-    GRAPH has to pause (LangGraph's own checkpointed interrupt()/
-    Command(resume=...) mechanism -- app.compile(checkpointer=
-    InMemorySaver()) already had a checkpointer wired up, from before this
-    refinement, for an unrelated reason: giving every turn its own
-    disposable thread id, agent/pipeline/run.py's `_graph_thread_id`).
-    _tool_loop, on seeing ACTION: ask_user, raises NeedsUserInput (below)
-    instead of dispatching it like a normal tool -- unwinding out of
-    _tool_loop and out of whichever role node (or evaluator()) called it,
-    all the way to a NEW dedicated `ask_user` node (bottom of this file).
-    That node's entire body is "read the question off state, call
-    interrupt(), write the answer down, hand back to whoever asked" --
-    deliberately nothing else, because langgraph.types.interrupt's own
-    docstring is explicit that a node resumes by RE-EXECUTING ITS WHOLE
-    BODY from the top; a node with an LLM call or a tool dispatch BEFORE
-    its interrupt() would redo that work every single time the person
-    answers. Keeping the actual pause point in its own minimal node, with
-    NeedsUserInput as the unwind signal that gets it there, is what avoids
-    that -- the specialist that got stuck is simply re-invoked fresh
-    afterward (ask_user's own Command(goto=<the role that asked>)), not
-    resumed mid-loop.
-
-  * The answer goes into `state["context"]` (a `you asked: "..." / the
-    user answered: "..."` line, appended the same way finder's own
-    gathered material is), NOT into `state["messages"]` -- every node in
-    this graph, router() included, reads `state["messages"][-1]` as THE
-    TASK for the whole turn; appending the Q&A there would silently
-    replace the actual task the next time anything looked. `context`
-    already means "material gathered so far for planner/solver to use"
-    (state.py) and is already shown to every prompt below via "CONTEXT
-    GATHERED SO FAR:" -- reusing it needs no new display mechanism, and
-    the re-invoked specialist sees the answer as ordinary background,
-    the same way it would see anything finder dug up.
-
-  * Two new AgentState fields carry a pending question across the pause:
-    `pending_question`/`pending_choices` (what to show; choices is the
-    "multi choice" half of "multi choice + text bar" -- OPTIONAL, an
-    empty list means open-ended free text only) and `asking_role` (who to
-    hand back to once answered -- ask_user() itself has no other way to
-    know). All three are cleared back to None by ask_user() the moment it
-    resumes; nothing about this is meant to survive past that one pause.
-
-  * The interrupt surfaces to callers of agent/pipeline/run.py's
-    run_pipeline_stream() as a `{"__ask__": {"question", "choices",
-    "thread_id"}}` event (instead of the usual `{"__final__": ...}` at
-    the very end) -- the stream simply ends there, mid-turn, same
-    thread_id and all, and a NEW function, `resume_pipeline_stream()`,
-    continues that exact same LangGraph checkpoint thread once the caller
-    has an answer. agent/cli/chat.py and agent/cli/tui.py both loop on
-    that: render/collect the question, resume, keep going -- possibly
-    more than once, if the re-invoked specialist gets stuck again.
-
-Deliberately out of scope for this revision, same as the first:
-  - web_search and rag are still STUBBED (tools.py).
-  - No domain-specific verification beyond the evaluator's own tool access.
-  - No PER-STEP evaluation -- only the whole plan (before execution) and
-    the whole final answer (after every step has run) are ever judged. A
-    step that turns out wrong is caught at that final judgment and handled
-    like any other rejection (retry the specialist that produced it, or
-    escalate to a fresh plan) rather than being individually re-judged
-    mid-plan.
-
-Deliberately out of scope for a DIFFERENT reason -- not unbuilt-but-planned
-inside this file, but a separate, larger subsystem that already has its own
-design doc (claude/otto-memory-design.md, Phase 14 "Personal lessons"):
-persistent, CROSS-TURN learning about which tasks need a plan (retrieval
-from a local embeddings index, a promotion gate, etc.) is not implemented
-here. What IS implemented here is the narrower, IN-TURN version -- the
-overseer sees this run's own rejection history in its prompt and can act on
-it for the rest of THIS run -- because nothing durable persists once the
-run ends. Building the durable version is follow-up work against that doc,
-not a silent scope-expansion of this change.
-
-Eighth refinement, same day: Phase 2 of claude/otto-tiered-memory-design.md
-(the project doc has the full design) -- this graph's own two halves of
-that wiring, a DIFFERENT memory system from the paragraph just above (that
-one is cross-turn LEARNING; this one is cross-turn conversation MEMORY,
-short-term, not persisted past a session). agent/pipeline/run.py's
-`_initial()` gained a `memory_context` parameter: agent/cli/shell.py's
-`Session` now keeps conversation history in an `agent.memory.queue.
-TieredQueue` instead of an unbounded list, and seeds `state["context"]`
-with whatever's fallen out of that queue's verbatim recent tier (`X`) --
-the queue's own bounded, real Human/AIMessage reconstruction still becomes
-`history`/`state["messages"]` exactly as before this refinement, so
-`_conversation_so_far()` above needed zero changes; only what counts as
-"recent enough to stay verbatim" is now capped. tools.py's new
-`recall_memory` tool is the other half -- registered like any other tool
-(TOOL_DISPATCH/TOOL_TIERS) and mentioned in every role/evaluator prompt's
-ACTION list, same as every other tool (tests/test_prompt_tool_sync.py's
-existing "every prompt mentions every dispatchable tool" check is what
-keeps this in sync, unchanged by this refinement). FINDER_PROMPT's own
-listing gives it the most emphasis (Prefer, in this order: ...) since the
-spec's own framing was specifically "if AGENT decides it needs more
-details... FINDER will find the relevant stuff" -- but any role stuck on
-something from earlier in a long conversation can reach for it directly
-rather than routing through finder first.
+BUDGET IS IN MODEL REQUESTS, counted in `_call`, retries included -- a budget
+that counted logical calls would undercount by up to 3x exactly when a run is
+going badly.
 """
 from __future__ import annotations
 
@@ -316,7 +90,7 @@ from agent.memory.lessons import (
     Lesson, learning_enabled, parse_distilled, recall_lessons, record_lessons,
 )
 from agent.pipeline.evidence import Ledger, render_note as render_unproven
-from agent.pipeline.state import AgentState, PlanStep
+from agent.pipeline.state import AgentState
 from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
 from agent.pipeline.tools import (
@@ -1996,6 +1770,7 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
                 messages, body, mode=mode, swaps=swaps,
                 did_work=did_work_since_swap, mode_log=mode_log,
                 calls=budget.calls if budget else 0, seed=seed,
+                confirmed=confirmed,
             )
             llm = ROUTER.chat_model(MODES[mode].task)
             continue
@@ -2058,6 +1833,11 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
 #: that needs a long conversation is a subtask that was not bounded properly,
 #: and the parent is better placed to notice that than the child is.
 MAX_DELEGATE_ITERATIONS = 8
+
+#: Ceiling on what one mode hands forward across an escalating switch. Long
+#: enough for a real plan, short enough that it cannot reintroduce the
+#: transcript the escalation exists to drop.
+MAX_CARRIED_CHARS = 3000
 
 
 #: Told to the sub-agent instead of the parent's conversation.
@@ -2149,9 +1929,27 @@ def _delegate(state: AgentState, body: str, *, actions: list[str],
     return ToolResult(stdout=output, stderr="", returncode=0)
 
 
+def _last_ai_text(messages: list) -> str:
+    """The most recent thing the model actually said, clipped.
+
+    Used to carry one mode's output across an escalation that otherwise wipes
+    the conversation. Deliberately the last AI turn rather than a search for
+    something plan-shaped: the loop does not know what a plan looks like, and
+    a heuristic that did would quietly fail on the day a mode produced
+    something else worth keeping.
+    """
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            text = _content_text(message.content).strip()
+            if text:
+                return text[:MAX_CARRIED_CHARS]
+    return ""
+
+
 def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
                  did_work: bool, mode_log: list[str], calls: int,
-                 seed: list | None = None) -> tuple[str, int, bool]:
+                 seed: list | None = None,
+                 confirmed: set[str] | None = None) -> tuple[str, int, bool]:
     """Handle one `switch_mode` request. Returns `(mode, swaps, did_work)`.
 
     Three refusals, cheapest first, and none of them raises -- a refusal is a
@@ -2203,11 +2001,41 @@ def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
 
     reason = mode_reason(body)
     escalating = MODES[want].depth > MODES[mode].depth
+    messages_before = list(messages)
     if escalating and seed is not None:
         # Clean restart. Everything the run established is in the checklist and
         # in the workspace; what is dropped is the weaker model's account of
         # getting there, which is the part measured as a burden.
         messages[:] = list(seed)
+        # The gate's memory goes with the conversation it was recorded in.
+        #
+        # `confirmed` holds "this tool has already been held once against this
+        # target, so let the reissue through". That is only true while the
+        # model can REMEMBER being asked. An escalating switch wipes the
+        # transcript back to the seed, so the model that arrives next has no
+        # record of the hold -- and without this line it would find the gate
+        # already satisfied and run the irreversible call unchecked. Holding
+        # the same target twice costs one exchange; not holding it costs the
+        # thing the gate exists to prevent.
+        if confirmed is not None:
+            confirmed.clear()
+        # The LAST thing this mode produced comes with it.
+        #
+        # Without this, `plan` is self-defeating: its own guidance says to
+        # "switch back and carry the steps out yourself", solve is the deepest
+        # mode so switching back always escalates, and escalating wipes the
+        # transcript -- so following the instruction destroys the plan at the
+        # moment it is needed. Nothing else held it: `context` is only written
+        # by ask_user and the checklist is fixed at run start.
+        #
+        # One message, not the whole conversation. What escalation is for is
+        # dropping the weaker model's account of getting somewhere; the thing
+        # it arrived at is the part worth carrying.
+        carried = _last_ai_text(messages_before)
+        if carried:
+            messages.append(HumanMessage(
+                f"What you produced in {mode} mode, to work from:\n{carried}"
+            ))
         messages.append(HumanMessage(
             f"Starting fresh in {want} mode. The work so far stands -- what is "
             "already true is listed above, and anything written is still "

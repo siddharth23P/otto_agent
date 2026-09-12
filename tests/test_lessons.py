@@ -218,3 +218,31 @@ def test_read_only_reads_but_does_not_write(bank, fake_embeddings):
         assert L.record_lessons([_lesson("something new entirely")]) == []
 
     assert len(L.all_lessons()) == 1
+
+
+def test_a_long_lesson_can_still_be_read_back(bank, fake_embeddings):
+    """`rendered()` sliced the ASSEMBLED string to 400 characters, which cut
+    the trailing `[outcome]` off any long lesson -- and `_parse` requires that
+    suffix. So a long lesson was written to the bank and could never be read
+    out of it again: a silent, permanent slot loss with no error anywhere.
+    The parts are trimmed to fit the budget jointly now."""
+    for cue, action in (("c" * 200, "a" * 200), ("c" * 10, "a" * 500),
+                        ("c" * 500, "a" * 10), ("c" * 400, "a" * 400)):
+        rendered = L.Lesson(cue, action, "failed").rendered()
+
+        assert len(rendered) <= L.MAX_LESSON_CHARS
+        assert L._parse(rendered) is not None, f"orphaned: {rendered[-40:]!r}"
+
+
+def test_a_long_lesson_survives_the_store(bank, fake_embeddings):
+    """The round trip that matters, through `record_lessons` and back."""
+    L.record_lessons([_lesson("s" * 300, "t" * 300, "worked")])
+
+    assert len(L.all_lessons()) == 1
+
+
+def test_a_short_cue_does_not_force_a_long_action_to_be_cut(bank):
+    """Halving the budget blindly would trim an action that had room."""
+    rendered = L.Lesson("when x", "y" * 300, "worked").rendered()
+
+    assert "y" * 300 in rendered

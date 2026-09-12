@@ -269,3 +269,21 @@ def test_nothing_to_explore_between_is_not_explored(monkeypatch, seat_log):
     _fill("reason", "model-b", runs=o.MIN_SAMPLES, approved=o.MIN_SAMPLES)
 
     assert _ids(o.reorder("reason", [A, B])) == [A.spec, B.spec]
+
+
+def test_exactly_the_margin_is_ahead_not_a_tie(seat_log):
+    """The docstring says the challenger has to be ahead BY MIN_MARGIN. A
+    strict `>` sent exactly that margin to the tie branch instead, so "ahead
+    by ten points" did not overtake while "ahead by ten points and a hair"
+    did. Nothing in the numbers justifies the line falling between them."""
+    _fill("reason", "model-a", runs=20, approved=10)                 # 50%
+    _fill("reason", "model-b", runs=20, approved=12)                 # 60%
+
+    assert _ids(o.reorder("reason", [A, B])) == [B.spec, A.spec]
+
+
+def test_just_inside_the_margin_is_still_a_tie(seat_log):
+    _fill("reason", "model-a", runs=20, approved=10)                 # 50%
+    _fill("reason", "model-b", runs=20, approved=11)                 # 55%
+
+    assert _ids(o.reorder("reason", [A, B])) == [A.spec, B.spec]
