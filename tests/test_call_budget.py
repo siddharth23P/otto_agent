@@ -272,11 +272,11 @@ def test_the_learning_call_lands_in_the_reported_cost(monkeypatch):
 # every time.
 
 def test_a_turn_with_nothing_to_check_skips_the_judge_and_the_lesson(monkeypatch):
-    """An empty checklist is the criteria call saying there was no task. The
-    two calls are the rubric and the answer."""
+    """The rubric call says so itself -- `NO TASK`, on the call that was
+    happening anyway -- and the two calls are that one and the answer."""
     model, final = _run(monkeypatch, [
-        "NONE",                       # 1, the rubric: nothing to check
-        "FINAL:\nI'm well, thanks!",  # 2, the answer
+        "NO TASK",                    # 1, the rubric: nothing to check
+        "I'm well, thanks!",          # 2, the answer, on the chat seat
     ], learning=True)
 
     assert model.calls == 2
@@ -308,74 +308,43 @@ def test_a_run_that_died_is_still_judged(monkeypatch):
     ])
 
     assert model.calls > 2, "a dead run skipped the judge"
+# The three tests that stood here asserted a conversation prompt seeded from
+# `_seed_transcript` when the checklist came back empty. The fast path on main
+# answers a no-task turn before a transcript is seeded at all -- earlier, on
+# the cheap chat seat, and from a field that says so rather than from an
+# absence that has to be interpreted. tests/test_chat_fast_path.py covers it.
+#
+# What survives from them is the distinction they were written to defend: an
+# empty rubric and a failed rubric call are not the same fact.
 
-
-def test_a_turn_with_no_task_never_sees_the_engineer_prompt():
-    """It used to. A 227-character note argued, from inside a HumanMessage,
-    against 3,500 characters of system prompt telling the model to go find out
-    what state the system is in and offering it seventeen tools -- so roughly
-    3,200 characters of the turn went on setting up an argument with
-    themselves. The turn gets a prompt its own size now."""
-    seeded = pn._seed_transcript({"messages": [HumanMessage("hi")]}, "hi", [])
-    body = "\n".join(pn._content_text(m.content) for m in seeded)
-
-    assert pn.CONVERSATION_PROMPT in body
-    assert "You are an engineer with a shell" not in body
-    assert "execute_bash" not in body, "a greeting was offered a tool menu"
-    assert sum(len(pn._content_text(m.content)) for m in seeded) < 900
-
-
-def test_a_turn_with_a_task_still_gets_the_whole_prompt():
-    """The control. Criteria exist, so this is work, and it pays for the
-    habits, the ladder and the protocol."""
-    seeded = pn._seed_transcript(
-        {"messages": [HumanMessage("fix it")]}, "fix it",
-        [{"text": "it works", "status": "pending", "evidence": ""}],
-    )
-    body = "\n".join(pn._content_text(m.content) for m in seeded)
-
-    assert "You are an engineer with a shell" in body
-    assert pn.CONVERSATION_PROMPT not in body
-
-
-def test_the_conversation_path_can_still_answer():
-    """One-way on purpose: a task misclassified as chatter costs a short
-    answer, not a refusal to work."""
-    assert "FINAL:" in pn.CONVERSATION_PROMPT
-
-
-def test_a_failed_rubric_call_does_not_demote_a_task_to_chatter(monkeypatch):
-    """An empty checklist means two different things and only one of them is
-    evidence. A rubric that RAN and found nothing to check says the turn holds
-    no task; a rubric CALL that died says nothing at all. Collapsing them let
-    one exhausted API key seed a real task with the conversation prompt --
-    no habits, no ladder, no tools -- which is how it was found."""
+def test_a_failed_rubric_call_is_never_read_as_no_task(monkeypatch):
+    """One exhausted API key used to be enough to route a real task to a
+    one-line reply. Rubric carries the two apart in separate fields, so a
+    failed call can only ever cost the run its criteria."""
     def dead(llm, messages, **kw):
         raise pn.ProviderError("credit balance is too low")
 
     monkeypatch.setattr(pn, "_call", dead)
-    assert pn._criteria(object(), "fix the failing test") is None
+    rubric = pn._rubric(object(), "fix the failing test")
 
-    seeded = pn._seed_transcript(
-        {"messages": [HumanMessage("fix it")]}, "fix it", None,
-    )
-    body = "\n".join(pn._content_text(m.content) for m in seeded)
-    assert "You are an engineer with a shell" in body
-    assert pn.CONVERSATION_PROMPT not in body
+    assert rubric.criteria == []
+    assert rubric.conversational is False
 
 
 def test_a_rubric_that_ran_and_found_nothing_still_means_no_task():
     """The other half of the same distinction."""
-    assert pn._parse_rubric("this is just a greeting") == []
+    monkeypatch_free = pn._parse_rubric("this is just a greeting")
+    assert monkeypatch_free == []
 
 
-def test_a_failed_rubric_call_does_not_skip_the_judge():
-    """The second site with the same conflation, and the more expensive one:
-    `not checklist` read None as "nothing to verify" and returned straight to
-    END. A dead rubric call skipped verification entirely, on every run, and
-    each one still reported itself finished."""
+def test_an_empty_rubric_is_still_judged():
+    """The agent node used to end a clean run at END whenever the checklist
+    was empty, which read a dead provider as "nothing to verify" and skipped
+    verification on every run in a batch. The fast path decides that now, from
+    `conversational`, and an empty checklist that reaches the end of the loop
+    is judged."""
     import inspect
 
     source = inspect.getsource(pn.agent)
-    assert 'if checklist == [] and why == "final"' in source
-    assert 'if not checklist and why' not in source
+    assert 'checklist == [] and why == "final"' not in source
+    assert "if not checklist and why" not in source

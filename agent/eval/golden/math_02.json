@@ -2,5 +2,5 @@
   "id": "math_02",
   "domain": "math",
   "prompt": "In how many distinct ways can 5 distinct books be arranged in a row on a shelf? Give the final numeric answer.",
-  "checker": "import re\nnums = [float(x) for x in re.findall(r'-?\\d+\\.?\\d*', CANDIDATE_OUTPUT)]\nassert any(abs(n - 120.0) < 1e-6 for n in nums), f'120 not found in {nums}'\nprint('OK')\n"
+  "checker": "answer_is(120.0)\nprint('OK')\n"
 }

@@ -73,7 +73,6 @@ from agent.pipeline.toolkit import (
     ExtraTool, bind_extra_tools, json_body, validate_against,
 )
 from agent.pipeline.tools import ToolResult
-from agent.eval.failure_kinds import classify, tool_usage, usage_by_seat
 from agent.pipeline.workspace import bind_workspace
 
 logger = logging.getLogger(__name__)
@@ -555,17 +554,11 @@ class TaskOutcome:
     #: cannot distinguish a real gain from judge variance, and completion is
     #: LLM-judged for 260 of the 300 tasks.
     trials: list = field(default_factory=list)
-    #: What SHAPE this run's failure took, read from the action record at no
-    #: cost. A score says something got worse; these say what broke. See
-    #: agent/eval/failure_kinds.py -- an injected fault was localised 64.8% of
-    #: the time from a structured trace against 13.0% from the outcome alone.
-    failure_kinds: list = field(default_factory=list)
-    #: Which tools this run actually called, and which seat called them. Free
-    #: -- read off the action record. See agent/eval/failure_kinds.py on why
-    #: the menu's cost is worth a number: it is 27% of every system prompt
-    #: before a word of the task.
-    tool_usage: dict = field(default_factory=dict)
-    seat_usage: dict = field(default_factory=dict)
+    #: The run's tool-call lines, verbatim. What agent/eval/failures.py reads
+    #: to say what KIND of failure this was and what its tools cost per seat,
+    #: with no model call -- a score alone says something got worse without
+    #: saying what broke.
+    actions: list = field(default_factory=list)
 
 
 def _final_text(state: dict | None) -> str:
@@ -644,7 +637,10 @@ def run_one(
     history: list = []
     turn_text = prompt
     checklist: list = []
-    action_lines: list = []
+    #: Every tool-call line the run produced, across all its turns -- the
+    #: input agent/eval/failures.py classifies a failure KIND and a per-seat
+    #: tool spend out of. Accumulated rather than counted (see below).
+    action_lines: list[str] = []
     model_calls = 0
 
     with tempfile.TemporaryDirectory(prefix="otto-claw-") as scratch:
@@ -660,31 +656,30 @@ def run_one(
             # ran 1096 seconds against a 900-second budget without it firing.
             with bind_workspace(scratch), bind_command_runner(runner), \
                     bind_extra_tools(tools), bind_budget(Budget.until(deadline.hard_at)):
-                # Per-turn budget rationing was tried here and REVERTED --
-                # see agent/pipeline/budget.py's begin_turn. It made C04 worse
-                # at two budgets, because a turn that runs out returns no
-                # answer at all, so rationing converted one mediocre answer
-                # into nine empty turns.
                 while True:
                     if architecture == "single":
                         answer, actions = run_single_agent(
                             turn_text, max_steps=task.environment.max_turns * 3,
                         )
                         turns += len(actions)
-                        action_lines = list(actions)
+                        action_lines.extend(actions)
                     else:
                         state = run_pipeline(turn_text, session_id=session_id, history=history)
                         answer = _final_text(state)
-                        turns += len(state.get("actions") or ()) if state else 0
+                        step_actions = list((state or {}).get("actions") or ())
+                        turns += len(step_actions)
+                        # The LINES, not only how many. agent/eval/failures.py
+                        # classifies a failure's KIND and totals tool spend per
+                        # seat out of exactly this text, with no model call --
+                        # and a count alone throws that away, so a regression
+                        # says something got worse without saying what broke.
+                        action_lines.extend(step_actions)
                         # The criteria the run worked against and how they
                         # settled. Without this a low score is undiagnosable
                         # from the trace: you can see what the agent did and
                         # what it answered, but not what it was being held to.
                         # Cost two blind re-runs on T136 before it went in.
                         checklist = (state or {}).get("checklist") or []
-                        # Kept for agent/eval/failure_kinds.py, which reads the
-                        # SHAPE of a failure out of what the run already wrote.
-                        action_lines = list((state or {}).get("actions") or ())
                         model_calls = (state or {}).get("model_calls") or model_calls
                     if answer:
                         recorder.text("assistant", answer)
@@ -748,8 +743,6 @@ def run_one(
     return trace_path, {
         "checklist": checklist,
         "model_calls": model_calls,
-        "action_lines": action_lines,
-        "answer": answer,
         "tool_calls": recorder.tool_calls,
         "wall_time_s": wall,
         "error": error,
@@ -757,6 +750,7 @@ def run_one(
         "user_agent_rounds": rounds_used,
         "user_agent_max_rounds": max_rounds,
         "user_agent_done": ua_done,
+        "actions": action_lines,
     }
 
 
@@ -990,15 +984,10 @@ def _run_task_once(
     if meta["error"] and not outcome.error:
         outcome.error = meta["error"]
     outcome.checklist = meta.get("checklist") or []
+    # Set here rather than in the constructor: the outcome is built from the
+    # graded trace, and the action record comes back on `meta` from the run.
+    outcome.actions = list(meta.get("actions") or ())
     outcome.model_calls = meta.get("model_calls") or 0
-    outcome.tool_usage = tool_usage(meta.get("action_lines"))
-    outcome.seat_usage = usage_by_seat(meta.get("action_lines"))
-    outcome.failure_kinds = classify(
-        actions=meta.get("action_lines"),
-        checklist=outcome.checklist,
-        answer=meta.get("answer") or "",
-        resolved=outcome.passed,
-    )
     return outcome
 
 

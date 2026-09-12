@@ -23,7 +23,7 @@ import typer
 from typing_extensions import Annotated
 
 from agent.cli.ui import err, out
-from agent.eval.failure_kinds import DESCRIPTIONS, merge_usage, summarise
+from agent.eval import failures
 from agent.memory.lessons import bind_bank, read_only
 from agent.memory.store import MemoryStore
 from agent.router.outcomes import bind_log
@@ -38,6 +38,30 @@ from agent.eval.claw_bench import (
     select_tasks,
     split_tasks,
 )
+
+
+#: How many trials per task before a Claw-Eval number is evidence of
+#: anything.
+#:
+#: Measured, not chosen. Task T093 on identical code and configuration, three
+#: runs: 0.86, 0.60, 0.96 -- a spread of 0.36 on a 0-1 scale. Over two trials
+#: pass^2 came out 0.25 against pass@2 of 1.00: it got there once and not
+#: twice. Completion is LLM-judged for 260 of the 300 tasks, which is where
+#: most of that comes from.
+#:
+#: The consequence is retroactive and worth stating plainly: any single-run
+#: before/after difference smaller than about 0.3 on this benchmark is inside
+#: the noise. Much of the optimisation work on this branch was read from one
+#: run per task, and the only difference in that set large enough to survive
+#: was a crash going from 0.00 to 0.955.
+#:
+#: Three, matching what the issues here already ask for when they say how to
+#: settle something ("--trials 3").
+MIN_TRIALS_FOR_EVIDENCE = 3
+
+#: The observed spread above, quoted in the warning so the number a reader is
+#: being told to distrust comes with the reason.
+OBSERVED_SINGLE_RUN_SPREAD = 0.36
 
 
 def _summary(outcomes: list, claw=None) -> dict:
@@ -59,14 +83,29 @@ def _summary(outcomes: list, claw=None) -> dict:
         # change that doubles spend for a tenth of a point reads as a win.
         "mean_model_calls": round(sum(o.model_calls for o in scored) / n, 2),
         "total_model_calls": sum(o.model_calls for o in scored),
-        # What BROKE, not just how much. Two revisions with the same mean
-        # score and different failure profiles are two different systems.
-        "failure_kinds": summarise([o.failure_kinds for o in scored]),
-        # The menu is 27% of every system prompt. This is what it buys.
-        "tool_usage": merge_usage([o.tool_usage for o in scored]),
-        "seat_usage": merge_usage([o.seat_usage for o in scored]),
-        "tools_used": len(merge_usage([o.tool_usage for o in scored])),
     }
+
+    # Always present, so a reader of otto_summary.json never has to infer the
+    # trial count from whether a reliability key happens to exist.
+    summary["trials"] = min((len(o.trials) for o in scored), default=0)
+    #: Whether this run is enough trials to be read as a measurement at all --
+    #: MIN_TRIALS_FOR_EVIDENCE. False does NOT mean the numbers are wrong; it
+    #: means the difference between them and another run's is not attributable
+    #: to anything. Carried in the JSON as well as printed, because the JSON is
+    #: what gets pasted into a comparison months later.
+    summary["is_evidence"] = summary["trials"] >= MIN_TRIALS_FOR_EVIDENCE
+
+    # What KIND of failure, and what the tools cost -- agent/eval/failures.py,
+    # read off the action lines every run already produced, with no model
+    # call. A score says something got worse; "38% of the failures changed no
+    # files at all" says where to look.
+    failed = {o.task_id: getattr(o, "actions", None)
+              for o in scored if not o.passed}
+    if failed:
+        summary["failures"] = failures.summarise(failed)
+    summary["tool_cost"] = failures.total_tool_cost(
+        getattr(o, "actions", None) for o in scored
+    ).to_dict()
 
     repeated = [o for o in scored if len(o.trials) > 1]
     if repeated and claw is not None:
@@ -274,8 +313,6 @@ def _run_tasks(claw, tasks, outcomes, *, out_dir, cfg, judge, architecture,
             f"completion={outcome.completion:.2f} service-tools={outcome.tool_calls} "
             f"actions={outcome.agent_actions} calls={outcome.model_calls} "
             f"{outcome.wall_time_s:.0f}s{spread}{detail}"
-            + (f"  [{', '.join(outcome.failure_kinds)}]"
-               if outcome.failure_kinds else "")
         )
 
 
@@ -300,8 +337,6 @@ def _build_report(outcomes, claw, *, architecture, tag, split, trials,
                 "communication": o.communication, "safety": o.safety,
                 "tool_calls": o.tool_calls, "agent_actions": o.agent_actions,
                 "checklist": o.checklist, "model_calls": o.model_calls,
-                "failure_kinds": o.failure_kinds,
-                "tool_usage": o.tool_usage, "seat_usage": o.seat_usage,
                 "trials": o.trials,
                 "wall_time_s": o.wall_time_s, "error": o.error,
             }
@@ -312,9 +347,27 @@ def _build_report(outcomes, claw, *, architecture, tag, split, trials,
 
 def _print_summary(report: dict, out_dir: Path, split: str) -> None:
     s = report["summary"]
+
+    # Said BEFORE the numbers, not after. A caveat printed underneath a mean
+    # score is read after the score has already been believed, and the whole
+    # failure this guards against is a single run being quoted as a result.
+    if s.get("tasks") and not s.get("is_evidence", True):
+        trials = s.get("trials", 1)
+        err.print(
+            f"\n[bad]NOT EVIDENCE: {trials} trial(s) per task.[/] "
+            f"[warn]Identical code and configuration have scored "
+            f"{OBSERVED_SINGLE_RUN_SPREAD:.2f} apart on a single task here, so "
+            f"any before/after difference below roughly 0.3 in what follows is "
+            f"noise. Do not quote these numbers as a result.[/]\n"
+            f"[muted]Re-run with --trials {MIN_TRIALS_FOR_EVIDENCE} and read "
+            f"pass^k, not the mean.[/]"
+        )
+
     out.print(
         f"\n{s.get('passed', 0)}/{s.get('tasks', 0)} passed "
-        f"({s.get('pass_rate', 0):.1%})  mean score {s.get('mean_task_score', 0):.3f}  "
+        f"({s.get('pass_rate', 0):.1%})  "
+        f"{'mean score' if s.get('is_evidence', True) else 'score (1 run)'} "
+        f"{s.get('mean_task_score', 0):.3f}  "
         f"completion {s.get('mean_completion', 0):.3f}  "
         f"{s.get('errors', 0)} harness/agent error(s)"
     )
@@ -329,19 +382,30 @@ def _print_summary(report: dict, out_dir: Path, split: str) -> None:
             f"pass@{k} {s['mean_pass_at_k']:.3f}  "
             f"mean spread {s['score_spread']:.3f}"
         )
-    kinds = s.get("failure_kinds") or {}
+    kinds = (s.get("failures") or {}).get("failures_by_kind") or {}
     if kinds:
-        out.print("what broke: " + ", ".join(
-            f"{DESCRIPTIONS.get(k, k)} ({n})" for k, n in kinds.items()
-        ))
-    used = s.get("tool_usage") or {}
-    if used:
-        top = ", ".join(f"{t} {n}" for t, n in list(used.items())[:6])
+        total_failed = s.get("tasks", 0) - s.get("passed", 0)
         out.print(
-            f"tools: {len(used)} of 17 used across the batch -- {top}"
-            + (f"  (seats: {', '.join(f'{k} {v}' for k, v in (s.get('seat_usage') or {}).items())})"
-               if s.get("seat_usage") else "")
+            "failures by kind: "
+            + "  ".join(f"{kind} {count}" for kind, count in kinds.items())
+            + f"  (of {total_failed} failed)"
         )
+    cost = s.get("tool_cost") or {}
+    if cost.get("calls"):
+        # Per SEAT is the half that answers the question: Otto routes across
+        # four vendors and several capability tiers, and model strength is
+        # what decides whether an agent manages a seventeen-tool menu at all.
+        busiest = "  ".join(f"{tool} {n}" for tool, n in
+                            list(cost["by_tool"].items())[:5])
+        out.print(
+            f"tools: {cost['calls']} calls, {cost['failures']} failed  |  "
+            f"busiest: {busiest}"
+        )
+        out.print(
+            "per seat: "
+            + "  ".join(f"{seat} {n}" for seat, n in cost["by_seat"].items())
+        )
+
     grading = report["grading"]
     out.print(
         f"grading: {grading['otto_grading_path']} / claw {grading['claw_eval_revision'] or '?'} "

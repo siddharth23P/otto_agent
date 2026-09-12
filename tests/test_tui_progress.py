@@ -65,7 +65,7 @@ def test_the_status_line_says_what_the_run_is_doing():
     """The whole point. Before this the middle of a turn was blank for as
     long as the turn took -- 131 seconds on the longest golden item."""
     def body(app):
-        app._busy = True
+        app._turn_running = True
         app._on_progress(t.Progress(kind="phase", text="working it out", calls=2))
         app._on_progress(t.Progress(kind="call_start", text="gpt-5-mini", calls=3))
         app._on_progress(t.Progress(
@@ -85,7 +85,7 @@ def test_the_clock_keeps_moving_when_nothing_is_reported():
     stretch. A status line that only moves when the run moves reads as a
     hung app, which is the complaint this is answering."""
     def body(app):
-        app._busy = True
+        app._turn_running = True
         app._started = 0.0              # a long time ago, on the monotonic clock
         app._tick()
         first = _shown(app.query_one("#status"))
@@ -156,22 +156,27 @@ def test_a_second_message_during_a_turn_is_refused_not_queued():
     app = _app()
     posted: list[object] = []
     app._post = posted.append
-    app._busy = True
+    app._turn_running = True
+
+    class _Box:
+        """Enough of Textual's Input for the handler: it reads `.id` to tell
+        the message box from a modal's own, and clears `.value`."""
+        id = "message-input"
+        value = ""
 
     class _Event:
         value = "another one"
-
-        class input:                    # noqa: N801 -- mimics Textual's event shape
-            value = ""
+        input = _Box()
 
     app.on_input_submitted(_Event())
 
-    assert posted and "already running" in str(posted[0])
+    assert posted and "still working" in str(posted[0])
+    assert "esc to stop" in str(posted[0])
 
 
 def test_escape_does_nothing_when_no_turn_is_running():
     app = _app()
-    app._busy = False
+    app._turn_running = False
     app._cancel = None
     app.action_stop_turn()              # must not raise
 
@@ -180,7 +185,7 @@ def test_escape_asks_the_run_to_stop():
     """Cooperative: _call checks this before it spends again, so the stop
     lands within one model call and never pays for another."""
     app = _app()
-    app._busy = True
+    app._turn_running = True
     app._cancel = threading.Event()
     app._draw_status = lambda: None
 

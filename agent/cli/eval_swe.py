@@ -98,10 +98,36 @@ def eval_swe_cmd(
         raise typer.Exit(1)
 
     resolved = sum(1 for o in outcomes if o.resolved)
+    # How much of this number came from emulated instances, and how it splits.
+    #
+    # Upstream publishes arm64 for only part of the set, and django -- 231 of
+    # the 500 instances -- had no arm64 build in every instance tried. So on
+    # Apple silicon roughly half the benchmark runs under emulation, several
+    # times slower, and a resolve rate that mixes the two is not a sample of
+    # SWE-bench. swe_bench.EMULATION_TIME_FACTOR stops the budget being the
+    # thing that decides those instances; it does NOT make them comparable,
+    # which is why the split is reported rather than smoothed away.
+    emulated = [o for o in outcomes if o.emulated]
+    native = [o for o in outcomes if not o.emulated]
+
+    def _rate(group):
+        if not group:
+            return None
+        return round(sum(1 for o in group if o.resolved) / len(group), 4)
+
     report = {
         "instances": len(outcomes),
         "resolved": resolved,
         "resolve_rate": round(resolved / len(outcomes), 4),
+        "emulated_instances": len(emulated),
+        "native_instances": len(native),
+        "emulated_resolve_rate": _rate(emulated),
+        "native_resolve_rate": _rate(native),
+        #: The repositories whose instances ran emulated, which is the thing
+        #: a reader needs to judge whether the sample is representative --
+        #: "half of it was django, emulated" is a different number from the
+        #: same rate measured natively.
+        "emulated_repos": sorted({o.instance_id.split("__")[0] for o in emulated}),
         "mean_model_calls": round(sum(o.model_calls for o in outcomes) / len(outcomes), 1),
         "mean_wall_time_s": round(sum(o.wall_time_s for o in outcomes) / len(outcomes), 1),
         "trace_dir": str(out_dir),
@@ -129,4 +155,18 @@ def eval_swe_cmd(
         f"{report['mean_model_calls']:.0f} model calls and "
         f"{report['mean_wall_time_s']:.0f}s per instance"
     )
+    if emulated:
+        # A SWE-bench number from a machine that emulated part of its sample
+        # has to say so, in the same breath as the number.
+        native_text = (
+            f"{report['native_resolve_rate']:.1%}" if native else "no native instances"
+        )
+        err.print(
+            f"[warn]{len(emulated)}/{len(outcomes)} instances ran under x86_64 "
+            f"emulation (no arm64 build): "
+            f"{', '.join(report['emulated_repos'])}.[/]\n"
+            f"[muted]emulated {report['emulated_resolve_rate']:.1%} vs native "
+            f"{native_text} -- quote the split, not the combined rate, and say "
+            f"this machine emulated part of the sample.[/]"
+        )
     out.print(f"report: {out_dir / 'report.json'}")

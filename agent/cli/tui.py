@@ -24,8 +24,10 @@ collapsable thing"): `#transcript` stopped being one flat RichLog. Every
 graph update from render_update() (shell.py) -- router's dispatch line,
 each specialist's board line and output preview, evaluator's verdict line
 -- is "thinking": the process, not the answer. That now goes into a fresh
-RichLog created FOR THAT TURN, wrapped in a collapsed-by-default
-`Collapsible`, so it never crowds the screen but is one click away.
+RichLog created FOR THAT TURN, wrapped in a `Collapsible` -- open while
+the turn runs, shut once it ends (see "The thinking log runs EXPANDED"
+below for why that is not the collapsed-from-birth it started as), so it
+never crowds the finished transcript but is one click away.
 Everything the user should see without expanding anything -- their own
 message, the final answer, where it got saved, an error -- is "result":
 mounted straight into `#transcript` (now a VerticalScroll of stacked
@@ -101,6 +103,78 @@ plain `threading.Event`: `call_from_thread` schedules the modal on the UI
 thread and the worker thread blocks on the event (NOT the UI thread --
 the app stays fully responsive, redraws and all, while a turn is paused
 waiting on a person) until the modal dismisses it.
+
+One turn at a time, enforced here rather than by the worker decorator
+(2026-09-12, bug report: "in otto tui it's acting weird and slow", with a
+screenshot showing the same message posted twice, a `thinking…` block for
+the second, and then a green `final` panel answering the FIRST). `run_turn`
+carried `@work(..., exclusive=True, group="turn")` and that reads like it
+serialises turns. It does not. Textual's `Worker.cancel()` (worker.py)
+cancels the asyncio task wrapping `loop.run_in_executor(...)`; the
+executor thread underneath it is not interruptible and runs to
+completion. Verified against Textual 8.2.8: two `exclusive=True` thread
+workers started 0.15s apart both ran all their steps. So a second Enter
+while a turn was in flight started a SECOND pipeline run -- two sets of
+model calls billed at once, two interleaved streams of
+`call_from_thread` mounts into one transcript (which is how an older
+run's `final` lands under a newer run's `thinking…`), and two threads
+racing on `session.turn`, `session.trace_id` and `_last_output`. The
+guard is now `_turn_running`, flipped on the UI thread inside
+`on_input_submitted` before the worker is even started, so there is no
+window to double-submit into; the message box is disabled for the
+duration, which is also the only thing that ever told the user a turn was
+still going. `exclusive=True` is gone, since keeping it would keep
+implying a cancellation that cannot happen.
+
+Modal input must not escape into a new turn (2026-09-12, same report, same
+duplicated-line symptom). `Input.Submitted` bubbles the whole way up the
+DOM -- Input, to the modal Screen, to the App -- and a handler on a
+ModalScreen does not stop that by dismissing. Verified against Textual
+8.2.8: an App-level `on_input_submitted` still fires for text typed into a
+pushed ModalScreen. Untreated, answering an `AskUserModal` question posted
+`you <answer>` twice AND launched a whole fresh turn on the answer text
+alongside the paused run it was meant to resume, and submitting in
+`ScoreDialog` ran the pipeline on the literal string "0.8 nice". Both
+modals now call `event.stop()`, and `on_input_submitted` below also checks
+`event.input.id` -- belt and braces, because the failure mode of getting
+this wrong is silent and expensive.
+
+The thinking log runs EXPANDED and collapses when the turn ends
+(2026-09-12, same report, the "slow" half). `RichLog.write()` defers every
+write until the widget's size is known (rich_log.py: `if not
+self._size_known: self._deferred_renders.append(...)`), and a `Collapsible`
+that starts collapsed never lays its contents out, so the widget's size is
+never known. Verified against Textual 8.2.8: 200 writes into a collapsed
+one left `lines == 0` and `len(_deferred_renders) == 200`, all of it
+rendering in a single synchronous burst on the UI thread the moment
+someone expanded it. So the old arrangement showed NOTHING while a turn
+ran -- for a pipeline turn that is minutes of a still screen with no
+indication anything is happening, which is most of what "slow" meant here
+-- and then paid for all of it at once. Mounting expanded makes each board
+line render as it arrives; collapsing at the end keeps the resting
+transcript result-first, which is what this split was for.
+
+The workspace is shown, not discovered (2026-09-12, design call: "we need
+filesystem management so we can use it to write code and work on already
+implemented codebases"). `otto tui` now opens on the directory it was launched
+in and hands it to `run_pipeline_stream` on every turn -- as an ARGUMENT, not
+by binding the contextvar here, because `run_turn` consumes the stream on a
+worker thread and a contextvar set on the UI thread is not visible there (see
+agent/pipeline/run.py for the binding's new home). Which directory otto is
+pointed at decides what every answer this session can be, so `on_mount` says
+it in the transcript rather than leaving it to be discovered when a file tool
+refuses. `WorkspacePrompt` (below) and the "Workspace…" palette entry change
+it mid-session; both refuse while a turn is running, because a turn has
+already handed its workspace to the pipeline and changing it then would take
+effect NEXT turn while looking like it took effect on this one.
+
+`.thinking-log` is `height: auto` with a `max-height`, not a fixed
+`height: 12` (2026-09-12, same screenshot: a two-line log drawn as a
+twelve-row box, ten of them blank). RichLog is a ScrollView and this
+module's own docstring above says a ScrollView fills rather than sizes to
+content -- true for `height: auto` alone, but `auto` capped by
+`max-height` measures correctly in Textual 8.2.8 (checked live: 3 lines
+gave a height of 3, 43 lines gave 16).
 """
 
 from __future__ import annotations
@@ -108,26 +182,34 @@ from __future__ import annotations
 import threading
 import time
 from collections import Counter
-from typing import Iterable
+from pathlib import Path
+from typing import Annotated, Iterable, Optional
 
 import typer
 from langchain_core.messages import AIMessage, HumanMessage
 from rich.console import RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.console import Group
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Collapsible, Footer, Header, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
 from agent.cli.context import AppContext
+from agent.cli.chat import NO_WORKSPACE_HELP, WORKSPACE_HELP
 from agent.cli.output import save_final
-from agent.cli.shell import Session, render_update
+from agent.cli.shell import (
+    Session, describe_workspace, render_update, resolve_workspace, set_workspace,
+)
 from agent.cli.ui import THEME
 from agent.pipeline.progress import Cancelled, Progress, bind_progress
 from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
+from agent.pipeline.pricing import PRICES_AS_OF, format_cost
+from agent.pipeline.usage import UsageLedger
 from agent.router.mapping import Task
 from agent.router.router import NoViableRoute
 
@@ -148,6 +230,7 @@ class TaskPicker(ModalScreen[Task | None]):
         yield OptionList(*[Option(t.value, id=t.value) for t in Task])
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
         self.dismiss(Task(event.option.id))
 
 
@@ -164,6 +247,10 @@ class ScoreDialog(ModalScreen[tuple[float, str] | None]):
         yield Input(placeholder="0.0-1.0 [comment], Enter to submit, Esc to cancel")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Module docstring, "Modal input must not escape into a new turn":
+        # without this the App's own on_input_submitted also fires and runs
+        # the pipeline on the literal string "0.8 nice".
+        event.stop()
         value_text, _, comment = event.value.strip().partition(" ")
         try:
             value = float(value_text)
@@ -171,6 +258,46 @@ class ScoreDialog(ModalScreen[tuple[float, str] | None]):
             self.dismiss(None)
             return
         self.dismiss((value, comment.strip()))
+
+    def key_escape(self) -> None:
+        self.dismiss(None)
+
+
+class WorkspacePrompt(ModalScreen[str | None]):
+    """Where a running session points its file tools (agent/pipeline/
+    workspace.py). A path is the one thing here that genuinely cannot be a
+    pick -- the same carve-out the module docstring makes for the message box
+    and the score value -- so this is an Input, pre-filled with the current
+    root so "same place, one level up" is an edit rather than retyping.
+    """
+
+    DEFAULT_CSS = """
+    WorkspacePrompt { align: center middle; }
+    WorkspacePrompt > Vertical { width: 80; height: auto; border: round $accent; padding: 1 2; }
+    WorkspacePrompt .hint { margin-bottom: 1; }
+    """
+
+    def __init__(self, current: Path | None) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(
+                "[bold]Workspace[/]\nA directory otto may read and write. "
+                "Type [bold]off[/] to take away file access. Esc to cancel.",
+                classes="hint",
+            ),
+            Input(value=str(self._current) if self._current else "", placeholder="path to a directory"),
+        )
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Module docstring, "Modal input must not escape into a new turn".
+        event.stop()
+        self.dismiss(event.value.strip())
 
     def key_escape(self) -> None:
         self.dismiss(None)
@@ -212,9 +339,14 @@ class AskUserModal(ModalScreen[str]):
         self.query_one(Input).focus()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
         self.dismiss(str(event.option.prompt))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Module docstring, "Modal input must not escape into a new turn":
+        # without this the answer is posted twice and ALSO started as a
+        # brand-new turn running alongside the paused one it answers.
+        event.stop()
         self.dismiss(event.value.strip())
 
 
@@ -238,35 +370,198 @@ def _clock(seconds: float) -> str:
     return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
 
 
+def _thousands(n: int) -> str:
+    """1234567 -> "1.23M". A token count is read for its ORDER, and a panel 28
+    columns wide has no room for the digits that do not change the reading."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+#: Dot-separated segments that are routing, not identity. Named explicitly
+#: rather than matched by shape: a rule like "drop everything before the last
+#: dot" reads "gemini-2.5-flash" as "5-flash", which is how this was first
+#: written and what its test caught.
+_ID_PREFIXES = frozenset((
+    "us", "eu", "apac", "global",
+    "anthropic", "openai", "google", "meta", "mistral", "cohere",
+    "amazon", "bedrock", "azure", "inception",
+))
+
+
+def _short_model(name: str) -> str:
+    """The part of a model id a person reads.
+
+    Vendor ids carry a region, a vendor, and a date stamp that are identical
+    on every row of a 34-column panel -- width spent distinguishing nothing.
+    "us.anthropic.claude-sonnet-4-20250514-v1:0" is "claude-sonnet-4" to
+    anybody looking at this.
+    """
+    tail = str(name or "").split("/")[-1]
+    segments = tail.split(".")
+    while len(segments) > 1 and segments[0].lower() in _ID_PREFIXES:
+        segments.pop(0)
+    tail = ".".join(segments)
+
+    parts = tail.split("-")
+    while len(parts) > 2 and (
+        (parts[-1].isdigit() and len(parts[-1]) >= 6)          # a date stamp
+        or (parts[-1].startswith("v") and parts[-1][1:].isdigit())
+        or parts[-1].endswith(":0")                            # a bedrock suffix
+    ):
+        parts.pop()
+    return "-".join(parts) or tail or "unknown"
+
+
+class UsagePanel(Static):
+    """What this session has spent, per model, down the right-hand side.
+
+    Reads a `UsageLedger` (agent/pipeline/usage.py) the app owns and hands to
+    every turn, so it is cumulative across turns and across an ask_user pause
+    without anything here having to add snapshots up.
+
+    A Static holding a Rich Table rather than a DataTable: nothing here is
+    selectable, sortable or scrollable, and Static sizes to its renderable
+    instead of reserving rows it has not got (the same reasoning as the module
+    docstring's Static-vs-RichLog note).
+    """
+
+    # Height fixed to the row rather than `auto`. Textual measures an auto
+    # height by asking the renderable for one, and a Rich renderable inside a
+    # Static has no `get_height` -- which fails as an AttributeError deep in
+    # the compositor rather than as a layout warning.
+    DEFAULT_CSS = """
+    UsagePanel { width: 34; height: 1fr; padding: 0 1; border: round $panel-lighten-2; }
+    """
+
+    def __init__(self, ledger: UsageLedger) -> None:
+        super().__init__(id="usage")
+        self._ledger = ledger
+
+    def on_mount(self) -> None:
+        # The widget's OWN border carries the title -- a Rich Panel inside it
+        # would be a second frame drawn inside the first.
+        self.border_title = "tokens"
+        self.refresh_usage()
+
+    def refresh_usage(self) -> None:
+        """Redraw from the ledger. UI thread only -- a worker goes through
+        `call_from_thread`, like everything else that touches the tree."""
+        self.update(self._table())
+
+    # NOT `_render`. `Widget._render` is Textual's own internal hook and it
+    # returns a Visual; overriding it with a Rich renderable makes the
+    # compositor call `render_strips` on a Rich object, which fails several
+    # frames deep with no hint that a name was shadowed.
+    def _table(self) -> RenderableType:
+        snap = self._ledger.snapshot()
+        if not snap["models"]:
+            # Text, not a markup string: Static.update() with a bare str is
+            # handed on as a Visual and fails in the compositor on this
+            # Textual version. Everything else this returns is Rich.
+            return Text("nothing yet", style="dim")
+
+        # ONE left-aligned column, not a table. Four facts per model -- id,
+        # requests, tokens, dollars -- do not fit across the ~30 usable
+        # columns this panel has, and a Table.grid makes it worse rather than
+        # better: the model id sets the first column's width, so every number
+        # beside it truncates into uselessness ("225.…", "$0.0"). Tried both.
+        # Stacking the facts under the name needs no column agreement at all.
+        lines: list[RenderableType] = []
+        for row in snap["models"]:
+            # "--", not "0". A model that reported no usage, or that nothing
+            # has a rate for, has to look different from one that genuinely
+            # cost nothing -- usage.py's `reported`, pricing.py's absences.
+            tokens = _thousands(row["total_tokens"]) if row["reported"] else "--"
+            cost = format_cost(row["cost"])
+            lines.append(Text(_short_model(row["model"]), style="bold"))
+            lines.append(Text(f"  {row['calls']} req · {tokens} · {cost}", style="dim"))
+
+        lines.append(Text(""))
+        total = Text(f"total {snap['calls']} req · ", style="bold")
+        total.append(_thousands(snap["total_tokens"]), style="bold")
+        lines.append(total)
+
+        # A total missing somebody's share says so, rather than presenting a
+        # short number as the whole bill.
+        money = Text(format_cost(snap["cost"]), style="bold")
+        if not snap["fully_priced"]:
+            money.append("+", style="bold yellow")
+            money.append("  some models unpriced", style="yellow dim")
+        lines.append(money)
+
+        lines.append(Text(
+            f"in {_thousands(snap['input_tokens'])} · "
+            f"out {_thousands(snap['output_tokens'])}", style="dim"))
+        if snap["cached_input_tokens"]:
+            # Only when there is some. On a vendor with no prompt caching this
+            # would be a permanent zero taking up a line.
+            lines.append(Text(
+                f"cached {_thousands(snap['cached_input_tokens'])}", style="dim"))
+
+        # The date is not decoration. These are list prices read off a page on
+        # one day and never re-checked (agent/pipeline/pricing.py), and a cost
+        # with no date on it invites more trust than this can earn.
+        lines.append(Text(f"est. at {PRICES_AS_OF} rates", style="dim"))
+        return Group(*lines)
+
+
 class OttoApp(App):
     TITLE = "otto"
     BINDINGS = [
         ("ctrl+n", "new_session", "New session"),
         ("ctrl+y", "copy_last", "Copy last answer"),
         ("escape", "stop_turn", "Stop this turn"),
+        # The panel is 34 columns that the transcript does not get. Worth it
+        # while you are watching spend, not worth it on an 80-column terminal
+        # reading a long answer -- so it is a toggle rather than a decision
+        # made once for everybody.
+        ("ctrl+t", "toggle_usage", "Tokens"),
     ]
     DEFAULT_CSS = """
-    #transcript { height: 1fr; }
+    #body { height: 1fr; }
+    #transcript { width: 1fr; height: 1fr; }
     #transcript Collapsible { padding: 0; }
-    .thinking-log { height: 12; }
+    .thinking-log { height: auto; max-height: 16; }
     #status { height: auto; padding: 0 1; color: $text-muted; }
     """
 
-    def __init__(self, ctx: AppContext) -> None:
+    #: What the message box says when it is free. Restored by `_set_busy`,
+    #: which swaps in a "still working" placeholder for as long as a turn
+    #: owns the session -- the disabled box plus this line are the only
+    #: thing that ever tells the user a turn is still going.
+    IDLE_PLACEHOLDER = "type a message… (ctrl+p for commands)"
+    BUSY_PLACEHOLDER = "working… one turn at a time"
+
+    def __init__(self, ctx: AppContext, workspace: Path | None = None) -> None:
         super().__init__()
         self.ctx = ctx
-        self.session = Session(ctx=ctx)
+        self.session = Session(ctx=ctx, workspace=workspace)
         #: The last turn's raw final_output (module docstring, "Copying
         #: cleanly") -- exactly the string save_final() wrote to disk, no
         #: Panel/Markdown wrapper. None before any turn has finished, or
         #: after one that produced nothing.
         self._last_output: str | None = None
+        #: Whether a run_turn worker currently owns `self.session` (module
+        #: docstring, "One turn at a time"). Touched ONLY on the UI thread --
+        #: set in `on_input_submitted` before the worker starts, cleared by
+        #: the worker through `call_from_thread` -- so it needs no lock, and
+        #: there is no window between the check and the set for a second
+        #: Enter to slip through. It is also what the status line reads to
+        #: decide whether there is anything to draw.
+        self._turn_running = False
+        #: One ledger for the SESSION, handed to every turn and every resume
+        #: (agent/pipeline/usage.py), so the panel is cumulative by
+        #: construction rather than by adding per-turn snapshots up. Cleared
+        #: with the session by `action_new_session`.
+        self.usage = UsageLedger()
         #: Everything the status line draws, written from the worker thread
         #: and read from the UI thread's one-second tick. Plain attributes
         #: rather than a lock: each is a single assignment of an immutable
         #: value, and the worst a torn read can do is show one stale field
         #: for a tenth of a second.
-        self._busy = False
         self._phase = ""
         self._model = ""
         self._tool = ""
@@ -281,15 +576,16 @@ class OttoApp(App):
         #: redrawn. Mounted the first time a reply contains FINAL:.
         self._answer: Static | None = None
         self._drawn_at = 0.0
-        #: This turn's collapsed thinking row, so it can be retitled with
-        #: what the turn cost once the turn is over.
-        self._thinking: Collapsible | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield VerticalScroll(id="transcript")
+        # The transcript keeps `id="transcript"` and everything that queries
+        # for it is unchanged -- this only puts a sibling beside it.
+        with Horizontal(id="body"):
+            yield VerticalScroll(id="transcript")
+            yield UsagePanel(self.usage)
         yield Static("", id="status")
-        yield Input(placeholder="type a message… (ctrl+p for commands)", id="message-input")
+        yield Input(placeholder=self.IDLE_PLACEHOLDER, id="message-input")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -303,12 +599,26 @@ class OttoApp(App):
         # RichLog.write() for the life of the app resolve identically to
         # the REPL, with zero changes to the shared render_update().
         self.console.push_theme(THEME)
-        self.query_one(Input).focus()
+        self.message_box.focus()
         self._post("[dim]otto:pipeline[/]")
+        # Said once, up front, rather than left to be discovered when a file
+        # tool refuses: which directory otto is pointed at decides what every
+        # answer this session can possibly be.
+        self._post(f"[dim]{describe_workspace(self.session.workspace)}[/]")
         # The clock has to tick on its own: between two model calls nothing
         # reports anything for ten seconds at a stretch, and a status line
         # that only moves when the run moves reads as a frozen app.
         self.set_interval(1.0, self._tick)
+
+    @property
+    def usage_panel(self) -> "UsagePanel":
+        return self.query_one("#usage", UsagePanel)
+
+    def _refresh_usage(self) -> None:
+        """UI-thread redraw of the token panel. The worker calls this through
+        `call_from_thread` after each graph update, which is often enough to
+        watch a turn spend and rare enough to cost nothing."""
+        self.usage_panel.refresh_usage()
 
     # ---- the status line ----------------------------------------------
 
@@ -316,13 +626,13 @@ class OttoApp(App):
         """Once a second, on the UI thread. Redraws the status line from
         whatever the worker thread last wrote, so the elapsed clock and the
         spinner keep moving through a long model call."""
-        if not self._busy:
+        if not self._turn_running:
             return
         self._frame += 1
         self._draw_status()
 
     def _draw_status(self) -> None:
-        if not self._busy:
+        if not self._turn_running:
             self.query_one("#status", Static).update("")
             return
         parts = [f"[bold]{_SPINNER[self._frame % len(_SPINNER)]}[/]"]
@@ -390,7 +700,7 @@ class OttoApp(App):
         before every model request, so the stop lands within one call and the
         run never pays for another. Saying so matters -- a key that looks
         like it did nothing for ten seconds is worse than no key."""
-        if not self._busy or self._cancel is None:
+        if not self._turn_running or self._cancel is None:
             return
         self._cancel.set()
         self._phase = "stopping after this call"
@@ -399,6 +709,29 @@ class OttoApp(App):
     @property
     def transcript(self) -> VerticalScroll:
         return self.query_one("#transcript", VerticalScroll)
+
+    @property
+    def message_box(self) -> Input:
+        """The one Input that belongs to the app itself. Queried by id, not
+        by type: a pushed modal has an Input of its own, and `query_one(Input)`
+        would happily hand back whichever came first in the DOM."""
+        return self.query_one("#message-input", Input)
+
+    def _set_busy(self, busy: bool) -> None:
+        """Take or release the session for a turn (module docstring, "One
+        turn at a time"). UI thread only -- a worker calls it through
+        `call_from_thread`. Disabling the box is both the lock's visible
+        half and the only progress signal the TUI had; re-focusing on
+        release means the next message is typed without reaching for the
+        mouse.
+        """
+        self._turn_running = busy
+        box = self.message_box
+        box.disabled = busy
+        box.placeholder = self.BUSY_PLACEHOLDER if busy else self.IDLE_PLACEHOLDER
+        self.sub_title = "working…" if busy else ""
+        if not busy:
+            box.focus()
 
     def _post(self, renderable: RenderableType) -> None:
         """Mount one *result*-side block: always visible, never collapsed
@@ -433,22 +766,38 @@ class OttoApp(App):
         return answer[0]
 
     def _post_thinking(self, thinking_log: RichLog, title: str) -> Collapsible:
-        """Mount one *thinking*-side block: a fresh RichLog, collapsed by
-        default, that render_update() writes this turn's board lines and
-        output previews into (module docstring). Collapsed rather than
-        omitted -- the process is still one click away, just not what the
-        user sees by default.
+        """Mount one *thinking*-side block: a fresh RichLog that
+        render_update() writes this turn's board lines and output previews
+        into (module docstring), inside a Collapsible that starts OPEN.
 
-        Returns the Collapsible so the caller can retitle it when the turn
-        ends: a row still reading "thinking…" an hour later says nothing
-        about which turn it belongs to, and a transcript of several says it
-        several times.
+        Open, not collapsed -- module docstring, "The thinking log runs
+        EXPANDED". A RichLog inside a collapsed Collapsible is never laid
+        out, so `RichLog.write()` buffers every call instead of rendering
+        it: nothing at all reaches the screen while the turn runs, and the
+        whole backlog then renders in one synchronous burst if anyone
+        expands it. `_close_thinking` shuts it once the turn is done, which
+        is where the collapsed-by-default intent actually belongs.
         """
         thinking_log.add_class("thinking-log")
-        block = Collapsible(thinking_log, title=title, collapsed=True)
+        block = Collapsible(thinking_log, title=title, collapsed=False)
         self.transcript.mount(block)
         self.transcript.scroll_end(animate=False)
         return block
+
+    def _close_thinking(self, block: Collapsible, steps: int,
+                        calls: int = 0, elapsed: float = 0.0) -> None:
+        """Shut this turn's thinking block now that the answer is on screen,
+        labelled with how much is folded away inside it so it is obvious
+        there is something to open -- and with what the turn cost, which is
+        the one number a person wants after the fact and should not have to
+        expand anything to read."""
+        parts = [f"{steps} steps"] if steps else []
+        if calls:
+            parts.append(f"{calls} model calls")
+        if elapsed:
+            parts.append(_clock(elapsed))
+        block.title = f"thinking… ({' · '.join(parts)})" if parts else "thinking…"
+        block.collapsed = True
 
     # ---- the command palette (ctrl+p): the arrow-key menu ------------
 
@@ -461,7 +810,10 @@ class OttoApp(App):
         yield SystemCommand("Rate last answer: bad", "Score the last answer 0.0", lambda: self.action_score(0.0, ""))
         yield SystemCommand("Rate last answer…", "Score the last answer with a value and a comment", self.action_score_dialog)
         yield SystemCommand("Copy last answer", "Copy the raw final answer to your clipboard", self.action_copy_last)
+        yield SystemCommand("Workspace…", "Show or change the directory otto may read and write", self.action_workspace)
         yield SystemCommand("New session", "Clear history, start fresh", self.action_new_session)
+        yield SystemCommand("Toggle tokens", "Show or hide the token usage panel",
+                            self.action_toggle_usage)
 
     # ---- actions behind those commands --------------------------------
 
@@ -523,12 +875,31 @@ class OttoApp(App):
         if self.session.trace_id is None:
             self._post("[yellow]nothing to rate yet[/]")
             return
-        self.ctx.client.create_score(
-            name="user_feedback", value=value, data_type="NUMERIC",
-            trace_id=self.session.trace_id, comment=comment or None,
-        )
-        self.ctx.client.flush()
-        self._post(f"[dim]scored {value:g}[/]")
+        # Reads trace_id HERE, on the UI thread, and hands it to the worker
+        # as an argument: by the time the score is posted the next turn may
+        # already have replaced it, and a rating must land on the answer the
+        # person was actually looking at.
+        self._send_score(self.session.trace_id, value, comment)
+
+    @work(thread=True)
+    def _send_score(self, trace_id: str, value: float, comment: str) -> None:
+        """Off the UI thread, because `create_score`/`flush` are Langfuse
+        network calls and `flush` blocks until the queue drains -- on the
+        event loop that freezes the whole app, redraws and keystrokes
+        included, for as long as the network takes.
+        """
+        try:
+            self.ctx.client.create_score(
+                name="user_feedback", value=value, data_type="NUMERIC",
+                trace_id=trace_id, comment=comment or None,
+            )
+            self.ctx.client.flush()
+        except Exception as exc:
+            self.call_from_thread(
+                self._post, f"[red]could not record the score: {type(exc).__name__}: {exc}[/]"
+            )
+            return
+        self.call_from_thread(self._post, f"[dim]scored {value:g}[/]")
 
     def action_score_dialog(self) -> None:
         def done(result: tuple[float, str] | None) -> None:
@@ -538,33 +909,92 @@ class OttoApp(App):
             self.action_score(*result)
         self.push_screen(ScoreDialog(), done)
 
+    def action_workspace(self) -> None:
+        if self._turn_running:
+            # A turn already handed its workspace to run_pipeline_stream, so
+            # changing it now would take effect on the NEXT turn while
+            # appearing to have taken effect on this one.
+            self._post("[yellow]a turn is still running; wait for it to finish[/]")
+            return
+
+        def done(answer: str | None) -> None:
+            if answer is None:
+                return
+            if answer.lower() in {"off", "none", ""}:
+                self.session.workspace = None
+            elif problem := set_workspace(self.session, answer):
+                self._post(f"[red]{problem}[/]")
+                return
+            self._post(f"[dim]{describe_workspace(self.session.workspace)}[/]")
+
+        self.push_screen(WorkspacePrompt(self.session.workspace), done)
+
+    def action_toggle_usage(self) -> None:
+        panel = self.usage_panel
+        panel.display = not panel.display
+
     def action_new_session(self) -> None:
-        self.session.reset()
-        self._last_output = None
-        self._post("[dim]new session[/]")
+        if self._turn_running:
+            # Resetting mid-turn would swap the session (and its memory
+            # queue) out from under a worker that is still writing to it.
+            self._post("[yellow]a turn is still running; wait for it to finish[/]")
+            return
+        self._set_busy(True)
+        self._reset_session()
+
+    @work(thread=True)
+    def _reset_session(self) -> None:
+        """Off the UI thread: `Session.reset()` opens a fresh per-session
+        SQLite store (agent/memory/wiring.py's new_history_queue), which is
+        disk work, not a field assignment."""
+        try:
+            self.session.reset()
+            self._last_output = None
+            # The panel says "this session", so a new session starts it at
+            # nothing. Cleared in place rather than rebound: the widget holds
+            # the same object the turns record into.
+            self.usage.by_model.clear()
+            self.call_from_thread(self._refresh_usage)
+            self.call_from_thread(self._post, "[dim]new session[/]")
+        finally:
+            self.call_from_thread(self._set_busy, False)
 
     # ---- the message box: the one thing that stays typed ---------------
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # A modal's own Input.Submitted bubbles all the way up to the App
+        # (module docstring, "Modal input must not escape into a new turn").
+        # Every modal here stops its own event; this is the second lock on
+        # the same door, and the one that still holds if a future modal
+        # forgets.
+        if event.input.id != "message-input":
+            return
         text = event.value.strip()
         event.input.value = ""
         if not text:
             return
-        if self._busy:
-            # `exclusive=True` cancels the previous WORKER, and a worker
-            # running a thread cannot be cancelled out from under a blocking
-            # network call -- so a second submit used to leave two runs alive
-            # writing into the same transcript. Refuse, and say which key
-            # ends the one already going.
-            self._post("[yellow]a turn is already running -- esc to stop it[/]")
+        if self._turn_running:
+            # Module docstring, "One turn at a time". Nothing in Textual can
+            # stop the in-flight worker thread, so the only safe answer is to
+            # not start a second one -- and now that escape ends a turn, to
+            # say which key does it.
+            self._post(
+                "[yellow]still working on the previous message -- esc to stop it[/]")
             return
         self._post(f"[bold]you[/] {text}")
+        # Taken HERE, on the UI thread, before the worker exists -- a flag
+        # the worker set for itself would leave a window wide enough for a
+        # second Enter.
+        self._set_busy(True)
         self.run_turn(text)
 
-    @work(thread=True, exclusive=True, group="turn")
+    @work(thread=True, group="turn")
     def run_turn(self, text: str) -> None:
+        # No exclusive=True: it cancels the asyncio task wrapping this
+        # thread, not the thread, so it never stopped anything and only
+        # made the double-run look handled (module docstring, "One turn at
+        # a time"). `_turn_running` is what actually serialises turns.
         self._cancel = threading.Event()
-        self._busy = True
         self._phase = "reading your message"
         self._model = self._tool = ""
         self._calls = 0
@@ -572,24 +1002,19 @@ class OttoApp(App):
         self._answer = None
         self._drawn_at = 0.0
         self.call_from_thread(self._draw_status)
-        try:
-            with bind_progress(self._on_progress, cancel=self._cancel):
-                self._run_turn(text)
-        finally:
-            self._busy = False
-            elapsed = time.monotonic() - self._started
-            self.call_from_thread(self._draw_status)
-            self.call_from_thread(self._retitle_thinking, self._calls, elapsed)
+        with bind_progress(self._on_progress, cancel=self._cancel):
+            self._drive_turn(text)
 
-    def _run_turn(self, text: str) -> None:
+    def _drive_turn(self, text: str) -> None:
         tally: Counter = Counter()
-        # One fresh RichLog per turn, mounted collapsed right away so board
-        # lines have somewhere to land as they stream in -- render_update()
-        # (shell.py) is unchanged, it just writes into this instead of the
-        # old shared transcript RichLog (module docstring).
+        steps = 0
+        # One fresh RichLog per turn, mounted OPEN so board lines render as
+        # they stream in rather than piling up unrendered behind a collapsed
+        # container -- render_update() (shell.py) is unchanged, it just
+        # writes into this instead of the old shared transcript RichLog
+        # (module docstring).
         thinking_log = RichLog(wrap=True, markup=True, highlight=False)
-        self._thinking = self.call_from_thread(
-            self._post_thinking, thinking_log, "thinking…")
+        block = self.call_from_thread(self._post_thinking, thinking_log, "thinking…")
         human_message = HumanMessage(text)
         # Bounded, not the raw ever-growing list (agent/cli/chat.py's own
         # module docstring has the full Phase 2 reasoning -- shared 1:1
@@ -597,7 +1022,9 @@ class OttoApp(App):
         history, memory_context = self.session.history_for_graph()
         try:
             stream = run_pipeline_stream(
-                text, session_id=self.session.session_id, history=history, memory_context=memory_context,
+                text, session_id=self.session.session_id, history=history,
+                memory_context=memory_context, workspace=self.session.workspace_arg(),
+                usage=self.usage,
             )
             while stream is not None:
                 next_stream = None
@@ -611,8 +1038,17 @@ class OttoApp(App):
                         ask = update["__ask__"]
                         answer = self._ask_user_blocking(ask["question"], ask["choices"])
                         self.call_from_thread(self._post, f"[bold]you[/] {answer}")
+                        # Breaking out leaves this generator suspended at its
+                        # yield, inside bind_budget/bind_store/bind_workspace,
+                        # so their contextvar tokens would be reset from
+                        # whatever context the GC runs in rather than this
+                        # worker thread. close() unwinds it here instead.
+                        stream.close()
                         next_stream = resume_pipeline_stream(
-                            answer, thread_id=ask["thread_id"], session_id=self.session.session_id,
+                            answer, thread_id=ask["thread_id"],
+                            session_id=self.session.session_id,
+                            workspace=self.session.workspace_arg(),
+                            usage=self.usage,
                         )
                         break
                     if "__final__" in update:
@@ -638,7 +1074,9 @@ class OttoApp(App):
                         continue
 
                     node, delta = next(iter(update.items()))
+                    steps += 1
                     self.call_from_thread(render_update, node, delta, tally, thinking_log.write)
+                    self.call_from_thread(self._refresh_usage)
                 stream = next_stream
         except Cancelled:
             # Asked for, not broken. Its own clause so a person who pressed
@@ -646,14 +1084,18 @@ class OttoApp(App):
             self.call_from_thread(self._post, "[yellow]stopped[/]")
         except Exception as exc:  # a provider error mid-turn must not crash the app
             self.call_from_thread(self._post, f"[red]{type(exc).__name__}: {exc}[/]")
-
-    def _retitle_thinking(self, calls: int, elapsed: float) -> None:
-        """What that turn cost, on the row that holds how it was spent. The
-        one number a person wants after the fact is on the collapsed row, so
-        reading it back does not mean expanding anything."""
-        if self._thinking is not None:
-            self._thinking.title = f"{calls} model calls · {_clock(elapsed)}"
-            self._thinking = None
+        finally:
+            # All three in one finally: a turn that died on a provider error
+            # still has to hand the session back, or the message box stays
+            # disabled and the app looks hung for the rest of its life -- and
+            # it still spent tokens getting there. The per-update refresh
+            # above is what makes the panel move DURING a turn; this is what
+            # makes it right at the end of one, including a turn whose only
+            # event was its own answer.
+            self.call_from_thread(self._close_thinking, block, steps,
+                                  self._calls, time.monotonic() - self._started)
+            self.call_from_thread(self._refresh_usage)
+            self.call_from_thread(self._set_busy, False)
 
     def _settle_answer(self, panel: Panel) -> None:
         """Turn the streamed block into the finished one, or mount it if the
@@ -667,7 +1109,11 @@ class OttoApp(App):
         self._post(panel)
 
 
-def tui(ctx: typer.Context) -> None:
+def tui(
+    ctx: typer.Context,
+    workspace: Annotated[Optional[Path], typer.Option("--workspace", "-w", help=WORKSPACE_HELP)] = None,
+    no_workspace: Annotated[bool, typer.Option("--no-workspace", help=NO_WORKSPACE_HELP)] = False,
+) -> None:
     """Launch the full-screen TUI: the arrow-key-menu front end over the same
     pipeline `otto chat` drives."""
-    OttoApp(ctx.obj).run()
+    OttoApp(ctx.obj, workspace=resolve_workspace(workspace, no_workspace)).run()

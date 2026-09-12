@@ -9,12 +9,24 @@ overhead. Mean score went 0.54 to 0.62 on the measured tasks.
 
 WHAT A RUN DOES, in order.
 
-1. `_criteria` writes down what a correct answer must contain, FROM THE TASK
+1. `_rubric` writes down what a correct answer must contain, FROM THE TASK
    ALONE, before any attempt exists. Its own call, its own prompt. This is the
    only information in the whole judgment the actor did not produce, and it is
    why the evaluator is worth its calls: self-refinement without external
    information measures at -2.5% to 0% over five turns, where the same models
    reach 90-98% given an external checklist.
+
+   The same call decides whether there is a task here at all. A greeting has
+   no criteria, because it makes no claim to check -- and everything below
+   this line exists to make a claim trustworthy. So `NO TASK` comes back
+   instead of criteria, and the run answers in ONE further call
+   (`_chat_reply`, on the cheapest chat seat) and stops: two model calls for
+   the turn, and no loop, no judge, no lesson. Live, before this, "hi otto!"
+   cost 13 model calls and about five minutes -- handed no
+   task by a prompt that tells it to run something that would fail if the task
+   were not done, the loop invented one, and wrote a test file to disk to have
+   something to verify. A real task pays nothing for this: the decision comes
+   out of a call that was already the first thing a run did.
 
 2. `_agent_loop` runs one conversation until it answers, pauses, or runs out
    of budget. The protocol is text -- `ACTION:` then `CODE:` -- not native
@@ -92,6 +104,7 @@ from agent.memory.lessons import (
 from agent.pipeline.evidence import Ledger, render_note as render_unproven
 from agent.pipeline.state import AgentState
 from agent.pipeline.budget import Budget, current_budget, default_budget
+from agent.pipeline.usage import record_usage
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
 from agent.pipeline.tools import (
     reachable_tools,
@@ -101,6 +114,7 @@ from agent.pipeline.progress import (
     check_cancelled, report as report_progress, watching as anyone_watching,
 )
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
+from agent.pipeline.workspace import workspace_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router import outcomes as seat_outcomes
 from agent.router import health as provider_health
@@ -330,8 +344,19 @@ _SWITCH_ONLY_HINT = "switch_mode: one word from " + "|".join(mode_names()) + "."
 
 #: The WHEN of asking lives in MUTATION_GATE_NOTE, at the moment it applies --
 #: which is where a model can act on it. This block's job is what goes in the
-#: body.
-_ASK_HINT = "ask_user: a question, optionally then `CHOICES: a | b`."
+#: body, plus the one thing that note does not cover.
+#:
+#: What was missing was the case for NOT asking, and its absence was not
+#: theoretical: with the work finished and the person having said "done" and
+#: then "nothing else", the agent asked "would you like anything else?" once
+#: more. A courtesy question is not a blocked one, and nothing had ever said
+#: so. One clause, kept here rather than added to _DIAGNOSTIC_HABITS, whose
+#: comment records a fifth item erasing the four above it.
+_ASK_HINT = (
+    "ask_user: a question, optionally then `CHOICES: a | b` -- only when you "
+    "cannot proceed without the answer, never about work you have already "
+    "finished."
+)
 
 
 def _body_hint(live, *, may_delegate: bool = True) -> str:
@@ -494,9 +519,38 @@ RUBRIC_PROMPT = (
     "criteria double-count one mistake. Fewer is better.\n\n"
     "Do not write criteria about style, effort or presentation. Nothing else "
     "in your reply, no preamble.\n\n"
-    "If the message asks for nothing that could be checked -- a greeting, a "
-    "thank-you, an acknowledgement, small talk -- reply with exactly NONE and "
-    "no criteria. That is a normal answer, not a failure to understand."
+    "NOT EVERY MESSAGE IS A TASK. A greeting, thanks, a goodbye, small talk, "
+    "or a question about you or about this conversation asks for nothing to "
+    "be found out, worked out, changed or produced -- there is nothing in it "
+    "to check. Reply with the single line `NO TASK` and no criteria. Be strict "
+    "about this: if answering would mean reading a file, running a command, "
+    "searching, computing, or knowing anything about this machine or the "
+    "world, it is a task and you write criteria for it."
+)
+
+#: The whole reply to a turn that asked for no work.
+#:
+#: Everything the pipeline does after this point exists to make a CLAIM
+#: trustworthy: criteria to judge against, a loop that gathers evidence, a
+#: judge that re-checks it, a lesson distilled from the friction. A greeting
+#: makes no claim, so all of it is overhead -- and not cheap overhead. Live,
+#: "hi otto!" cost 13 model calls and about five minutes: the agent loop read
+#: a prompt that tells it to run something that would fail if the task were
+#: not done, and, having been handed no task, invented one -- four greps
+#: across the workspace, a test file written to disk, a shell script to run
+#: it, and a judgment on the result. The answer was "Hi! I'm Otto -- what can
+#: I help you with today?"
+#:
+#: So this is the whole of the fast path: one further call on the cheapest
+#: chat seat, no tools, no judge, no lesson -- two model calls for the turn
+#: against thirteen. What decides between the two paths is the rubric call
+#: that was happening anyway -- see `_rubric`.
+CHAT_PROMPT = (
+    "You are otto, an engineer's assistant with a shell and a workspace. "
+    "What follows is not a task -- nobody has asked you to find anything out "
+    "or change anything. Answer it directly, as yourself, in a sentence or "
+    "two. Do not describe what you could do, do not offer a plan, and do not "
+    "start work nobody asked for."
 )
 
 EVALUATOR_PROMPT = (
@@ -609,25 +663,6 @@ CONTRAST_NOTE = (
     "kind nobody can act on."
 )
 
-#: Added when the criteria call found nothing to check -- a greeting, a
-#: thank-you, an acknowledgement.
-#:
-#: The prompt above is written for tasks: find out what is true, do the work,
-#: confirm it holds. Handed "hello, how are you?", an agent following it looks
-#: for work to do. Measured on a clean session, that was four model calls and
-#: 48 seconds to produce "I'm doing well, thank you!" -- the judge and the
-#: lesson were already being skipped by then, and this is the rest of the bill.
-#:
-#: Deliberately not a separate prompt or a separate path. One line, added only
-#: when the run has already established there is nothing to verify, so a task
-#: that merely looks chatty never sees it.
-CONVERSATION_PROMPT = (
-    "You are Otto. This turn is conversation, not a task: the criteria pass "
-    "found nothing to check in it.\n\n"
-    "Answer directly and briefly, like a person. Do not use a tool, do not "
-    "look anything up, and do not go looking for work to do.\n\n"
-    "Reply with exactly\nFINAL:\n<your answer>"
-)
 
 #: The whole agent, in one prompt.
 #:
@@ -834,6 +869,14 @@ def _call(llm, messages: list) -> str:
             ) from exc
         if reply is None:
             return ""
+
+        # What this request cost, against whichever model actually answered --
+        # agent/pipeline/usage.py. Here rather than at the call sites for the
+        # same reason `budget.spend()` is here: this is the one place every
+        # model REQUEST passes through, retries included, and a retry is real
+        # spend. The `usage_metadata` was already being streamed back and
+        # dropped on the floor.
+        record_usage(_model_label(current), getattr(reply, "usage_metadata", None))
 
         # A call that came back settles "is this vendor reachable", whichever
         # model answered it -- so this clears the provider breaker as well as
@@ -1176,7 +1219,7 @@ def _summarise_action(tool_name: str, body: str, result) -> str:
 
 
 def _tool_loop(llm, messages: list, actions: list[str] | None = None,
-               *, max_iterations: int | None = None) -> str:
+               *, max_iterations: int | None = None, asked: int = 0) -> str:
     """Run the shared ACTION/FINAL tool-calling loop -- every role node AND
     the evaluator drive their conversation through this one function. A
     role node's FINAL body IS its candidate answer; the evaluator's FINAL
@@ -1196,9 +1239,13 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
     # the note is how the prompt finds out they exist: the menu in
     # _ACTION_BLOCK is derived at import and cannot know about them.
     dispatch = dispatch_table()
-    note = render_note()
-    if note:
-        messages.insert(1, SystemMessage(note))
+    # Where the files are, then what extra tools exist. Both are "facts about
+    # this run that the prompt was built at import time without" -- see
+    # agent/pipeline/workspace.py's workspace_note() for why a judge that does
+    # not know the root cannot check a claim about a file.
+    for extra in (workspace_note(), render_note()):
+        if extra:
+            messages.insert(1, SystemMessage(extra))
 
     budget = current_budget()
     output = ""
@@ -1246,6 +1293,17 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
             # Not a normal tool -- see NeedsUserInput's own docstring for
             # why this has to unwind all the way out rather than being
             # just another TOOL_DISPATCH entry.
+            if asked >= MAX_USER_QUESTIONS:
+                # ...unless the turn has spent its asks. Then it IS just a
+                # tool call that came back refused, and the loop carries on
+                # rather than the run ending -- MAX_USER_QUESTIONS. No
+                # MAX_REFUSED_ASKS guard needed here the way _agent_loop
+                # needs one: this loop is always run with a real iteration
+                # ceiling, so being refused every time costs it that ceiling
+                # and no more.
+                messages.append(AIMessage(text))
+                messages.append(HumanMessage(ASK_BUDGET_SPENT.format(asked=asked)))
+                continue
             question, choices = _parse_ask_user_body(body)
             raise NeedsUserInput(question or "(no question given)", choices)
         if problem := _action_problem(tool_name, body, dispatch):
@@ -1469,28 +1527,18 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
         _render_checklist(checklist),
     ) if part)
 
-    note = render_note()
-    # A turn with no criteria has already been established to hold no task, so
-    # it gets a prompt its own size instead of the engineer one.
-    #
-    # The old shape was a 227-character note arguing, from inside a
-    # HumanMessage, against 3,500 characters of system prompt telling the
-    # model to go find out what state the system is in and offering it
-    # seventeen tools. Roughly 3,200 characters of that turn were spent
-    # setting up an argument with themselves.
-    #
-    # One-way on purpose: this prompt still ends in FINAL:, so a task
-    # misclassified as chatter costs a short answer rather than a refusal to
-    # work.
-    if checklist == []:
-        return [SystemMessage(CONVERSATION_PROMPT), HumanMessage(body)]
-
     # Composed here, once, from what this run can actually reach -- and NOT
     # recomposed per turn: the resume branch rebuilds this same string and a
     # system message that changed between calls would defeat prefix caching.
+    #
+    # No conversational branch here any more: a turn that asked for no work
+    # never reaches this function. `_rubric` says so on the call that was
+    # happening anyway, and the agent node answers it on the chat seat
+    # without seeding a transcript at all -- see CHAT_PROMPT.
     messages: list = [SystemMessage(compose_agent_prompt(reachable_tools()))]
-    if note:
-        messages.append(SystemMessage(note))
+    for extra in (workspace_note(), render_note()):
+        if extra:
+            messages.append(SystemMessage(extra))
     messages.append(HumanMessage(body))
     messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
     return messages
@@ -1675,6 +1723,95 @@ MAX_REJECTIONS = 2
 #: calls a second apart, and the run has an answer in hand the whole time.
 MAX_JUDGE_ERRORS = 1
 
+#: How many times ONE turn may stop and ask the person something.
+#:
+#: Nothing bounded this. A rejection loop is capped by MAX_REJECTIONS and a
+#: tool loop by MAX_TOOL_ITERATIONS, but a run could pause, be answered, and
+#: pause again without limit -- and did, in two separate live sessions. The
+#: second is the one this constant is sized against: the work was finished,
+#: the person had said "done" and then "nothing else", and the agent asked
+#: "would you like anything else?" again anyway. Asking is the only thing the
+#: agent does that spends somebody ELSE'S attention, which is the argument for
+#: bounding it harder than anything it spends on its own.
+#:
+#: Three, not one: a genuinely underspecified task can need a second question
+#: once the first answer opens something up, and a hard cap of one would push
+#: the agent into bundling unrelated questions into a single unanswerable one.
+#: Past the cap the ask is REFUSED rather than the run ended -- see
+#: ASK_BUDGET_SPENT, which hands the loop a way forward instead of a wall.
+MAX_USER_QUESTIONS = int(os.environ.get("OTTO_MAX_USER_QUESTIONS", "3"))
+
+#: Answers that mean "stop asking me things", matched WHOLE and exactly.
+#:
+#: The live failure: the person answered "done", was asked again, answered
+#: "nothing else", and was asked again. Both answers said the same thing and
+#: neither changed what happened next.
+#:
+#: What a match does is deliberately asymmetric, because the two halves carry
+#: different risk. Spending the turn's remaining asks is unconditional and
+#: safe: somebody who says "nothing else" has said they are finished being
+#: interrupted, and the worst a false match can do is make the agent settle
+#: the rest itself -- which is what ASK_BUDGET_SPENT already asks of it.
+#: FINISHING is only ever advised, never forced, because a false match there
+#: would cut a real task short.
+#:
+#: Whole-answer matches only. A substring test would fire on "no, use the
+#: second file", and an answer that carries any other content is an answer
+#: to the question rather than a request to stop. Bare "yes"/"no" are
+#: deliberately absent: `CHOICES: yes | no` is the commonest question shape
+#: there is, and reading a genuine "no" as "stop" would break far more than
+#: this fixes.
+_CLOSING_ANSWERS = frozenset((
+    "done", "all done", "finished", "we are done", "we're done", "were done",
+    "that is all", "that's all", "thats all", "no thanks", "no thank you",
+    "nothing", "nothing else", "nothing more", "nothing further",
+    "everything is done", "everything's done", "everythings done",
+    "stop", "no more", "no more questions", "quit",
+))
+
+
+def _is_closing_answer(text: str) -> bool:
+    """Does this answer say "stop asking", and nothing else?"""
+    return " ".join(str(text or "").lower().split()).strip(".!, ") in _CLOSING_ANSWERS
+
+
+#: Added to the answer spliced back into the loop when _is_closing_answer.
+#: Advice, not a gate -- see _CLOSING_ANSWERS on why only the asking half is
+#: enforced.
+CLOSING_ANSWER_NOTE = (
+    "That reads as: stop asking. You have no questions left this turn. "
+    "Unless something you were actually asked for is still undone, give your "
+    "FINAL now with what you have."
+)
+
+#: How many times ONE `_agent_loop` may be refused an ask before it hands over
+#: what it has.
+#:
+#: `_agent_loop` runs `while max_iterations is None or iteration < ...` and the
+#: agent node passes None, so the only thing that ends it is an answer, a
+#: pause, or the budget. Refusing the ask without this would turn a model that
+#: asks on every reply into a loop that spends a whole run's model calls being
+#: told no -- the pause it used to unwind through was, accidentally, what
+#: bounded it. Two, so a model that asks once more and then complies is not
+#: cut off for it.
+MAX_REFUSED_ASKS = 2
+
+#: What a loop is told INSTEAD of pausing, once it has spent the cap above.
+#:
+#: Not a refusal on its own. An enforcement study that blocked 94% of
+#: non-compliant actions still finished under 5% of tasks safely, because the
+#: agent routed around the block by inventing what it had been denied -- the
+#: same reasoning as MUTATION_GATE_NOTE, which is why this names the way
+#: forward (decide, then SAY you decided) rather than only naming the wall.
+ASK_BUDGET_SPENT = (
+    "You have already asked {asked} question(s) this turn, which is the "
+    "limit -- asking again is not available.\n\n"
+    "Settle it yourself from what you already have, and state in your FINAL "
+    "which way you settled it and why, so it can be corrected. If the work is "
+    "actually done, finish: whether anything ELSE is wanted is not your "
+    "question to ask."
+)
+
 #: Ceiling on each piece of evidence handed to the evaluator. Two-ended, like
 #: agent/pipeline/tools.py's own clip, for the same reason: the start says what
 #: was attempted and the end says how it came out, and keeping only the head
@@ -1690,7 +1827,6 @@ _EVIDENCE_MESSAGES = 6
 def _clip_evidence(text: str) -> str:
     if len(text) <= _EVIDENCE_CHARS:
         return text
-    half = _EVIDENCE_CHARS // 2
     return (
         f"{text[:half]}\n... [{len(text) - _EVIDENCE_CHARS} characters omitted] "
         f"...\n{text[-half:]}"
@@ -1942,6 +2078,9 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     #: and nothing run, and it is allowed to say that once.
     ledger = Ledger()
     asked_for_proof = False
+    #: Asks refused because the TURN is out of them (MAX_REFUSED_ASKS). Local
+    #: to this loop run, unlike state's `asks` which spans the whole turn.
+    refused_asks = 0
     iteration = 0
     llm = ROUTER.chat_model(MODES[mode].task)
 
@@ -2021,6 +2160,35 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
         dead_replies = 0
 
         if tool_name == "ask_user":
+            asked = state.get("asks") or 0
+            if asked >= MAX_USER_QUESTIONS:
+                # The turn has spent its asks -- MAX_USER_QUESTIONS. Refused
+                # like any other unavailable tool, so the loop carries on
+                # with a way forward instead of pausing a fourth time.
+                if text:
+                    messages.append(AIMessage(text))
+                messages.append(HumanMessage(ASK_BUDGET_SPENT.format(asked=asked)))
+                refused_asks += 1
+                if refused_asks >= MAX_REFUSED_ASKS:
+                    # It has been told twice and is still asking. Hand over
+                    # what there is rather than spend the run on it --
+                    # MAX_REFUSED_ASKS.
+                    logger.warning(
+                        "agent loop: still asking after %d refusals -- handing "
+                        "over what it has", refused_asks,
+                    )
+                    return output, "dead", mode
+                iteration += 1
+                continue
+            # Write the question into the transcript BEFORE unwinding. The
+            # agent node persists `messages` on its way out to the ask_user
+            # node, so a transcript that does not contain the question comes
+            # back from the pause byte-identical to the one that produced it --
+            # same prompt, same question, forever. Live-tested: six identical
+            # asks in a row, each answer ignored (the other half of that fix is
+            # the answer itself, spliced back in by agent() on resume).
+            if text:
+                messages.append(AIMessage(text))
             question, choices = _parse_ask_user_body(body)
             raise NeedsUserInput(question or "(no question given)", choices)
 
@@ -2190,8 +2358,12 @@ def _delegate(state: AgentState, body: str, *, actions: list[str],
     # tool it could name, could not use, and paid an exchange to discover.
     child: list = [SystemMessage(compose_agent_prompt(reachable_tools(),
                                                       may_delegate=False))]
-    if note := render_note():
-        child.append(SystemMessage(note))
+    # A delegate gets none of this conversation (DELEGATE_CONTRACT), so it
+    # needs the workspace said to it directly -- it cannot infer the root from
+    # a parent turn it never saw.
+    for extra in (workspace_note(), render_note()):
+        if extra:
+            child.append(SystemMessage(extra))
     child.append(HumanMessage(DELEGATE_CONTRACT.format(instruction=instruction.strip())))
     child.append(_mode_message(want))
 
@@ -2357,33 +2529,90 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
     stored = _revive(state.get("transcript"))
     resuming = bool(stored)
 
-    # The run's working state, written once from the task alone before any
-    # attempt exists. Nothing here can be shaped by an attempt trying to
+    # What the person said, and whether they have just said something new.
+    answered = state.get("user_answer")
+    # A closing answer ("done", "nothing else") is the person winding the turn
+    # up, not adding to the request -- re-deriving criteria from it would
+    # produce a checklist about saying goodbye.
+    redirected = bool(answered) and not _is_closing_answer(answered)
+
+    # The run's working state, written from what was ASKED FOR before any
+    # attempt at it exists. Nothing here can be shaped by an attempt trying to
     # satisfy it -- which is stronger than generating it after the fact, and
     # the same call now serves both the loop and the judgment instead of one
     # each. See AgentState.checklist.
+    #
+    # Rewritten when the person answers a question, and ONLY then. It used to
+    # be written once from `messages[-1]`, which meant a turn that opened "hi"
+    # and then received the real request as an ANSWER spent itself doing that
+    # work and had every bit of it rejected for not being a greeting -- see
+    # _requested() for the live run. An answer is the person talking, not an
+    # attempt at satisfying them, so this is still a checklist written from
+    # the request rather than from a candidate answer.
     checklist = state.get("checklist")
-    if checklist is None and not resuming:
+    conversational = False
+    if checklist is None or redirected:
         report_progress("phase", "working out what done looks like")
-        criteria = _criteria(ROUTER.chat_model(Task.EVALUATE), task_text)
-        # Left as None when the rubric call itself failed, so the run keeps
-        # the engineer prompt. Only a rubric that RAN and came back empty is
-        # evidence that the turn holds no task.
-        checklist = None if criteria is None else _new_checklist(criteria)
-    # `not resuming` because a run that is resuming already tried, once, at
-    # its start. Without that clause a failed rubric call is retried on every
-    # re-entry: carry() writes the None back over whatever the evaluator
-    # settled, so the next pass finds None again and pays for another attempt
-    # against the provider that just refused it. Measured on one live run with
-    # the Anthropic key exhausted: twenty rubric calls in a single turn.
+        rubric = _rubric(ROUTER.chat_model(Task.EVALUATE), _requested(state))
+        checklist = _new_checklist(rubric.criteria)
+        conversational = rubric.conversational
+
+    # Nothing was asked for, so there is nothing to verify, judge or learn
+    # from: answer and stop. One further call, against the thirteen a greeting
+    # cost live (see CHAT_PROMPT), and the decision came free with the rubric
+    # call above, so a real task pays nothing for this path existing.
+    #
+    # Fresh turns only. A run that is resuming already has work behind it --
+    # an answer to a question it asked, or an evaluator's rejection to fix --
+    # and "this message asks for nothing" is not true of the turn just because
+    # it is true of the sentence.
+    if conversational and not resuming:
+        try:
+            reply = _chat_reply(state, task_text)
+        except ProviderError as exc:
+            logger.info("the chat fast path failed, running the task path: %s", exc)
+            reply = ""
+        if reply:
+            return Command(
+                update={
+                    "node": "agent",
+                    "output": reply,
+                    "final_output": reply,
+                    "checklist": checklist,
+                    "board": ["otto answered without starting a task"],
+                    **({"model_calls": spent.calls}
+                       if (spent := current_budget()) else {}),
+                },
+                goto=END,
+            )
 
     if resuming:
         # The same composition the seed used. Both read `reachable_tools()`
         # and the bindings do not change inside a run, so the rebuilt prompt
         # is byte-identical -- which is what the stored transcript assumes.
-        messages = [SystemMessage(compose_agent_prompt(reachable_tools())), *(
-            [SystemMessage(render_note())] if render_note() else []
-        ), *stored]
+        messages = [
+            SystemMessage(compose_agent_prompt(reachable_tools())),
+            *(SystemMessage(extra) for extra in (workspace_note(), render_note()) if extra),
+            *stored,
+        ]
+        # Coming back from an ask_user pause. The transcript above already
+        # ends with the question (_agent_loop appends it before unwinding);
+        # this is the reply to it, and without this line the loop resumes
+        # from a conversation identical to the one that asked and simply
+        # asks again -- see AgentState.user_answer.
+        if answered:
+            closing = (
+                "\n\n" + CLOSING_ANSWER_NOTE if _is_closing_answer(answered) else ""
+            )
+            messages.append(HumanMessage(
+                f"THE USER ANSWERED:\n{answered}\n\n"
+                "That answers the question you just asked. Carry on with the "
+                "task from here -- do not ask it again." + closing
+                + ("\n\nIt is also part of what you were asked for, so what "
+                   "has to be true when you are done has been rewritten "
+                   "around it:\n" + _render_checklist(checklist)
+                   if redirected and checklist else "")
+            ))
         feedback = state.get("feedback") or ""
         if feedback:
             messages.append(HumanMessage(
@@ -2405,6 +2634,10 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
             "checklist": checklist,
             "mode": mode,
             "model_calls": budget.calls if budget else state.get("model_calls") or 0,
+            # Consumed above (or there was none). It is spliced into the
+            # transcript now, so leaving it set would replay it into the next
+            # run of this node as well.
+            "user_answer": None,
         }
         if actions:
             update["actions"] = actions
@@ -2467,29 +2700,13 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
         "final": "otto has an answer",
         "dead": "otto could not produce a usable reply and is handing over what it has",
     }[why]
-    if checklist == [] and why == "final":
-        # Nothing to verify, so nothing downstream runs.
-        #
-        # The criteria call is the first thing a turn does, and an empty
-        # checklist is it saying there was no task in the message. Running the
-        # rest anyway is how "thanks, that's helpful" cost 22 model calls and
-        # 263 seconds: the judge measured a chatty reply against criteria that
-        # did not exist, rejected it, and the loop retried twice. The answer it
-        # finally produced was "1|Problem to solve|No problem to solve".
-        #
-        # `== []` and not `not checklist`: None means the criteria call FAILED
-        # and is not evidence of anything. Read as falsy, one dead provider key
-        # skipped verification on every run in the batch and the runs still
-        # reported themselves finished.
-        #
-        # Only on a clean `final`. A run that died or ran out still goes to the
-        # evaluator, because "no criteria" and "no answer" are different
-        # problems and only one of them is a conversation.
-        return Command(
-            update=carry(node="agent", output=output, final_output=output,
-                         feedback="", board=["otto answered"]),
-            goto=END,
-        )
+    # No empty-checklist exit here any more. It used to end a clean run at END
+    # when the rubric had come back with nothing, which was this graph's way
+    # of not charging a greeting for the whole verification apparatus -- the
+    # `conversational` fast path above does that now, earlier and for less,
+    # and it says so from a field rather than inferring it from an absence.
+    # An empty checklist that reaches this point means the rubric produced
+    # nothing, which is not evidence there was no task, so it is judged.
     return Command(
         update=carry(node="agent", output=output, feedback="", board=[board]),
         goto="evaluator",
@@ -2612,20 +2829,71 @@ def _settle(checklist: list[dict], verdict: "Verdict") -> list[dict]:
     return [{**item, "status": status, "evidence": evidence} for item in checklist]
 
 
-def _criteria(llm, task_text: str) -> list[str] | None:
+def _requested(state: AgentState) -> str:
+    """Everything the PERSON asked for: the opening message, plus whatever
+    they said when the run stopped to ask them something.
+
+    This exists because `messages[-1]` alone was being treated as the whole
+    request, and an ask_user answer can BE the request. Live: the turn opened
+    with "hi", otto asked what was wanted, the person answered "analyse my
+    repository and plan improvements to the TUI", otto did exactly that over
+    32 model calls -- and the evaluator rejected every bit of it, correctly by
+    its own lights, because the checklist said the task was to answer a
+    greeting. The run ended by saying hello, the work was thrown away, and the
+    files it had written stayed on disk.
+
+    An answer is new input from the person, NOT an attempt at satisfying them,
+    which is why deriving criteria from this keeps the invariant the checklist
+    exists for (AgentState.checklist): still written from what was asked,
+    before any attempt at it exists.
+    """
+    task_text = str(state["messages"][-1].content)
+    qa = [line for line in (state.get("asked_qa") or []) if line]
+    if not qa:
+        return task_text
+    return (
+        f"{task_text}\n\n"
+        "THEN THEY WERE ASKED, AND SAID -- this is part of the request, not "
+        "background:\n" + "\n\n".join(qa)
+    )
+
+
+#: What the rubric call says when the message asked for no work at all.
+#: Matched on the line, not searched for anywhere in the reply, so a criterion
+#: that happens to contain the words cannot switch the run onto the fast path.
+_NO_TASK = "NO TASK"
+
+
+@dataclass(frozen=True, slots=True)
+class Rubric:
+    """What one rubric call comes back with.
+
+    `conversational` is not a second call and not a classifier bolted on in
+    front of the graph -- it is the same call, answering the question it was
+    always implicitly answering. "What would a correct answer have to contain"
+    has no answer for a greeting, and a rubric call that says so is telling
+    the run something it currently throws away.
+    """
+
+    criteria: list[str]
+    #: The message asked for nothing to be found out, changed or produced.
+    #: False whenever the call failed, so a provider hiccup can only ever cost
+    #: the run its criteria -- never route a real task to a one-line reply.
+    conversational: bool = False
+
+
+def _rubric(llm, task_text: str) -> Rubric:
     """Phase one: the rubric, from the task alone.
 
     A separate call on purpose. Criteria written while looking at an answer
     are criteria the answer happens to meet, which is the failure mode that
     makes a self-judging loop measure zero.
 
-    Fails soft: a provider hiccup here must not cost the judgment. But it
-    returns None when the CALL failed and [] when the call ran and found
-    nothing to check, and those two are not the same fact. [] is evidence the
-    turn holds no task; None is evidence of nothing at all. The agent node
-    reads them apart -- it seeds a conversation prompt on [] -- so collapsing
-    them would let one exhausted API key strip a real task of its prompt, its
-    habits and its tools.
+    Fails soft: a provider hiccup here must not cost the judgment. Which is
+    why "no criteria" and "no task" are separate fields rather than one empty
+    list standing for both: a failed call returns Rubric([]) with
+    `conversational` False, so an exhausted API key can cost the run its
+    criteria and never route a real task to a one-line reply.
     """
     try:
         reply = _call(llm, [
@@ -2634,8 +2902,49 @@ def _criteria(llm, task_text: str) -> list[str] | None:
         ])
     except ProviderError as exc:
         logger.warning("rubric generation failed, judging without one: %s", exc)
-        return None
-    return _parse_rubric(reply)
+        return Rubric([])
+    criteria = _parse_rubric(reply)
+    # Both halves required. A reply that says NO TASK *and* lists criteria has
+    # contradicted itself, and the safe reading of a contradiction is that
+    # there is work here -- the fast path skips the judge, so it is the one
+    # place in this graph where being wrong is not recoverable by a rejection.
+    conversational = not criteria and any(
+        line.strip().upper().startswith(_NO_TASK) for line in reply.splitlines()
+    )
+    return Rubric(criteria, conversational)
+
+
+def _criteria(llm, task_text: str) -> list[str]:
+    """The criteria alone, for a caller that has no use for the rest -- the
+    evaluator, when it was driven directly and the loop never wrote one."""
+    return _rubric(llm, task_text).criteria
+
+
+def _chat_reply(state: AgentState, task_text: str) -> str:
+    """The fast path's one call: answer a message that asked for no work.
+
+    On the cheap chat seat rather than the loop's reasoning seat, because
+    nothing here has to be worked out -- and the seat the loop runs on is the
+    single most expensive thing a turn can touch.
+
+    Returns "" if it produced nothing, and lets a provider failure out. Both
+    send the caller back to the ordinary pipeline: a fast path that can fail a
+    turn is worse than no fast path.
+    """
+    conversation = _conversation_so_far(state)
+    body = "\n\n".join(part for part in (
+        f"CONVERSATION SO FAR:\n{conversation}" if conversation else "",
+        f"THEY SAID:\n{task_text}",
+    ) if part)
+    messages = [
+        SystemMessage(CHAT_PROMPT),
+        # Same two notes the loop opens with. "where am I working" and "what
+        # can you see" are exactly the kind of thing asked conversationally,
+        # and answering them needs no tool -- just the note.
+        *(SystemMessage(extra) for extra in (workspace_note(), render_note()) if extra),
+        HumanMessage(body),
+    ]
+    return _call(ROUTER.chat_model(Task.CHAT_FAST), messages).strip()
 
 
 def _record_seat(state: AgentState, *, approved: bool) -> None:
@@ -2751,16 +3060,13 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end
     report_progress("phase", "checking the answer holds up")
     checklist = state.get("checklist")
     if checklist is None and not state.get("judge_errors"):
-        # Judging is the one place the two empties really are the same: with
-        # no criteria to read, this falls back to the bare request either way.
-        #
         # `not judge_errors` because this node retries itself on a provider
         # failure, and a rubric call that just failed against this same model
-        # is not going to succeed a second later. Without the clause the
-        # retry paid for it again: measured across the twenty golden items
-        # with the Anthropic key exhausted, sixty rubric calls for twenty
-        # runs, every one of them refused.
-        checklist = _new_checklist(_criteria(llm, task_text) or [])
+        # is not going to succeed a second later. Without the clause the retry
+        # paid for it again: measured across the twenty golden items with the
+        # Anthropic key exhausted, sixty rubric calls for twenty runs, every
+        # one of them refused.
+        checklist = _new_checklist(_criteria(llm, _requested(state)))
     checklist = checklist or []
     rubric = [item["text"] for item in checklist]
 
@@ -2777,7 +3083,10 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end
     human_body = "\n\n".join(part for part in (
         (f"CONVERSATION SO FAR:\n{_conversation_so_far(state)}"
          if _conversation_so_far(state) else ""),
-        f"ORIGINAL REQUEST:\n{task_text}",
+        # _requested(), not `task_text`: an ask_user answer can BE the
+        # request, and judging "analyse my repo and plan the TUI work" against
+        # the word "hi" is how a whole run's work came to be thrown away.
+        f"WHAT WAS ASKED FOR:\n{_requested(state)}",
         f"{human_label}:\n{output}",
         _actions_block(state),
         (f"MODES USED:\n" + "; ".join(state.get("mode_log") or [])
@@ -2789,7 +3098,8 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end
     ) if part)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     try:
-        reply = _tool_loop(llm, messages, max_iterations=MAX_EVALUATOR_ITERATIONS)
+        reply = _tool_loop(llm, messages, max_iterations=MAX_EVALUATOR_ITERATIONS,
+                           asked=state.get("asks") or 0)
     except NeedsUserInput as exc:
         # Seventh refinement (module docstring): the evaluator itself got
         # stuck judging something and needs the person's input to settle
@@ -2966,23 +3276,50 @@ def ask_user(state: AgentState) -> Command[Literal["agent", "evaluator"]]:
     # reads state["messages"][-1] as THE TASK for the whole turn;
     # appending onto it would silently replace the actual task the next
     # time anything looked (module docstring). `context` already means
-    # "material gathered so far for planner/solver to use" and is already
-    # shown to every prompt below via "CONTEXT GATHERED SO FAR:" -- the
-    # role that asked sees this Q&A as ordinary background on its next
-    # (fresh) attempt, the same way it would see anything finder dug up.
+    # "material gathered so far for planner/solver to use" and is shown by
+    # every prompt REBUILT FROM STATE via "CONTEXT GATHERED SO FAR:" -- the
+    # evaluator sees this Q&A as ordinary background, the same way it would
+    # see anything else gathered along the way.
+    #
+    # That last clause is narrower than it once read, and the difference was
+    # a bug. The loop does NOT rebuild from state: it resumes from
+    # `transcript`, which nothing here writes. `user_answer` below is the
+    # other half.
     prior = state.get("context") or ""
     qa = f'you asked: "{question}"\nthe user answered: "{answer}"'
     role = state.get("asking_role") or "agent"
-    return Command(
-        update={
-            "context": f"{prior}\n\n{qa}" if prior else qa,
-            "pending_question": None,
-            "pending_choices": None,
-            "asking_role": None,
-            "board": [f"you answered -- {role} is carrying on"],
-        },
-        goto=role,
-    )
+    asked = (state.get("asks") or 0) + 1
+    if _is_closing_answer(answer):
+        # "done", "nothing else" -- the person has said they are finished
+        # being interrupted, so the turn has no asks left whatever it had
+        # before (_CLOSING_ANSWERS).
+        asked = max(asked, MAX_USER_QUESTIONS)
+    update = {
+        "context": f"{prior}\n\n{qa}" if prior else qa,
+        "pending_question": None,
+        "pending_choices": None,
+        "asking_role": None,
+        # Counted HERE rather than where the question was raised, so what the
+        # cap measures is pauses a person actually sat through --
+        # MAX_USER_QUESTIONS. A question raised and then lost to a provider
+        # error cost nobody anything and should not spend the budget.
+        "asks": asked,
+        # What the PERSON said, kept apart from `context`'s grab-bag so that
+        # `_requested()` can compose the actual request out of it -- which is
+        # what the run's checklist gets re-derived from.
+        "asked_qa": [qa],
+        "board": [f"you answered -- {role} is carrying on"],
+    }
+    # ...and, for the loop only, into `user_answer` as well. The evaluator
+    # rebuilds its prompt from state on every run, so `context` above reaches
+    # it; the loop does NOT -- it resumes from `transcript`, where none of
+    # this is written, and so came back and asked the same question again
+    # (AgentState.user_answer has the whole failure). Set only when handing
+    # back to `agent`, so an answer the EVALUATOR asked for cannot turn up in
+    # the loop's conversation as a reply to a question it never asked.
+    if role == "agent":
+        update["user_answer"] = str(answer)
+    return Command(update=update, goto=role)
 
 
 g = StateGraph(AgentState)

@@ -180,7 +180,10 @@ def test_evaluator_shows_prior_conversation_ahead_of_the_original_request(monkey
     assert human.startswith("CONVERSATION SO FAR:\n")
     assert "you: solve N queens with brute force" in human
     assert "otto: def solve(n): ..." in human
-    assert "ORIGINAL REQUEST:\nimprove above solution" in human
+    # "WHAT WAS ASKED FOR", not "ORIGINAL REQUEST": an ask_user answer can BE
+    # the request (nodes.py's _requested), and the old label invited the judge
+    # to score real work against a one-word opener.
+    assert "WHAT WAS ASKED FOR:\nimprove above solution" in human
 
 
 def test_evaluator_rejects_a_final_answer_and_routes_feedback_back_to_the_loop(monkeypatch):

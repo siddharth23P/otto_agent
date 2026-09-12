@@ -63,7 +63,7 @@ def _install(monkeypatch, fake):
     # care about that call it explicitly; the rest are about what the loop does
     # afterwards, so they get a fixed one and keep their scripted replies
     # aligned with the exchanges they are actually asserting on.
-    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["the task is done"])
+    monkeypatch.setattr(pn, "_rubric", lambda llm, task: pn.Rubric(["the task is done"]))
 
 
 def _state(**overrides) -> dict:
@@ -313,7 +313,7 @@ def test_a_swap_changes_which_task_the_next_call_routes_to(monkeypatch):
         "FINAL:\ndone",
     ])
     monkeypatch.setattr(pn.ROUTER, "chat_model", chat_model)
-    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["done"])
+    monkeypatch.setattr(pn, "_rubric", lambda llm, task: pn.Rubric(["done"]))
 
     result = pn.agent(_state())
 
@@ -639,7 +639,8 @@ def test_a_run_scoped_tool_that_only_reads_is_not_gated(monkeypatch):
 def test_the_loop_is_told_what_has_to_be_true(monkeypatch):
     fake = _Scripted(["FINAL:\ndone"])
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
-    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["fib(10) prints 55", "fib.py exists"])
+    monkeypatch.setattr(pn, "_rubric",
+                        lambda llm, task: pn.Rubric(["fib(10) prints 55", "fib.py exists"]))
 
     result = pn.agent(_state())
 
@@ -655,7 +656,8 @@ def test_the_checklist_is_written_before_any_attempt_exists(monkeypatch):
     seen_task = []
     fake = _Scripted(["FINAL:\ndone"])
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
-    monkeypatch.setattr(pn, "_criteria", lambda llm, task: seen_task.append(task) or ["c"])
+    monkeypatch.setattr(pn, "_rubric",
+                        lambda llm, task: seen_task.append(task) or pn.Rubric(["c"]))
 
     pn.agent(_state())
 
@@ -667,7 +669,8 @@ def test_an_existing_checklist_is_not_rewritten(monkeypatch):
     calls = []
     fake = _Scripted(["FINAL:\nsecond attempt"])
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
-    monkeypatch.setattr(pn, "_criteria", lambda llm, task: calls.append(1) or ["new"])
+    monkeypatch.setattr(pn, "_rubric",
+                        lambda llm, task: calls.append(1) or pn.Rubric(["new"]))
 
     existing = [{"text": "the original bar", "status": "pending", "evidence": ""}]
     result = pn.agent(_state(checklist=existing, transcript=[{"kind": "human", "content": "earlier"}],
@@ -807,7 +810,7 @@ def test_escalating_keeps_what_the_run_established(monkeypatch):
         "FINAL:\ndone",
     ])
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
-    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["the thing is true"])
+    monkeypatch.setattr(pn, "_rubric", lambda llm, task: pn.Rubric(["the thing is true"]))
 
     pn.agent(_state(mode="find"))
 
@@ -907,7 +910,7 @@ def test_the_reminder_restates_what_is_still_open(monkeypatch):
     """Counters fade-out on the thing that matters most: what the run is for."""
     fake = _Scripted(["ACTION: execute_python\nCODE:\nprint(1)"] * 8 + ["FINAL:\ndone"])
     monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: fake)
-    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["the suite passes"])
+    monkeypatch.setattr(pn, "_rubric", lambda llm, task: pn.Rubric(["the suite passes"]))
 
     pn.agent(_state())
 
@@ -949,7 +952,7 @@ def test_a_subtask_runs_on_the_other_modes_model(monkeypatch):
         "FINAL:\nall done",
     ])
     monkeypatch.setattr(pn.ROUTER, "chat_model", chat_model)
-    monkeypatch.setattr(pn, "_criteria", lambda llm, task: ["done"])
+    monkeypatch.setattr(pn, "_rubric", lambda llm, task: pn.Rubric(["done"]))
 
     result = pn.agent(_state(mode="solve"))
 
