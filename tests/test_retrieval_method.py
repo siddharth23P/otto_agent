@@ -216,3 +216,40 @@ def test_a_literal_query_finds_the_file_that_holds_it(tmp_path):
     assert result.returncode == 0
     assert "conf.py" in result.stdout
     assert "other.py" not in result.stdout
+
+
+# --------------------------------------------------------------------------
+# The other half of a decision that was only half made
+# --------------------------------------------------------------------------
+#
+# agent/pipeline/tools.py's `rag` already picks between an exact-token search
+# and a semantic one, on measured grounds: over Otto's own tree, grep found
+# 4/4 exact identifiers and 0/4 conceptual questions, and the embedding index
+# found 4/4 of both but spent forty seconds on the first. Memory recall never
+# got the second half of that. These pin the version it has now.
+
+def test_a_date_in_the_query_is_matched_literally():
+    """A vector has no special respect for "2027-01-31". An id, a date, a
+    version or a path is either in the text or it is not, and that question
+    needs no model to answer."""
+    assert mr._literal_tokens("what happens on 2027-01-31") == ["2027-01-31"]
+    assert mr._literal_tokens("ticket AK-4417-QX") == ["AK-4417-QX"]
+    assert mr._literal_tokens("open agent/memory/retrieval.py") == [
+        "agent/memory/retrieval.py"
+    ]
+
+
+def test_ordinary_words_are_not_literals():
+    """Narrow on purpose. A literal pass that fires on "deployment" would put
+    every chunk containing a common word ahead of the ranking."""
+    assert mr._literal_tokens("which timezone should the output use") == []
+    assert mr._literal_tokens("what colour did they turn down") == []
+    assert mr._literal_tokens("Priya") == []
+
+
+def test_a_query_with_no_literal_ranks_exactly_as_before(corpus):
+    """Additive, never a replacement: the paraphrase path must be untouched,
+    or this trades the case the embedding index exists for against the case
+    it is weakest at."""
+    for question, _ in PARAPHRASE:
+        assert mr._literal_tokens(question) == [], question
