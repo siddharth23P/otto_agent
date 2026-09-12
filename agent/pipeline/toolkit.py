@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import contextvars
 import json
+import logging
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Mapping
@@ -116,6 +118,8 @@ def dispatch_table() -> dict[str, Callable[[str], ToolResult]]:
         return dict(TOOL_DISPATCH)
     return {**TOOL_DISPATCH, **{name: t.call for name, t in extra.items()}}
 
+logger = logging.getLogger(__name__)
+
 
 def _one_line_schema(schema: dict[str, Any]) -> str:
     """The parts of a JSON Schema a caller needs to write a valid body:
@@ -139,6 +143,47 @@ def _one_line_schema(schema: dict[str, Any]) -> str:
     return "{" + ", ".join(parts) + "}"
 
 
+#: Longest a task-supplied name or description may be once it reaches the
+#: prompt. A description is a hint about a tool's shape, and one longer than
+#: this is either a mistake or an attempt to spend the prompt.
+MAX_TOOL_NAME_CHARS = 64
+MAX_TOOL_DESCRIPTION_CHARS = 300
+
+#: A tool name the ACTION parser can actually resolve. `_resolve_tool` in
+#: agent/pipeline/nodes.py pulls identifiers out of an ACTION line with
+#: exactly this shape, so a name with a space in it is UNREACHABLE through the
+#: protocol -- advertising one promises something that cannot be called.
+_CALLABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+#: Anything that could start a new line of framework text, plus the control
+#: characters that render as nothing and hide what follows them.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _inert(text: str, limit: int) -> str:
+    """One line of at most `limit` characters, safe to put in a prompt.
+
+    THIS IS A TRUST BOUNDARY, and it was open. `render_note` builds a
+    SystemMessage, and `ExtraTool.name` and `.description` arrive verbatim
+    from a benchmark's own task file -- agent/eval/claw_bench.py passes
+    `spec.name` and `spec.description` straight through, deliberately and
+    documented as such. `.strip()` trims the ends and leaves the middle alone,
+    so a description containing a newline followed by `FINAL:` or
+    `TOOL RESULT:` forges framework-level text inside the system role.
+
+    deer-flow escapes tool names because it renders them into XML-ish tags a
+    crafted name could close. Otto has no tags, so escaping is the wrong
+    mechanism; what matters here is that untrusted text cannot start a line.
+    Collapsing control characters does that, and the length bound stops a
+    description being used to spend the prompt.
+    """
+    collapsed = _CONTROL.sub(" ", text or "").strip()
+    collapsed = " ".join(collapsed.split())
+    if len(collapsed) > limit:
+        collapsed = collapsed[: limit - 1].rstrip() + "\u2026"
+    return collapsed
+
+
 def render_note(tools: Mapping[str, ExtraTool] | None = None) -> str:
     """The block that tells a prompt these tools exist. Empty string when
     nothing is bound, so a caller can append it unconditionally.
@@ -157,8 +202,14 @@ def render_note(tools: Mapping[str, ExtraTool] | None = None) -> str:
         "no code fence.",
     ]
     for tool in tools.values():
-        shape = _one_line_schema(tool.schema) if tool.schema else "(free text)"
-        lines.append(f"- {tool.name} {shape} -- {tool.description.strip()}")
+        name = _inert(tool.name, MAX_TOOL_NAME_CHARS)
+        if not _CALLABLE_NAME.match(name):
+            # Advertising a name the parser cannot resolve promises a tool
+            # that cannot be called, and the model spends turns finding out.
+            logger.warning("run-scoped tool %r is not a callable name", tool.name)
+            continue
+        shape = _inert(_one_line_schema(tool.schema) if tool.schema else "(free text)", 400)
+        lines.append(f"- {name} {shape} -- {_inert(tool.description, MAX_TOOL_DESCRIPTION_CHARS)}")
     return "\n".join(lines)
 
 
