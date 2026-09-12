@@ -652,3 +652,65 @@ async def test_a_new_session_starts_the_panel_at_nothing(monkeypatch, tmp_path):
 
         assert app.usage.total_tokens == 0
         assert "nothing yet" in _panel_text(app)
+
+
+@_async_test
+async def test_the_panel_shows_what_a_turn_cost(monkeypatch, tmp_path):
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("gpt-5-mini",
+                               {"input_tokens": 1_000_000, "output_tokens": 0})
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+
+        shown = _panel_text(app)
+        assert "$0.25" in shown, "1M input tokens at that model's own rate"
+        # A cost with no date on it invites more trust than a static rate
+        # table can earn (agent/pipeline/pricing.py).
+        assert "est. at" in shown
+
+
+@_async_test
+async def test_an_unpriced_model_makes_the_total_say_it_is_short(monkeypatch, tmp_path):
+    # Not the same as showing a smaller number and hoping. A total missing
+    # somebody's share has to be readable as a floor.
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("gpt-5-mini", {"input_tokens": 1000, "output_tokens": 10})
+        kwargs["usage"].record("mercury-2.5", {"input_tokens": 9000, "output_tokens": 500})
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+
+        shown = _panel_text(app)
+        assert "unpriced" in shown
+        assert "mercury-2.5" in shown  # still listed, with its tokens
+
+
+@_async_test
+async def test_cached_tokens_are_shown_only_when_there_are_some(monkeypatch, tmp_path):
+    def fake_stream(text, **kwargs):
+        kwargs["usage"].record("claude-haiku-4-5", {
+            "input_tokens": 100_000, "output_tokens": 500,
+            "input_token_details": {"cache_read": 90_000},
+        })
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, fake_stream)
+    async with app.run_test() as pilot:
+        assert "cached" not in _panel_text(app)
+        app.message_box.value = "do a thing"
+        await pilot.press("enter")
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+        await pilot.pause()
+
+        assert "cached 90.0k" in _panel_text(app)

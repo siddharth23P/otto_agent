@@ -229,3 +229,187 @@ def test_a_model_id_is_trimmed_to_the_part_that_distinguishes_it(full, short):
     # cost width and distinguish nothing.
     from agent.cli.tui import _short_model
     assert _short_model(full) == short
+
+
+# --------------------------------------------------------------------------
+# Pricing (agent/pipeline/pricing.py). Rates are DATA with an expiry date, so
+# what is tested here is the machinery around them -- lookup, the override
+# file, cache accounting, and the refusal to price what it does not know --
+# never the numbers themselves, which are expected to change.
+# --------------------------------------------------------------------------
+
+import json
+
+from agent.pipeline import pricing
+
+
+@pytest.fixture(autouse=True)
+def _no_price_file(monkeypatch):
+    """Never let a developer's own OTTO_MODEL_PRICES change these results."""
+    monkeypatch.delenv(pricing.PRICES_ENV, raising=False)
+    pricing.reset_overrides()
+    yield
+    pricing.reset_overrides()
+
+
+@pytest.mark.parametrize("model", [
+    "claude-haiku-4-5-20251001",
+    "us.anthropic.claude-haiku-4-5-20251001",
+    "anthropic:claude-haiku-4-5-20251001",
+    "claude-haiku-4-5",
+])
+def test_one_entry_covers_every_spelling_of_the_same_model(model):
+    # A dated revision, a region-prefixed id and a vendor-prefixed spec are
+    # the same model, and the table should not have to list all of them.
+    assert pricing.rate_for(model) is pricing.PRICES["claude-haiku-4-5"]
+
+
+def test_a_model_with_no_rate_is_not_priced_at_zero():
+    # The whole discipline: "no rate" and "free" must not look alike.
+    assert pricing.rate_for("mercury-2.5") is None
+    assert pricing.cost_of("mercury-2.5", input_tokens=10_000, output_tokens=500) is None
+
+
+def test_input_and_output_are_charged_at_their_own_rates():
+    rate = pricing.Rate(input=2.0, output=10.0)
+
+    assert rate.cost(1_000_000, 0) == pytest.approx(2.0)
+    assert rate.cost(0, 1_000_000) == pytest.approx(10.0)
+
+
+def test_cached_tokens_are_taken_OUT_of_input_before_it_is_charged():
+    # langchain's `input_tokens` INCLUDES the cached ones. Charging both the
+    # full input and the cache on top double-counts the largest number here.
+    rate = pricing.Rate(input=10.0, output=0.0, cached_input=1.0)
+
+    # 1M input of which 900k was a cache read: 100k at 10, 900k at 1.
+    assert rate.cost(1_000_000, 0, cached_input_tokens=900_000) == pytest.approx(
+        0.1 * 10.0 + 0.9 * 1.0
+    )
+
+
+def test_cache_writes_are_charged_at_their_own_premium():
+    rate = pricing.Rate(input=10.0, output=0.0, cached_input=1.0, cache_write=12.5)
+
+    assert rate.cost(1_000_000, 0, cache_write_tokens=1_000_000) == pytest.approx(12.5)
+
+
+def test_a_model_with_no_cache_rate_charges_cache_reads_as_plain_input():
+    # Understating by guessing a discount would be worse than charging full.
+    rate = pricing.Rate(input=10.0, output=0.0)
+
+    assert rate.cost(1_000_000, 0, cached_input_tokens=1_000_000) == pytest.approx(10.0)
+
+
+def test_a_price_file_overrides_the_built_in_rate(tmp_path, monkeypatch):
+    path = tmp_path / "prices.json"
+    path.write_text(json.dumps({"claude-haiku-4-5": {"input": 99.0, "output": 99.0}}))
+    monkeypatch.setenv(pricing.PRICES_ENV, str(path))
+    pricing.reset_overrides()
+
+    assert pricing.rate_for("claude-haiku-4-5-20251001").input == 99.0
+
+
+def test_a_price_file_can_price_a_model_the_table_has_never_heard_of(tmp_path, monkeypatch):
+    # The point of the override: correcting or ADDING a rate is config, not a
+    # code change -- see the module docstring on data with an expiry date.
+    path = tmp_path / "prices.json"
+    path.write_text(json.dumps({"mercury-2.5": {"input": 1.0, "output": 2.0}}))
+    monkeypatch.setenv(pricing.PRICES_ENV, str(path))
+    pricing.reset_overrides()
+
+    assert pricing.cost_of("mercury-2.5", input_tokens=1_000_000,
+                           output_tokens=0) == pytest.approx(1.0)
+
+
+def test_a_broken_price_file_is_ignored_rather_than_fatal(tmp_path, monkeypatch):
+    # A typo in a config file must not be the reason a turn cannot run.
+    path = tmp_path / "prices.json"
+    path.write_text("{not json at all")
+    monkeypatch.setenv(pricing.PRICES_ENV, str(path))
+    pricing.reset_overrides()
+
+    assert pricing.rate_for("claude-haiku-4-5") is pricing.PRICES["claude-haiku-4-5"]
+
+
+def test_a_missing_price_file_is_ignored_rather_than_fatal(tmp_path, monkeypatch):
+    monkeypatch.setenv(pricing.PRICES_ENV, str(tmp_path / "nope.json"))
+    pricing.reset_overrides()
+
+    assert pricing.rate_for("gpt-5-mini") is not None
+
+
+@pytest.mark.parametrize("amount,shown", [
+    (None, "--"),
+    (0.0, "$0.000"),
+    (0.0004, "$0.0004"),
+    (0.0912, "$0.091"),
+    (1.5, "$1.500"),
+    (42.128, "$42.13"),
+])
+def test_a_cost_is_shown_at_a_precision_that_says_something(amount, shown):
+    # Sub-cent turns are normal for the cheap tiers here, so rounding to cents
+    # would show "$0.00" for most of a session and then jump.
+    assert pricing.format_cost(amount) == shown
+
+
+# --------------------------------------------------------------------------
+# Cost through the ledger
+# --------------------------------------------------------------------------
+
+def test_the_ledger_prices_a_model_it_knows():
+    led = UsageLedger()
+    led.record("gpt-5-mini", {"input_tokens": 1_000_000, "output_tokens": 0})
+
+    assert led.models()[0].cost == pytest.approx(pricing.PRICES["gpt-5-mini"].input)
+    assert led.fully_priced is True
+
+
+def test_the_ledger_records_cache_reads_and_writes_separately():
+    led = UsageLedger()
+    led.record("claude-haiku-4-5", {
+        "input_tokens": 100_000, "output_tokens": 1_000,
+        "input_token_details": {"cache_read": 80_000, "cache_creation": 5_000},
+    })
+
+    entry = led.models()[0]
+    assert entry.input_tokens == 100_000   # the total, cache included
+    assert entry.cached_input_tokens == 80_000
+    assert entry.cache_write_tokens == 5_000
+
+
+def test_caching_makes_a_turn_cheaper_rather_than_being_ignored():
+    cached, plain = UsageLedger(), UsageLedger()
+    usage = {"input_tokens": 500_000, "output_tokens": 1_000}
+    plain.record("claude-haiku-4-5", dict(usage))
+    cached.record("claude-haiku-4-5",
+                  {**usage, "input_token_details": {"cache_read": 450_000}})
+
+    assert cached.cost < plain.cost
+
+
+def test_a_ledger_with_an_unpriced_model_says_its_total_is_short():
+    led = UsageLedger()
+    led.record("gpt-5-mini", {"input_tokens": 1000, "output_tokens": 10})
+    led.record("mercury-2.5", {"input_tokens": 1000, "output_tokens": 10})
+
+    assert led.fully_priced is False
+    assert led.cost > 0  # what IS known is still worth showing
+    assert led.snapshot()["fully_priced"] is False
+
+
+def test_a_model_that_reported_no_tokens_has_no_cost_rather_than_zero():
+    led = UsageLedger()
+    led.record("gpt-5-mini", None)
+
+    assert led.models()[0].cost is None
+
+
+def test_an_unpriced_model_that_reported_nothing_does_not_make_a_total_short():
+    # `fully_priced` asks about models that REPORTED usage. One that said
+    # nothing contributes no tokens, so it cannot be missing from a total.
+    led = UsageLedger()
+    led.record("gpt-5-mini", {"input_tokens": 100, "output_tokens": 1})
+    led.record("quiet-unpriced-model", None)
+
+    assert led.fully_priced is True

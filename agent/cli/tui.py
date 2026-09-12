@@ -160,7 +160,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from rich.console import RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.table import Table
+from rich.console import Group
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
@@ -177,6 +177,7 @@ from agent.cli.shell import (
 )
 from agent.cli.ui import THEME
 from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
+from agent.pipeline.pricing import PRICES_AS_OF, format_cost
 from agent.pipeline.usage import UsageLedger
 from agent.router.mapping import Task
 from agent.router.router import NoViableRoute
@@ -409,30 +410,55 @@ class UsagePanel(Static):
     # frames deep with no hint that a name was shadowed.
     def _table(self) -> RenderableType:
         snap = self._ledger.snapshot()
-        table = Table.grid(padding=(0, 1))
-        table.add_column("model", no_wrap=True)
-        table.add_column("calls", justify="right", no_wrap=True)
-        table.add_column("tokens", justify="right", no_wrap=True)
-
         if not snap["models"]:
             # Text, not a markup string: Static.update() with a bare str is
             # handed on as a Visual and fails in the compositor on this
-            # Textual version. Everything else this returns is a Rich Table.
+            # Textual version. Everything else this returns is Rich.
             return Text("nothing yet", style="dim")
 
-        table.add_row("[dim]model[/]", "[dim]req[/]", "[dim]tok[/]")
+        # ONE left-aligned column, not a table. Four facts per model -- id,
+        # requests, tokens, dollars -- do not fit across the ~30 usable
+        # columns this panel has, and a Table.grid makes it worse rather than
+        # better: the model id sets the first column's width, so every number
+        # beside it truncates into uselessness ("225.…", "$0.0"). Tried both.
+        # Stacking the facts under the name needs no column agreement at all.
+        lines: list[RenderableType] = []
         for row in snap["models"]:
-            # "--", not "0". A model that reports no usage has to look
-            # different from one that reported zero -- agent/pipeline/usage.py's
-            # `reported`.
-            tokens = _thousands(row["total_tokens"]) if row["reported"] else "[dim]--[/]"
-            table.add_row(_short_model(row["model"]), str(row["calls"]), tokens)
-        table.add_row("", "", "")
-        table.add_row("[bold]total[/]", f"[bold]{snap['calls']}[/]",
-                      f"[bold]{_thousands(snap['total_tokens'])}[/]")
-        table.add_row("[dim]in[/]", "", f"[dim]{_thousands(snap['input_tokens'])}[/]")
-        table.add_row("[dim]out[/]", "", f"[dim]{_thousands(snap['output_tokens'])}[/]")
-        return table
+            # "--", not "0". A model that reported no usage, or that nothing
+            # has a rate for, has to look different from one that genuinely
+            # cost nothing -- usage.py's `reported`, pricing.py's absences.
+            tokens = _thousands(row["total_tokens"]) if row["reported"] else "--"
+            cost = format_cost(row["cost"])
+            lines.append(Text(_short_model(row["model"]), style="bold"))
+            lines.append(Text(f"  {row['calls']} req · {tokens} · {cost}", style="dim"))
+
+        lines.append(Text(""))
+        total = Text(f"total {snap['calls']} req · ", style="bold")
+        total.append(_thousands(snap["total_tokens"]), style="bold")
+        lines.append(total)
+
+        # A total missing somebody's share says so, rather than presenting a
+        # short number as the whole bill.
+        money = Text(format_cost(snap["cost"]), style="bold")
+        if not snap["fully_priced"]:
+            money.append("+", style="bold yellow")
+            money.append("  some models unpriced", style="yellow dim")
+        lines.append(money)
+
+        lines.append(Text(
+            f"in {_thousands(snap['input_tokens'])} · "
+            f"out {_thousands(snap['output_tokens'])}", style="dim"))
+        if snap["cached_input_tokens"]:
+            # Only when there is some. On a vendor with no prompt caching this
+            # would be a permanent zero taking up a line.
+            lines.append(Text(
+                f"cached {_thousands(snap['cached_input_tokens'])}", style="dim"))
+
+        # The date is not decoration. These are list prices read off a page on
+        # one day and never re-checked (agent/pipeline/pricing.py), and a cost
+        # with no date on it invites more trust than this can earn.
+        lines.append(Text(f"est. at {PRICES_AS_OF} rates", style="dim"))
+        return Group(*lines)
 
 
 class OttoApp(App):
