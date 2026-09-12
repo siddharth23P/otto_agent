@@ -2,6 +2,28 @@
 
 can't say much explore on your own
 
+## Running it
+
+```bash
+otto tui     # full-screen front end
+otto chat    # the same pipeline at a prompt
+```
+
+Both open on the directory you launched them in, and otto's file tools work on
+it: `read_file`, `write_file`, `edit_file`, `list_files`, `code_map`, plus a
+shell and a Python runner whose working directory is that root. Point it
+somewhere else with `--workspace PATH`, or hand it no file access at all with
+`--no-workspace`. `/workspace` in the REPL and "Workspace…" in the TUI's
+command palette (ctrl+p) change it mid-session.
+
+What that boundary is worth, stated honestly: the file tools cannot touch
+anything outside the root, symlinks and `..` included, and that is enforced
+and tested. `execute_bash` cannot be confined the same way -- a shell reaches
+whatever you can reach -- so run otto against a repository you have committed.
+A command gets 120 seconds when a workspace is open and 10 when it is not;
+`OTTO_COMMAND_TIMEOUT` overrides both, and `OTTO_MAX_MODEL_CALLS` caps what a
+single turn may spend.
+
 ## Architecture
 
 One agent, one evaluator. The agent works the task end to end in a single

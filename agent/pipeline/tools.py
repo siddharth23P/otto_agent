@@ -90,6 +90,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import os
 import re
 import shlex
@@ -119,6 +120,8 @@ from agent.pipeline.workspace import (
 from agent.router.llm_provider.base import ProviderError
 from agent.router.router import Router
 
+logger = logging.getLogger(__name__)
+
 READ_ONLY = "read_only"
 MUTATING = "mutating"
 #: Writes, but only ever inside the directory a caller deliberately bound as
@@ -136,6 +139,46 @@ WORKSPACE = "workspace"
 #: traceback, short enough not to blow out a prompt on a runaway print loop.
 _TAIL = 4000
 
+#: How long a shell command or a Python snippet may run, in seconds.
+#:
+#: These used to be one hardcoded `timeout: float = 10.0` on execute_bash and
+#: execute_python, and nothing could change it: nodes.py's loops call a tool as
+#: `dispatch[name](body)`, one positional argument, so the keyword was
+#: unreachable from every caller that actually exists. Ten seconds is right for
+#: what those two were built for -- a node checking its own arithmetic in a
+#: throwaway temp dir -- and wrong by an order of magnitude for the case a
+#: workspace exists for. `pytest` on a real repository does not finish in ten
+#: seconds, and what the agent reads back is not "this is slow", it is
+#: `[timed out]` with a returncode of -1, which is indistinguishable from a
+#: suite that hung. It then "fixes" a failure that never happened.
+#:
+#: So the default is a function of whether a workspace is bound, because that
+#: is exactly the distinction: no workspace means a self-check, a workspace
+#: means somebody's build. OTTO_COMMAND_TIMEOUT overrides both -- a monorepo
+#: whose suite takes four minutes is a real case and not one to guess at.
+THROWAWAY_TIMEOUT_S = 10.0
+WORKSPACE_TIMEOUT_S = 120.0
+COMMAND_TIMEOUT_ENV = "OTTO_COMMAND_TIMEOUT"
+
+
+def default_timeout() -> float:
+    """Seconds a command gets when its caller does not say. See the constants
+    above. A malformed or non-positive OTTO_COMMAND_TIMEOUT is logged and
+    ignored rather than raising -- a typo in an env var must not be the reason
+    a run dies, and silently treating "" or "abc" as zero would make every
+    command time out instantly."""
+    raw = os.environ.get(COMMAND_TIMEOUT_ENV, "").strip()
+    if raw:
+        try:
+            seconds = float(raw)
+        except ValueError:
+            logger.warning("%s=%r is not a number; ignoring it", COMMAND_TIMEOUT_ENV, raw)
+        else:
+            if seconds > 0:
+                return seconds
+            logger.warning("%s=%r is not positive; ignoring it", COMMAND_TIMEOUT_ENV, raw)
+    return WORKSPACE_TIMEOUT_S if current_workspace() is not None else THROWAWAY_TIMEOUT_S
+
 
 @dataclass(frozen=True)
 class ToolResult:
@@ -149,7 +192,7 @@ class ToolResult:
         return self.returncode == 0 and not self.timed_out
 
 
-def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
+def execute_python(code: str, *, timeout: float | None = None) -> ToolResult:
     """Run `code` as a standalone script in a fresh process, in the bound
     workspace if there is one and otherwise in a fresh throwaway temp dir.
 
@@ -159,7 +202,12 @@ def execute_python(code: str, *, timeout: float = 10.0) -> ToolResult:
     just no longer also doubling as evaluate()'s only verification strategy
     (that domain-specific branch is gone; the evaluator now checks things
     for real via this same tool instead of a bespoke code path).
+
+    `timeout=None` means "whatever default_timeout() says for this run" --
+    which is what every real caller gets, since nodes.py's loops invoke a tool
+    as `dispatch[name](body)` with no keywords at all.
     """
+    timeout = default_timeout() if timeout is None else timeout
     remote = current_command_runner()
     if remote is not None:
         # base64 rather than a heredoc: a heredoc is only safe until the
@@ -291,7 +339,7 @@ def _detaching_reason(command: str) -> str | None:
     return "nohup/setsid/disown" if token.isalpha() else "a trailing &"
 
 
-def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
+def execute_bash(command: str, *, timeout: float | None = None) -> ToolResult:
     """Run `command` as a shell command, in the bound workspace if there is
     one and otherwise in a fresh throwaway temp dir.
 
@@ -301,12 +349,17 @@ def execute_bash(command: str, *, timeout: float = 10.0) -> ToolResult:
     binary on PATH, not just the Python interpreter), and workspace.py's own
     docstring for why a shell in a workspace is a blast-radius argument
     rather than a sandbox.
+
+    `timeout=None` means "whatever default_timeout() says for this run", which
+    is 10s with no workspace and 120s with one -- see default_timeout() for
+    why a build being cut off at ten seconds is worse than it sounds.
     """
     if (why := _detaching_reason(command)) is not None:
         return ToolResult(
             stdout="", stderr=BACKGROUNDING_REFUSED.format(why=why), returncode=1,
         )
 
+    timeout = default_timeout() if timeout is None else timeout
     remote = current_command_runner()
     if remote is not None:
         stdout, stderr, code = remote(command, timeout)

@@ -97,6 +97,7 @@ from agent.pipeline.tools import (
     MUTATING, READ_ONLY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
 )
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
+from agent.pipeline.workspace import workspace_note
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router import outcomes as seat_outcomes
 from agent.router import health as provider_health
@@ -1030,9 +1031,13 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
     # the note is how the prompt finds out they exist: the menu in
     # _ACTION_BLOCK is derived at import and cannot know about them.
     dispatch = dispatch_table()
-    note = render_note()
-    if note:
-        messages.insert(1, SystemMessage(note))
+    # Where the files are, then what extra tools exist. Both are "facts about
+    # this run that the prompt was built at import time without" -- see
+    # agent/pipeline/workspace.py's workspace_note() for why a judge that does
+    # not know the root cannot check a claim about a file.
+    for extra in (workspace_note(), render_note()):
+        if extra:
+            messages.insert(1, SystemMessage(extra))
 
     budget = current_budget()
     output = ""
@@ -1299,10 +1304,10 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
         _render_checklist(checklist),
     ) if part)
 
-    note = render_note()
     messages: list = [SystemMessage(AGENT_PROMPT)]
-    if note:
-        messages.append(SystemMessage(note))
+    for extra in (workspace_note(), render_note()):
+        if extra:
+            messages.append(SystemMessage(extra))
     messages.append(HumanMessage(body))
     messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
     return messages
@@ -1900,8 +1905,12 @@ def _delegate(state: AgentState, body: str, *, actions: list[str],
         )
 
     child: list = [SystemMessage(AGENT_PROMPT)]
-    if note := render_note():
-        child.append(SystemMessage(note))
+    # A delegate gets none of this conversation (DELEGATE_CONTRACT), so it
+    # needs the workspace said to it directly -- it cannot infer the root from
+    # a parent turn it never saw.
+    for extra in (workspace_note(), render_note()):
+        if extra:
+            child.append(SystemMessage(extra))
     child.append(HumanMessage(DELEGATE_CONTRACT.format(instruction=instruction.strip())))
     child.append(_mode_message(want))
 
@@ -2077,9 +2086,11 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user"]]:
         checklist = _new_checklist(_criteria(ROUTER.chat_model(Task.EVALUATE), task_text))
 
     if resuming:
-        messages = [SystemMessage(AGENT_PROMPT), *(
-            [SystemMessage(render_note())] if render_note() else []
-        ), *stored]
+        messages = [
+            SystemMessage(AGENT_PROMPT),
+            *(SystemMessage(extra) for extra in (workspace_note(), render_note()) if extra),
+            *stored,
+        ]
         feedback = state.get("feedback") or ""
         if feedback:
             messages.append(HumanMessage(
