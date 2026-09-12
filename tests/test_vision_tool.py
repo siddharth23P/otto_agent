@@ -15,6 +15,8 @@ import base64
 
 import pytest
 
+from conftest import posix_only
+
 import agent.pipeline.tools as pt
 from agent.pipeline.execution import bind_command_runner
 from agent.pipeline.workspace import bind_workspace
@@ -195,6 +197,7 @@ def container(tmp_path):
         yield tmp_path
 
 
+@posix_only
 def test_an_image_inside_a_container_arrives_byte_identical(container, fake_router):
     """This is the test that catches a newline or `base64 -w0` portability bug:
     a corrupted transfer would surface as a baffling model answer, not an
@@ -208,6 +211,7 @@ def test_an_image_inside_a_container_arrives_byte_identical(container, fake_rout
     assert base64.b64decode(message.content[1]["base64"]) == PNG
 
 
+@posix_only
 def test_a_container_image_of_another_type_is_detected(container, fake_router):
     (container / "anim.gif").write_bytes(GIF)
 
@@ -217,6 +221,7 @@ def test_a_container_image_of_another_type_is_detected(container, fake_router):
     assert message.content[1]["mime_type"] == "image/gif"
 
 
+@posix_only
 def test_a_trailing_pwd_marker_does_not_corrupt_the_transfer(container, fake_router, tmp_path):
     """agent/eval/terminal_bench.py's runner appends a working-directory marker
     line to stdout. Nothing else tests that coupling."""
@@ -240,6 +245,7 @@ def test_a_trailing_pwd_marker_does_not_corrupt_the_transfer(container, fake_rou
         assert "did not transfer cleanly" in result.stderr
 
 
+@posix_only
 def test_an_oversized_container_image_is_refused_before_transfer(container, fake_router, monkeypatch):
     monkeypatch.setattr(pt, "MAX_IMAGE_BYTES", 10)
     (container / "pixel.png").write_bytes(PNG)

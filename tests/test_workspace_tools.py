@@ -13,6 +13,8 @@ import os
 
 import pytest
 
+from conftest import posix_filesystem, posix_only
+
 import agent.pipeline.tools as pt
 from agent.pipeline.workspace import (
     OutsideWorkspace,
@@ -42,6 +44,7 @@ def test_resolve_rejects_paths_that_escape_the_root(workspace):
             resolve_in_workspace(escape)
 
 
+@posix_filesystem
 def test_resolve_rejects_a_symlink_pointing_out_of_the_workspace(workspace):
     os.symlink("/etc", workspace / "link")
 
@@ -192,6 +195,10 @@ def container(tmp_path):
     base64 shipping, the find pruning, the exact-once edit script -- without
     needing Docker in the test suite.
     """
+    if os.name == "nt":
+        pytest.skip("exercises the container path by running POSIX commands "
+                    "on the host shell; cmd.exe is not one")
+
     import subprocess
 
     def runner(command, timeout):
@@ -341,6 +348,7 @@ def test_short_output_is_untouched():
 # had already computed and verified was discarded after 1096 seconds, and the
 # grader saw a conversation with no assistant messages at all.
 
+@posix_filesystem
 def test_a_path_too_long_for_the_filesystem_fails_cleanly(tmp_path):
     with bind_workspace(tmp_path):
         with pytest.raises(OutsideWorkspace):
@@ -348,12 +356,22 @@ def test_a_path_too_long_for_the_filesystem_fails_cleanly(tmp_path):
 
 
 def test_the_exact_shape_that_cost_a_run_is_a_failed_result_not_a_crash(tmp_path):
-    """Reproduces C01's own body: a path, then the model's prose after it."""
+    """Reproduces C01's own body: a path, then the model's prose after it.
+
+    The POINT is a failed ToolResult rather than an exception out of the tool
+    loop -- that crash cost 1096 seconds of verified work. WHICH refusal it
+    is depends on the platform: POSIX reaches the length limit and calls it
+    unusable, Windows resolves the leading slash somewhere else entirely and
+    calls it outside the workspace. Both are the behaviour being asserted, so
+    the assertion accepts either rather than pinning the wording of an error
+    that is allowed to differ.
+    """
     body = "/dev/stdin\n\nLet me verify the calculations manually" * 100
     with bind_workspace(tmp_path):
         result = pt.read_file(body)
     assert result.returncode == 1
-    assert "not a usable path" in result.stderr
+    assert ("not a usable path" in result.stderr
+            or "outside the workspace" in result.stderr), result.stderr
 
 
 def test_a_nul_byte_in_a_path_fails_cleanly_too(tmp_path):

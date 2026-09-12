@@ -13,6 +13,8 @@ say so. And the OBSERVATION is the lever: refining only the observation and
 action space, with no planner or critic or search, beat every scaffolding trick
 tried against it by +9.8 points.
 """
+import re
+
 import pytest
 
 import agent.pipeline.tools as pt
@@ -45,11 +47,26 @@ def test_without_a_container_it_refuses_cleanly():
 
 
 def test_the_driver_is_sent_into_the_container():
+    """The URL is checked by parsing it out and comparing the HOST, not by
+    asking whether the command contains "example.com".
+
+    A substring test passes for `https://example.com.attacker.test` and for
+    `https://attacker.test/?u=example.com`, so it cannot tell "the URL we
+    asked for was sent" from "something with those characters in it was" --
+    which is the whole question here. CodeQL flags the substring form for
+    exactly that reason and it is right to.
+    """
+    from urllib.parse import urlparse
+
     runner = _fake_browser()
     with bind_command_runner(runner):
-        pt.browse("open https://example.com")
-    assert "playwright" in runner.seen["command"]
-    assert "example.com" in runner.seen["command"]
+        pt.browse("open https://example.com/docs")
+    command = runner.seen["command"]
+
+    assert "playwright" in command
+    sent = re.search(r"https?://[^\s'\"]+", command)
+    assert sent is not None, command
+    assert urlparse(sent.group()).netloc == "example.com"
 
 
 def test_otto_itself_needs_no_browser_dependency():

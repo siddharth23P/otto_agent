@@ -14,6 +14,8 @@ never let a routing/provider failure crash the whole tool loop.
 """
 import pytest
 
+from conftest import posix_only
+
 from agent.pipeline import tools as pt
 from agent.pipeline.tools import TOOL_DISPATCH, TOOL_TIERS, execute_bash, rag, web_search
 from agent.router.llm_provider.base import ProviderError
@@ -27,6 +29,7 @@ def test_execute_bash_runs_a_real_command_and_captures_stdout():
     assert result.returncode == 0
 
 
+@posix_only
 def test_execute_bash_captures_a_nonzero_exit_and_stderr():
     result = execute_bash("echo oops 1>&2; exit 3")
 

@@ -77,3 +77,30 @@ def _no_real_outcome_log(request, tmp_path_factory):
         return
     with _outcomes.bind_log(tmp_path_factory.mktemp("seats") / "outcomes.db"):
         yield
+
+
+#: Tests that can only run where the host shell is POSIX.
+#:
+#: Otto's remote branch -- every tool's container path -- generates POSIX
+#: commands, because the far end is always a Linux container: `find` with
+#: `-prune`, `base64`, heredocs, `sh -c`. Several tests exercise that branch
+#: without Docker by binding a command runner that runs those commands on the
+#: HOST shell, which is exactly the right trick on Linux and macOS and is
+#: cmd.exe on Windows.
+#:
+#: So these are skipped on Windows rather than made to pass there: what they
+#: test is the behaviour of a Linux container, and a version of them that
+#: cmd.exe could satisfy would be testing something Otto never does.
+posix_only = pytest.mark.skipif(
+    os.name == "nt",
+    reason="exercises the container path by running POSIX commands on the host shell",
+)
+
+#: Filesystem behaviour that genuinely differs on Windows -- symlink creation
+#: needs a privilege, and an over-long path fails with a different error at a
+#: different layer. The production code handles both; only the assertions here
+#: are platform-specific.
+posix_filesystem = pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX filesystem semantics (symlinks without privilege, path-length errors)",
+)
