@@ -23,6 +23,22 @@ def _reset_model_cache():
     emb._model_load_failed = False
 
 
+@pytest.fixture(autouse=True)
+def _local_backend():
+    """This file is about the LOCAL fastembed wrapper, so it pins the local
+    backend rather than taking whichever one the environment selects.
+
+    It did not, and two of these tests passed only because some earlier test
+    in the session had left the local backend cached in a module global. On a
+    machine with a GEMINI_API_KEY they failed on their own and passed in the
+    suite -- `_get_model` is the local loader, and the hosted backend never
+    calls it, so patching it did nothing. Closing that leak in conftest is
+    what made these two say what they had actually been doing.
+    """
+    emb._backend = emb.LocalBGEBackend()
+    yield
+
+
 def test_embed_empty_list_short_circuits_without_loading_a_model(monkeypatch):
     def _boom():
         raise AssertionError("should never be called for an empty input")

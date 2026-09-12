@@ -4,12 +4,36 @@ tiktoken path and the chars/4 fallback (used when cl100k_base can't be
 loaded -- no network, e.g.) need to behave sanely, since queue.py's own
 budget math depends on this never crashing.
 """
+import pytest
+
 import agent.memory.tokens as tok
 
 
 def test_empty_text_is_zero_tokens():
     assert tok.count_tokens("") == 0
     assert tok.count_tokens(None) == 0
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_encoding():
+    """Put the module's encoding cache back the way it was found.
+
+    `test_get_encoding_only_attempts_the_real_load_once` clears these two
+    globals, installs a broken tiktoken and calls _get_encoding(), which
+    caches "no encoding available" -- and monkeypatch restoring sys.modules
+    does not undo that. So every later test in the session counted tokens
+    with the chars/4 heuristic instead of the real encoding.
+
+    That is not a small difference for anything budgeted in tokens. Measured
+    on the retrieval corpus: 288 stored chunks and 9 bullet generations on
+    its own, 227 and 7 in the full suite, because the queue decided different
+    material had overflowed. One constraint was still sitting in the verbatim
+    window in the second case, and the test that went looking for it in
+    compacted memory failed -- only ever in the suite, never on its own.
+    """
+    encoding, attempted = tok._encoding, tok._encoding_load_attempted
+    yield
+    tok._encoding, tok._encoding_load_attempted = encoding, attempted
 
 
 def test_fallback_heuristic_used_when_no_encoding_available(monkeypatch):

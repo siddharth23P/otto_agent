@@ -61,6 +61,35 @@ says so in its own message rather than leaving a silent no-op, and the
 saved-file path (already printed after every turn) is the fallback either
 way.
 
+A screen that moves (2026-09-12, design call: "optimize latency and steps,
+and improve the tui"): until this, the entire middle of a turn was blank.
+The graph streams one update per NODE, `agent` is a node, and a run spends
+every model call and every tool call inside it -- measured across the twenty
+golden items, 828 seconds of wall time with 96% of it inside model requests
+and not one graph update in the middle of any of them. The longest item ran
+131 seconds against an unchanging screen, and the honest reading of "it is
+taking too long" is partly that nothing said otherwise.
+
+`#status`, below the transcript and above the input, is now live for the
+length of a turn: what the run is doing, which model is answering, how many
+model requests it has spent, what tool it is inside, and the elapsed clock.
+It is fed by `agent/pipeline/progress.py` -- a contextvar sink bound around
+the stream, in the same idiom as `bind_budget`/`bind_workspace` -- not by a
+new graph channel, because none of it is state.
+
+The answer streams too. Every `partial` update carries the WHOLE reply so
+far (a diffusing route's chunks are refinements, not slices), so once one
+contains `FINAL:` the text after it is mounted and replaced in place, and
+the answer appears as it is written rather than 30 to 130 seconds later in
+one block. `_STREAM_EVERY` throttles what crosses to the UI thread: chunks
+arrive far faster than a person can read, and marshalling every one of them
+spends the UI thread on frames nobody sees.
+
+And a turn can be stopped. `escape` sets the cancel Event the same seam
+binds; `_call` checks it before spending, so a stop lands within one model
+call and never pays for another. That is the difference between waiting out
+a 28-minute run started by accident and pressing a key.
+
 Mid-run questions (2026-09-10, same day, nodes.py's seventh refinement,
 design call: "widget with multi choice + text bar" for how the TUI should
 ask a question back): `AskUserModal`, below, is that widget -- an
@@ -151,6 +180,7 @@ gave a height of 3, 43 lines gave 16).
 from __future__ import annotations
 
 import threading
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Annotated, Iterable, Optional
@@ -176,6 +206,7 @@ from agent.cli.shell import (
     Session, describe_workspace, render_update, resolve_workspace, set_workspace,
 )
 from agent.cli.ui import THEME
+from agent.pipeline.progress import Cancelled, Progress, bind_progress
 from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
 from agent.pipeline.pricing import PRICES_AS_OF, format_cost
 from agent.pipeline.usage import UsageLedger
@@ -323,6 +354,22 @@ class AskUserModal(ModalScreen[str]):
 # The app
 # --------------------------------------------------------------------------
 
+#: Seconds between answer frames that actually cross to the UI thread.
+#: Chunks arrive an order of magnitude faster than anyone reads, and
+#: marshalling every one of them spends the UI thread drawing frames nobody
+#: sees. A tenth of a second still reads as continuous typing.
+_STREAM_EVERY = 0.1
+
+#: Frames for the one-character spinner in the status line. Four is enough to
+#: read as motion and short enough that a stalled run is obvious -- a frozen
+#: spinner says "stuck", a missing one says nothing.
+_SPINNER = "|/-\\"
+
+
+def _clock(seconds: float) -> str:
+    return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+
+
 def _thousands(n: int) -> str:
     """1234567 -> "1.23M". A token count is read for its ORDER, and a panel 28
     columns wide has no room for the digits that do not change the reading."""
@@ -466,6 +513,7 @@ class OttoApp(App):
     BINDINGS = [
         ("ctrl+n", "new_session", "New session"),
         ("ctrl+y", "copy_last", "Copy last answer"),
+        ("escape", "stop_turn", "Stop this turn"),
         # The panel is 34 columns that the transcript does not get. Worth it
         # while you are watching spend, not worth it on an 80-column terminal
         # reading a long answer -- so it is a toggle rather than a decision
@@ -477,6 +525,7 @@ class OttoApp(App):
     #transcript { width: 1fr; height: 1fr; }
     #transcript Collapsible { padding: 0; }
     .thinking-log { height: auto; max-height: 16; }
+    #status { height: auto; padding: 0 1; color: $text-muted; }
     """
 
     #: What the message box says when it is free. Restored by `_set_busy`,
@@ -500,13 +549,33 @@ class OttoApp(App):
         #: set in `on_input_submitted` before the worker starts, cleared by
         #: the worker through `call_from_thread` -- so it needs no lock, and
         #: there is no window between the check and the set for a second
-        #: Enter to slip through.
+        #: Enter to slip through. It is also what the status line reads to
+        #: decide whether there is anything to draw.
         self._turn_running = False
         #: One ledger for the SESSION, handed to every turn and every resume
         #: (agent/pipeline/usage.py), so the panel is cumulative by
         #: construction rather than by adding per-turn snapshots up. Cleared
         #: with the session by `action_new_session`.
         self.usage = UsageLedger()
+        #: Everything the status line draws, written from the worker thread
+        #: and read from the UI thread's one-second tick. Plain attributes
+        #: rather than a lock: each is a single assignment of an immutable
+        #: value, and the worst a torn read can do is show one stale field
+        #: for a tenth of a second.
+        self._phase = ""
+        self._model = ""
+        self._tool = ""
+        self._calls = 0
+        self._started = 0.0
+        self._frame = 0
+        #: Set by `escape`, read inside `_call` before it spends again
+        #: (agent/pipeline/progress.py). One Event per turn -- reusing one
+        #: across turns would carry a stop into the next run.
+        self._cancel: threading.Event | None = None
+        #: The live answer block for the turn in flight, and when it was last
+        #: redrawn. Mounted the first time a reply contains FINAL:.
+        self._answer: Static | None = None
+        self._drawn_at = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -515,6 +584,7 @@ class OttoApp(App):
         with Horizontal(id="body"):
             yield VerticalScroll(id="transcript")
             yield UsagePanel(self.usage)
+        yield Static("", id="status")
         yield Input(placeholder=self.IDLE_PLACEHOLDER, id="message-input")
         yield Footer()
 
@@ -535,6 +605,10 @@ class OttoApp(App):
         # tool refuses: which directory otto is pointed at decides what every
         # answer this session can possibly be.
         self._post(f"[dim]{describe_workspace(self.session.workspace)}[/]")
+        # The clock has to tick on its own: between two model calls nothing
+        # reports anything for ten seconds at a stretch, and a status line
+        # that only moves when the run moves reads as a frozen app.
+        self.set_interval(1.0, self._tick)
 
     @property
     def usage_panel(self) -> "UsagePanel":
@@ -545,6 +619,92 @@ class OttoApp(App):
         `call_from_thread` after each graph update, which is often enough to
         watch a turn spend and rare enough to cost nothing."""
         self.usage_panel.refresh_usage()
+
+    # ---- the status line ----------------------------------------------
+
+    def _tick(self) -> None:
+        """Once a second, on the UI thread. Redraws the status line from
+        whatever the worker thread last wrote, so the elapsed clock and the
+        spinner keep moving through a long model call."""
+        if not self._turn_running:
+            return
+        self._frame += 1
+        self._draw_status()
+
+    def _draw_status(self) -> None:
+        if not self._turn_running:
+            self.query_one("#status", Static).update("")
+            return
+        parts = [f"[bold]{_SPINNER[self._frame % len(_SPINNER)]}[/]"]
+        if self._phase:
+            parts.append(self._phase)
+        if self._tool:
+            parts.append(f"[bold]{self._tool}[/]")
+        if self._model:
+            parts.append(f"[dim]{self._model}[/]")
+        if self._calls:
+            parts.append(f"[dim]{self._calls} calls[/]")
+        parts.append(f"[dim]{_clock(time.monotonic() - self._started)}[/]")
+        parts.append("[dim]esc to stop[/]")
+        self.query_one("#status", Static).update(" · ".join(parts))
+
+    def _on_progress(self, update: Progress) -> None:
+        """The progress sink, called on the WORKER thread. Does as little as
+        possible here and marshals the rest: everything below writes plain
+        attributes, and the once-a-second tick on the UI thread is what turns
+        them into pixels. The one exception is a streamed answer, which has
+        to mount and update a widget and so goes through call_from_thread --
+        throttled, or a fast stream floods the UI thread."""
+        self._calls = update.calls or self._calls
+        if update.kind == "call_start":
+            self._model = update.text
+            self._tool = ""
+            self._phase = self._phase or "thinking"
+        elif update.kind == "phase":
+            self._phase = update.text
+            self._tool = ""
+        elif update.kind == "tool":
+            target = (update.detail or {}).get("target", "")
+            self._tool = f"{update.text} {target}".strip()
+        elif update.kind == "partial":
+            self._stream_answer(update.partial)
+
+    def _stream_answer(self, partial: str) -> None:
+        """Show the answer as it is written, once there is an answer to show.
+
+        Every frame carries the WHOLE reply, not the next slice -- a
+        diffusing route's chunks are successive refinements of one answer --
+        so this replaces rather than appends. Before FINAL: appears the reply
+        is a tool call, which belongs in the thinking log and not on screen
+        as if it were the result.
+        """
+        marker = partial.find("FINAL:")
+        if marker < 0:
+            return
+        now = time.monotonic()
+        if now - self._drawn_at < _STREAM_EVERY:
+            return
+        self._drawn_at = now
+        self.call_from_thread(self._show_partial_answer,
+                              partial[marker + len("FINAL:"):].strip())
+
+    def _show_partial_answer(self, text: str) -> None:
+        if self._answer is None:
+            self._answer = Static("")
+            self.transcript.mount(self._answer)
+        self._answer.update(Panel(text, title="[dim]answering…[/]", border_style="dim"))
+        self.transcript.scroll_end(animate=False)
+
+    def action_stop_turn(self) -> None:
+        """`escape`. Cooperative: agent/pipeline/progress.py checks this
+        before every model request, so the stop lands within one call and the
+        run never pays for another. Saying so matters -- a key that looks
+        like it did nothing for ten seconds is worse than no key."""
+        if not self._turn_running or self._cancel is None:
+            return
+        self._cancel.set()
+        self._phase = "stopping after this call"
+        self._draw_status()
 
     @property
     def transcript(self) -> VerticalScroll:
@@ -624,13 +784,20 @@ class OttoApp(App):
         self.transcript.scroll_end(animate=False)
         return block
 
-    def _close_thinking(self, block: Collapsible, steps: int) -> None:
+    def _close_thinking(self, block: Collapsible, steps: int,
+                        calls: int = 0, elapsed: float = 0.0) -> None:
         """Shut this turn's thinking block now that the answer is on screen,
         labelled with how much is folded away inside it so it is obvious
-        there is something to open."""
-        block.title = f"thinking… ({steps} steps)" if steps else "thinking…"
+        there is something to open -- and with what the turn cost, which is
+        the one number a person wants after the fact and should not have to
+        expand anything to read."""
+        parts = [f"{steps} steps"] if steps else []
+        if calls:
+            parts.append(f"{calls} model calls")
+        if elapsed:
+            parts.append(_clock(elapsed))
+        block.title = f"thinking… ({' · '.join(parts)})" if parts else "thinking…"
         block.collapsed = True
-        self.transcript.scroll_end(animate=False)
 
     # ---- the command palette (ctrl+p): the arrow-key menu ------------
 
@@ -808,9 +975,11 @@ class OttoApp(App):
             return
         if self._turn_running:
             # Module docstring, "One turn at a time". Nothing in Textual can
-            # stop the in-flight worker thread, so the only safe answer is
-            # to not start a second one.
-            self._post("[yellow]still working on the previous message[/]")
+            # stop the in-flight worker thread, so the only safe answer is to
+            # not start a second one -- and now that escape ends a turn, to
+            # say which key does it.
+            self._post(
+                "[yellow]still working on the previous message -- esc to stop it[/]")
             return
         self._post(f"[bold]you[/] {text}")
         # Taken HERE, on the UI thread, before the worker exists -- a flag
@@ -825,6 +994,18 @@ class OttoApp(App):
         # thread, not the thread, so it never stopped anything and only
         # made the double-run look handled (module docstring, "One turn at
         # a time"). `_turn_running` is what actually serialises turns.
+        self._cancel = threading.Event()
+        self._phase = "reading your message"
+        self._model = self._tool = ""
+        self._calls = 0
+        self._started = time.monotonic()
+        self._answer = None
+        self._drawn_at = 0.0
+        self.call_from_thread(self._draw_status)
+        with bind_progress(self._on_progress, cancel=self._cancel):
+            self._drive_turn(text)
+
+    def _drive_turn(self, text: str) -> None:
         tally: Counter = Counter()
         steps = 0
         # One fresh RichLog per turn, mounted OPEN so board lines render as
@@ -876,8 +1057,11 @@ class OttoApp(App):
                         raw_output = (final.get("final_output") or "").strip()
                         code = raw_output or "*(no output produced)*"
                         self._last_output = raw_output or None
+                        # Replaces the streamed block in place when there is
+                        # one. Posting a second panel would leave the same
+                        # answer on screen twice, once raw and once rendered.
                         self.call_from_thread(
-                            self._post,
+                            self._settle_answer,
                             Panel(Markdown(code), title="[green]final[/]", border_style="green"),
                         )
                         self.session.record_turn(human_message, AIMessage(code) if raw_output else None)
@@ -894,6 +1078,10 @@ class OttoApp(App):
                     self.call_from_thread(render_update, node, delta, tally, thinking_log.write)
                     self.call_from_thread(self._refresh_usage)
                 stream = next_stream
+        except Cancelled:
+            # Asked for, not broken. Its own clause so a person who pressed
+            # escape is not shown a traceback for something they chose.
+            self.call_from_thread(self._post, "[yellow]stopped[/]")
         except Exception as exc:  # a provider error mid-turn must not crash the app
             self.call_from_thread(self._post, f"[red]{type(exc).__name__}: {exc}[/]")
         finally:
@@ -904,9 +1092,21 @@ class OttoApp(App):
             # above is what makes the panel move DURING a turn; this is what
             # makes it right at the end of one, including a turn whose only
             # event was its own answer.
-            self.call_from_thread(self._close_thinking, block, steps)
+            self.call_from_thread(self._close_thinking, block, steps,
+                                  self._calls, time.monotonic() - self._started)
             self.call_from_thread(self._refresh_usage)
             self.call_from_thread(self._set_busy, False)
+
+    def _settle_answer(self, panel: Panel) -> None:
+        """Turn the streamed block into the finished one, or mount it if the
+        answer never streamed (a run that died, or one whose reply arrived in
+        a single chunk)."""
+        if self._answer is not None:
+            self._answer.update(panel)
+            self._answer = None
+            self.transcript.scroll_end(animate=False)
+            return
+        self._post(panel)
 
 
 def tui(

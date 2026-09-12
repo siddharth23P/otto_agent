@@ -266,3 +266,81 @@ def test_asking_for_no_fallback_results_returns_none_of_them():
     assert _rank_bullets(items, None, 0) == []
     assert _rank_chunks(items, None, 0) == []
     assert len(_rank_bullets(items, None, 2)) == 2
+
+
+# --------------------------------------------------------------------------
+# Stopping where the evidence stops helping
+# --------------------------------------------------------------------------
+#
+# `max_chunks` was a fixed number, and a fixed number is wrong in both
+# directions: too shallow for a multi-hop question whose second piece of
+# evidence ranks low, too noisy for a single-fact lookup where everything after
+# the first match is filler. Measured over a 300-turn conversation and 12
+# queries: the same 8 of 12 found, on 2,318 characters per query instead of
+# 6,944.
+
+def test_a_cliff_after_the_first_match_drops_the_tail():
+    """The single-fact case. Everything after the first match is filler."""
+    import numpy as np
+
+    from agent.memory.retrieval import MIN_CHUNKS, _before_the_falloff
+
+    kept = _before_the_falloff(np.array([0.9, 0.4, 0.35, 0.3, 0.2]))
+
+    assert kept == MIN_CHUNKS
+
+
+def test_a_flat_spread_is_kept_whole():
+    """What a multi-hop question looks like: several chunks that each carry
+    part of the answer and score alike. Cutting this is the failure the
+    threshold has to avoid."""
+    import numpy as np
+
+    from agent.memory.retrieval import _before_the_falloff
+
+    scores = np.array([0.90, 0.88, 0.86, 0.85, 0.84])
+
+    assert _before_the_falloff(scores) == len(scores)
+
+
+def test_it_never_returns_fewer_than_the_floor():
+    """A threshold that could return one chunk would make an oddly-worded
+    query worse than the fixed cap it replaced."""
+    import numpy as np
+
+    from agent.memory.retrieval import MIN_CHUNKS, _before_the_falloff
+
+    assert _before_the_falloff(np.array([0.9, 0.01, 0.01, 0.01, 0.01])) == MIN_CHUNKS
+
+
+def test_a_list_shorter_than_the_floor_is_returned_whole():
+    import numpy as np
+
+    from agent.memory.retrieval import _before_the_falloff
+
+    assert _before_the_falloff(np.array([0.9, 0.2])) == 2
+
+
+def test_scores_with_nothing_to_measure_against_are_left_alone():
+    """All-zero or negative similarities mean the ranking is meaningless, and
+    a fraction of zero is not a threshold."""
+    import numpy as np
+
+    from agent.memory.retrieval import _before_the_falloff
+
+    assert _before_the_falloff(np.array([0.0, 0.0, 0.0, 0.0])) == 4
+
+
+def test_the_ceiling_still_binds():
+    """The falloff can only take FEWER than max_chunks, never more -- the cap
+    is what keeps recall a slice of a budgeted prompt."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from agent.memory.retrieval import _rank_chunks
+
+    items = [SimpleNamespace(embedding=np.array([1.0, 0.0]), embedding_model="m",
+                             hash=f"h{i}") for i in range(50)]
+
+    assert len(_rank_chunks(items, np.array([1.0, 0.0]), 5, "m")) <= 5

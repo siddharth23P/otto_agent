@@ -130,8 +130,33 @@ def test_a_wrapped_capture_still_decodes():
     runner = _fake_desktop(out=wrapped)
     with bind_command_runner(runner):
         result = pt.look("anything?")
-    # It gets past decoding; without a vision route it fails later, not here.
+    # It gets past decoding; the eight zero-padded bytes are not a real PNG,
+    # so the vision model refuses them -- but as a failed tool call, which is
+    # the point of the assertion below.
     assert "did not transfer cleanly" not in result.stderr
+
+
+def test_a_capture_the_vision_model_refuses_is_one_failed_call(monkeypatch):
+    """`look` caught ProviderError and nothing else, so a vendor 400 -- which
+    is what a blank or half-drawn screen gets, verbatim "unable to process
+    input image" -- unwound the whole tool loop rather than arriving as an
+    ordinary failed call. Every other tool in this module already had the
+    clause; this one did not, and the gap only showed once there was a
+    working vision key to hit it with."""
+    import base64 as b64
+
+    def refuses(*args, **kwargs):
+        raise RuntimeError("400 INVALID_ARGUMENT: Unable to process input image")
+
+    monkeypatch.setattr(pt, "describe_image", refuses)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    runner = _fake_desktop(out=b64.b64encode(png).decode())
+
+    with bind_command_runner(runner):
+        result = pt.look("what is on screen?")
+
+    assert not result.ok
+    assert "could not look at the screen" in result.stderr
 
 
 def test_an_empty_capture_says_the_desktop_may_not_be_running():

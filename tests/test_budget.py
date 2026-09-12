@@ -13,6 +13,7 @@ difference is the whole reason `check` returns text instead of raising.
 """
 import time
 
+from agent.pipeline import budget as bd
 from agent.pipeline.budget import (
     DEFAULT_MAX_MODEL_CALLS,
     WRAP_UP_NOTE,
@@ -182,3 +183,263 @@ def test_a_harness_budget_is_not_replaced_by_the_default():
     from agent.pipeline import run
 
     assert "current_budget() or default_budget()" in inspect.getsource(run.run_pipeline)
+
+
+# --------------------------------------------------------------------------
+# Multi-turn rationing
+# --------------------------------------------------------------------------
+#
+# A multi-turn task is many runs sharing one budget, and nothing stopped the
+# first run taking all of it. Measured on Claw-Eval: C03 and C04 each reached
+# ~930 seconds and ~46 model calls and then stopped answering, with the graders
+# saying so outright -- "failed to provide a response to the final three user
+# prompts", "failed to provide the actual Python script requested". C04 scored
+# 1.00 on gathering requirements and 0.10 on content, which is exactly the
+# shape of a run that spent everything before the conversation reached its
+# point.
+
+def test_each_turn_gets_a_share_rather_than_the_lot():
+    budget = Budget(max_model_calls=60)
+    spent_per_turn = []
+
+    for turns_left in (3, 2, 1):
+        budget.begin_turn(turns_left)
+        before = budget.calls
+        while not budget.spent():
+            budget.spend()
+        spent_per_turn.append(budget.calls - before)
+
+    assert spent_per_turn == [20, 20, 20]
+    assert budget.calls == 60
+
+
+def test_a_turn_that_finishes_early_hands_its_share_forward():
+    """Recomputed from what is actually left, not from a fixed slice, so a
+    cheap first turn buys the last one more room."""
+    budget = Budget(max_model_calls=60)
+
+    budget.begin_turn(3)
+    for _ in range(4):          # used 4 of its 20
+        budget.spend()
+    budget.begin_turn(2)
+
+    assert budget.turn_max_calls == 4 + (60 - 4) // 2
+
+
+def test_the_last_turn_may_use_everything_that_is_left():
+    budget = Budget(max_model_calls=30)
+    budget.begin_turn(1)
+
+    assert budget.turn_max_calls == 30
+
+
+def test_an_ordinary_single_turn_run_is_unchanged():
+    """Every `otto chat` turn and most benchmark tasks never call
+    `begin_turn`, and must behave exactly as before."""
+    budget = Budget(max_model_calls=10)
+
+    assert budget.turn_max_calls is None
+    while not budget.spent():
+        budget.spend()
+    assert budget.calls == 10
+
+
+def test_a_later_turn_is_not_told_to_wrap_up_the_moment_it_starts():
+    """The wrap-up point is a fraction of THIS turn's share. Measured against
+    the whole run instead, turn two would open past 80% and be told to finish
+    before it had done anything."""
+    budget = Budget(max_model_calls=100)
+    budget.begin_turn(2)
+    while not budget.spent():
+        budget.spend()
+
+    budget.begin_turn(1)
+    assert budget.phase() == "ok", "turn two opened in wrap-up"
+
+
+def test_every_turn_gets_its_own_wrap_up_note():
+    """Said once per RUN, a later turn would never be told to finish."""
+    budget = Budget(max_model_calls=20)
+
+    budget.begin_turn(2)
+    while budget.phase() != "wrap_up":
+        budget.spend()
+    assert budget.wrap_up_once() is not None
+    assert budget.wrap_up_once() is None, "said twice in one turn"
+
+    budget.begin_turn(1)
+    while budget.phase() != "wrap_up":
+        budget.spend()
+    assert budget.wrap_up_once() is not None, "turn two was never told to finish"
+
+
+def test_the_run_ceiling_still_wins_over_a_turn_share():
+    """A turn cannot be granted budget the run does not have."""
+    budget = Budget(max_model_calls=5)
+    budget.begin_turn(1)
+    while not budget.spent():
+        budget.spend()
+
+    budget.begin_turn(1)
+    assert budget.spent(), "a new turn resurrected an exhausted run"
+
+
+def test_nothing_rations_per_turn_in_production():
+    """`begin_turn` works and is deliberately UNUSED.
+
+    It was written for issue #12, measured on C04, and made the task worse at
+    every budget tried -- 0.43 unrationed against 0.32 rationed, with the
+    grader reporting no assistant responses at all. A turn whose share runs
+    out returns no answer, so rationing converted one mediocre answer into
+    nine empty turns.
+
+    This test is what stops it being switched back on without the missing
+    half: a turn that ends its share by ANSWERING rather than by returning
+    nothing. Delete this test in the same change that adds that.
+    """
+    import inspect
+
+    from agent.eval import claw_bench
+
+    source = inspect.getsource(claw_bench.run_one)
+    called = [line for line in source.splitlines()
+              if "begin_turn" in line and not line.lstrip().startswith("#")]
+    assert called == [], called
+
+
+# --------------------------------------------------------------------------
+# The floor, which the first version did not have
+# --------------------------------------------------------------------------
+#
+# Rationing 480 seconds across C04's nine turns gave each one 53 seconds. The
+# grader's verdict on that run: "the provided conversation only contains user
+# messages and lacks any responses from the assistant" -- 0.32, against 0.43
+# for the unrationed run it was meant to improve. A share too small to answer
+# with is worse than no rationing at all.
+
+def test_a_turn_is_never_given_less_than_it_takes_to_answer():
+    """A turn pays for the criteria call before the loop and the judgment
+    after it, so a share of three calls is spent before any work happens."""
+    budget = Budget(max_model_calls=20)
+    budget.begin_turn(9)
+
+    assert budget.turn_max_calls - budget.turn_start_calls >= bd.MIN_TURN_CALLS
+
+
+def test_the_clock_share_has_a_floor_too():
+    import time
+
+    budget = Budget.of(480.0)
+    budget.begin_turn(9)
+
+    assert budget.turn_hard_at - time.monotonic() >= bd.MIN_TURN_SECONDS - 1
+
+
+def test_a_budget_that_cannot_pay_for_every_turn_pays_for_fewer():
+    """Fewer turns answered properly beats every turn answered with nothing.
+    480 seconds buys five 90-second turns, not nine 53-second ones."""
+    import time
+
+    budget = Budget.of(480.0)
+    budget.begin_turn(9)
+    share = budget.turn_hard_at - time.monotonic()
+
+    assert 90 <= share <= 110, f"{share:.0f}s is not a usable share"
+
+
+def test_a_generous_budget_still_divides_evenly():
+    """The floor is a floor, not a target -- it must not flatten a budget that
+    could give every turn more than the minimum."""
+    budget = Budget(max_model_calls=120)
+    budget.begin_turn(4)
+
+    assert budget.turn_max_calls == 30
+
+
+def test_the_floor_does_not_resurrect_an_exhausted_run():
+    budget = Budget(max_model_calls=5)
+    while not budget.spent():
+        budget.spend()
+
+    budget.begin_turn(3)
+    assert budget.spent(), "the floor handed out budget the run did not have"
+
+
+# --------------------------------------------------------------------------
+# Reconnaissance as a stretch, not a habit
+# --------------------------------------------------------------------------
+#
+# The prompt's diagnostic habits already say to find out what state the system
+# is in before concluding. That is guidance the model may or may not follow.
+# The failure it targets is premature exploitation -- committing to
+# training-time priors before learning what the environment actually allows --
+# and making exploration a budgeted phase before execution was worth +6.3 to
+# +11.7 points. The same work found naive exploration HURT, which is why this
+# is a fifth of the budget and not a third.
+
+def test_a_run_opens_in_reconnaissance():
+    budget = Budget(max_model_calls=50)
+
+    assert budget.in_recon()
+
+
+def test_reconnaissance_is_a_fifth_of_the_budget():
+    budget = Budget(max_model_calls=50)
+    looking = 0
+    for _ in range(50):
+        if budget.in_recon():
+            looking += 1
+        budget.spend()
+
+    assert looking == int(50 * bd.RECON_FRACTION)
+
+
+def test_the_end_of_looking_is_announced_once():
+    """Paired with the wrap-up note: one marks the end of looking, the other
+    the end of working. A reminder repeated every iteration is one the model
+    stops reading."""
+    budget = Budget(max_model_calls=20)
+    while budget.in_recon():
+        budget.spend()
+
+    assert budget.recon_once() is not None
+    assert budget.recon_once() is None
+
+
+def test_nothing_is_announced_while_still_looking():
+    budget = Budget(max_model_calls=20)
+
+    assert budget.in_recon()
+    assert budget.recon_once() is None
+
+
+def test_a_run_with_no_budget_has_no_stretches():
+    """An unbounded run cannot be a fifth of the way through anything."""
+    budget = Budget()
+
+    assert not budget.in_recon()
+    assert budget.recon_once() is None
+
+
+def test_reconnaissance_can_be_turned_off(monkeypatch):
+    """Zero disables it, which is the control the measurement needs."""
+    monkeypatch.setattr(bd, "RECON_FRACTION", 0.0)
+
+    assert not Budget(max_model_calls=50).in_recon()
+
+
+def test_it_is_not_a_fourth_phase():
+    """Reconnaissance is about the START of a run and wrapping up about its
+    END -- the same axis, different questions. Adding a value to the Literal
+    that `spent()` and `wrap_up_once()` switch on changed what a fresh budget
+    reported to every existing reader, and two tests said so."""
+    assert Budget(max_model_calls=50).phase() == "ok"
+
+
+def test_the_loop_says_both_notes_once_each():
+    import inspect
+
+    from agent.pipeline import nodes as pn
+
+    source = inspect.getsource(pn._agent_loop)
+    assert "budget.recon_once(), budget.wrap_up_once()" in source

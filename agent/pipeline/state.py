@@ -180,6 +180,14 @@ class AgentState(TypedDict):
     #: How many times the evaluator has rejected an answer in this run. Bounded
     #: so judgment cannot eat the whole budget -- see nodes.py's MAX_REJECTIONS.
     rejections: int
+    #: How many times the judge failed with a PROVIDER error, as opposed to
+    #: returning a verdict. Counted apart from `rejections` because it is a
+    #: different fact: a rejection is a verdict and retrying is the point, a
+    #: provider failure is no verdict at all. Its cap (nodes.py's
+    #: MAX_JUDGE_ERRORS) is what stops the agent and the evaluator handing a
+    #: dead provider back and forth until the graph's recursion limit ends
+    #: the run with no answer.
+    judge_errors: int
     #: What this run has to be true at the end, as records rather than prose.
     #: `[{"text": str, "status": "pending"|"met"|"blocked", "evidence": str}]`.
     #:
