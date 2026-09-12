@@ -1322,3 +1322,76 @@ def test_a_run_that_already_answered_pays_nothing_extra(monkeypatch):
     # salvage -- `output`, not `final_output`, which the evaluator sets.
     assert result.update["output"] == "the answer"
     assert result.update["model_calls"] <= 3
+
+
+# --------------------------------------------------------------------------
+# The one edge with no bound on it
+# --------------------------------------------------------------------------
+#
+# The evaluator handed a provider failure back to the agent with no counter
+# anywhere on the path. The agent reworked its answer, handed it back, the
+# same dead provider refused again, and the two bounced until LangGraph's
+# recursion limit ended the run outright -- losing the answer the agent had
+# been holding the whole time. Measured live with an exhausted Anthropic key:
+# 68 model requests and 190 seconds for a task that answers in three, ending
+# in GraphRecursionError with nothing.
+
+def test_a_dead_judge_ends_the_run_instead_of_bouncing(monkeypatch):
+    def refuses(llm, messages, **kw):
+        raise pn.ProviderError("credit balance is too low")
+
+    monkeypatch.setattr(pn, "_tool_loop", refuses)
+    state = {
+        "messages": [HumanMessage("do the thing")],
+        "output": "here is the thing",
+        "node": "agent",
+        "judge_errors": pn.MAX_JUDGE_ERRORS,
+    }
+
+    command = pn.evaluator(state)
+
+    assert command.goto == "__end__", "the judge bounced it back again"
+    assert command.update["final_output"] == "here is the thing", (
+        "the answer the agent was holding was thrown away"
+    )
+    assert "unverified" in command.update["board"][0]
+
+
+def test_the_first_provider_failure_is_still_retried(monkeypatch):
+    """One retry, not none. A network blip between two calls is real, and a
+    run that gave up on the first one would stop being judged over nothing."""
+    def refuses(llm, messages, **kw):
+        raise pn.ProviderError("connection reset")
+
+    monkeypatch.setattr(pn, "_tool_loop", refuses)
+    command = pn.evaluator({
+        "messages": [HumanMessage("do the thing")],
+        "output": "here is the thing",
+        "node": "agent",
+    })
+
+    assert command.goto == "agent"
+    assert command.update["judge_errors"] == 1
+
+
+def test_a_failed_rubric_is_not_retried_on_every_pass(monkeypatch):
+    """carry() writes a None checklist back over whatever the evaluator
+    settled, so without this the next pass finds None again and pays for
+    another rubric call against the provider that just refused it. Twenty of
+    them in one turn, on the run that found this."""
+    tried = []
+
+    def dead(llm, task_text):
+        tried.append(task_text)
+        return None
+
+    monkeypatch.setattr(pn, "_criteria", dead)
+    monkeypatch.setattr(pn, "_agent_loop", lambda *a, **kw: ("an answer", "final", "solve"))
+
+    resuming = {
+        "messages": [HumanMessage("do the thing")],
+        "transcript": [{"kind": "human", "content": "TASK:\ndo the thing"}],
+    }
+    pn.agent(resuming)
+
+    assert tried == [], "a resuming pass paid for the rubric all over again"

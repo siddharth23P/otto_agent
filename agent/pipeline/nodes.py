@@ -1625,6 +1625,24 @@ class Verdict:
 #: whole budget re-reading the same answer.
 MAX_REJECTIONS = 2
 
+#: How many times the judge may fail with a PROVIDER error before the run
+#: stops trying to be judged.
+#:
+#: Separate from MAX_REJECTIONS because it is a different fact. A rejection is
+#: a verdict and the retry is the point; a provider failure is no verdict at
+#: all, and the retry only makes sense if the provider might have recovered.
+#: Handing it back to the agent used to be free of any counter, which made it
+#: the one edge in this graph with no bound on it: the agent reworked its
+#: answer, handed it back, the same dead key refused again, and the pair
+#: bounced until LangGraph's recursion limit killed the run outright. Measured
+#: live with an exhausted Anthropic key -- 68 model requests and 190 seconds
+#: for a task that answers in three, ending in GraphRecursionError with no
+#: answer at all rather than in the unverified answer the run already had.
+#:
+#: One, not two. A key with no credit on it does not acquire some between two
+#: calls a second apart, and the run has an answer in hand the whole time.
+MAX_JUDGE_ERRORS = 1
+
 #: Ceiling on each piece of evidence handed to the evaluator. Two-ended, like
 #: agent/pipeline/tools.py's own clip, for the same reason: the start says what
 #: was attempted and the end says how it came out, and keeping only the head
@@ -2311,12 +2329,18 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
     # the same call now serves both the loop and the judgment instead of one
     # each. See AgentState.checklist.
     checklist = state.get("checklist")
-    if checklist is None:
+    if checklist is None and not resuming:
         criteria = _criteria(ROUTER.chat_model(Task.EVALUATE), task_text)
         # Left as None when the rubric call itself failed, so the run keeps
         # the engineer prompt. Only a rubric that RAN and came back empty is
         # evidence that the turn holds no task.
         checklist = None if criteria is None else _new_checklist(criteria)
+    # `not resuming` because a run that is resuming already tried, once, at
+    # its start. Without that clause a failed rubric call is retried on every
+    # re-entry: carry() writes the None back over whatever the evaluator
+    # settled, so the next pass finds None again and pays for another attempt
+    # against the provider that just refused it. Measured on one live run with
+    # the Anthropic key exhausted: twenty rubric calls in a single turn.
 
     if resuming:
         # The same composition the seed used. Both read `reachable_tools()`
@@ -2743,9 +2767,34 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "__end__", "ask_use
         # other specialist's rejected attempt, via _role_body's existing
         # background display.
         what = "plan" if judging_plan else "output"
+        errors = (state.get("judge_errors") or 0) + 1
+        if errors > MAX_JUDGE_ERRORS:
+            # The bound this edge never had. A provider that just refused is
+            # not going to accept a second later, and the agent has an answer
+            # in hand -- so end with it, unverified and said so, rather than
+            # bouncing until the graph's recursion limit ends the run with
+            # nothing. See MAX_JUDGE_ERRORS.
+            _record_seat(state, approved=False)
+            return Command(
+                update={
+                    "node_error": f"evaluator: {exc}",
+                    "final_output": output,
+                    "judge_errors": errors,
+                    "board": [
+                        f"the judge is unreachable ({exc}) -- answering "
+                        "anyway, unverified"
+                    ],
+                    # Spelled out rather than calls_so_far(): that helper is
+                    # defined further down this function and does not exist
+                    # yet at this point in it.
+                    **({"model_calls": b.calls} if (b := current_budget()) else {}),
+                },
+                goto=END,
+            )
         return Command(
             update={
                 "node_error": f"evaluator: {exc}",
+                "judge_errors": errors,
                 "feedback": (
                     f"the evaluator was interrupted by a provider/network "
                     f"failure before it could judge {node}'s {what} -- not "
