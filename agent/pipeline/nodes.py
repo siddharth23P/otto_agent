@@ -92,6 +92,7 @@ from agent.memory.lessons import (
 from agent.pipeline.evidence import Ledger, render_note as render_unproven
 from agent.pipeline.state import AgentState
 from agent.pipeline.budget import Budget, current_budget, default_budget
+from agent.pipeline.usage import record_usage
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
 from agent.pipeline.tools import (
     MUTATING, READ_ONLY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
@@ -680,6 +681,14 @@ def _call(llm, messages: list) -> str:
             ) from exc
         if reply is None:
             return ""
+
+        # What this request cost, against whichever model actually answered --
+        # agent/pipeline/usage.py. Here rather than at the call sites for the
+        # same reason `budget.spend()` is here: this is the one place every
+        # model REQUEST passes through, retries included, and a retry is real
+        # spend. The `usage_metadata` was already being streamed back and
+        # dropped on the floor.
+        record_usage(_model_label(current), getattr(reply, "usage_metadata", None))
 
         # A call that came back settles "is this vendor reachable", whichever
         # model answered it -- so this clears the provider breaker as well as
