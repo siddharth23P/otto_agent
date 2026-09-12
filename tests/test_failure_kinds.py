@@ -175,3 +175,51 @@ def test_an_unrecorded_action_list_claims_nothing():
 
 def test_a_recorded_empty_list_still_says_no_actions():
     assert "no_actions" in classify(actions=[], answer="x", resolved=False)
+
+
+# --------------------------------------------------------------------------
+# What the tool menu costs
+# --------------------------------------------------------------------------
+#
+# Otto had six tools and has seventeen, and the menu is restated on every call
+# -- 27% of the system prompt before a word of the task. Tool OVERUSE is a
+# measured cost, and whether an agent manages its tool context at all depends
+# on model strength. Nothing here argues for removing a tool; it argues for
+# having the number before the menu grows again.
+
+def test_tool_calls_are_counted_most_used_first():
+    from agent.eval.failure_kinds import tool_usage
+
+    counts = tool_usage(["solve: read_file a.py -> ok",
+                         "solve: read_file b.py -> ok",
+                         "solve: write_file a.py -> ok"])
+
+    assert list(counts) == ["read_file", "write_file"]
+    assert counts["read_file"] == 2
+
+
+def test_calls_are_also_broken_down_by_seat():
+    """Per mode is per MODEL, which is the breakdown that says whether a
+    weaker seat is flailing with a menu it cannot hold."""
+    from agent.eval.failure_kinds import usage_by_seat
+
+    counts = usage_by_seat(["solve: read_file a -> ok", "solve: write_file a -> ok",
+                            "plan: execute_bash ls -> ok"])
+
+    assert counts == {"solve": 2, "plan": 1}
+
+
+def test_a_batch_totals_across_runs():
+    from agent.eval.failure_kinds import merge_usage, tool_usage
+
+    one = tool_usage(["solve: read_file a -> ok"])
+    two = tool_usage(["solve: read_file b -> ok", "solve: rag x -> ok"])
+
+    assert merge_usage([one, two]) == {"read_file": 2, "rag": 1}
+
+
+def test_an_unrecorded_run_counts_nothing():
+    from agent.eval.failure_kinds import tool_usage, usage_by_seat
+
+    assert tool_usage(None) == {}
+    assert usage_by_seat(None) == {}

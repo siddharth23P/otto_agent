@@ -23,7 +23,7 @@ import typer
 from typing_extensions import Annotated
 
 from agent.cli.ui import err, out
-from agent.eval.failure_kinds import DESCRIPTIONS, summarise
+from agent.eval.failure_kinds import DESCRIPTIONS, merge_usage, summarise
 from agent.memory.lessons import bind_bank, read_only
 from agent.memory.store import MemoryStore
 from agent.router.outcomes import bind_log
@@ -62,6 +62,10 @@ def _summary(outcomes: list, claw=None) -> dict:
         # What BROKE, not just how much. Two revisions with the same mean
         # score and different failure profiles are two different systems.
         "failure_kinds": summarise([o.failure_kinds for o in scored]),
+        # The menu is 27% of every system prompt. This is what it buys.
+        "tool_usage": merge_usage([o.tool_usage for o in scored]),
+        "seat_usage": merge_usage([o.seat_usage for o in scored]),
+        "tools_used": len(merge_usage([o.tool_usage for o in scored])),
     }
 
     repeated = [o for o in scored if len(o.trials) > 1]
@@ -297,6 +301,7 @@ def _build_report(outcomes, claw, *, architecture, tag, split, trials,
                 "tool_calls": o.tool_calls, "agent_actions": o.agent_actions,
                 "checklist": o.checklist, "model_calls": o.model_calls,
                 "failure_kinds": o.failure_kinds,
+                "tool_usage": o.tool_usage, "seat_usage": o.seat_usage,
                 "trials": o.trials,
                 "wall_time_s": o.wall_time_s, "error": o.error,
             }
@@ -329,6 +334,14 @@ def _print_summary(report: dict, out_dir: Path, split: str) -> None:
         out.print("what broke: " + ", ".join(
             f"{DESCRIPTIONS.get(k, k)} ({n})" for k, n in kinds.items()
         ))
+    used = s.get("tool_usage") or {}
+    if used:
+        top = ", ".join(f"{t} {n}" for t, n in list(used.items())[:6])
+        out.print(
+            f"tools: {len(used)} of 17 used across the batch -- {top}"
+            + (f"  (seats: {', '.join(f'{k} {v}' for k, v in (s.get('seat_usage') or {}).items())})"
+               if s.get("seat_usage") else "")
+        )
     grading = report["grading"]
     out.print(
         f"grading: {grading['otto_grading_path']} / claw {grading['claw_eval_revision'] or '?'} "

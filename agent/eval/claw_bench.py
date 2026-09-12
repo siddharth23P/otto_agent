@@ -73,7 +73,7 @@ from agent.pipeline.toolkit import (
     ExtraTool, bind_extra_tools, json_body, validate_against,
 )
 from agent.pipeline.tools import ToolResult
-from agent.eval.failure_kinds import classify
+from agent.eval.failure_kinds import classify, tool_usage, usage_by_seat
 from agent.pipeline.workspace import bind_workspace
 
 logger = logging.getLogger(__name__)
@@ -560,6 +560,12 @@ class TaskOutcome:
     #: agent/eval/failure_kinds.py -- an injected fault was localised 64.8% of
     #: the time from a structured trace against 13.0% from the outcome alone.
     failure_kinds: list = field(default_factory=list)
+    #: Which tools this run actually called, and which seat called them. Free
+    #: -- read off the action record. See agent/eval/failure_kinds.py on why
+    #: the menu's cost is worth a number: it is 27% of every system prompt
+    #: before a word of the task.
+    tool_usage: dict = field(default_factory=dict)
+    seat_usage: dict = field(default_factory=dict)
 
 
 def _final_text(state: dict | None) -> str:
@@ -985,6 +991,8 @@ def _run_task_once(
         outcome.error = meta["error"]
     outcome.checklist = meta.get("checklist") or []
     outcome.model_calls = meta.get("model_calls") or 0
+    outcome.tool_usage = tool_usage(meta.get("action_lines"))
+    outcome.seat_usage = usage_by_seat(meta.get("action_lines"))
     outcome.failure_kinds = classify(
         actions=meta.get("action_lines"),
         checklist=outcome.checklist,

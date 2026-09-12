@@ -139,3 +139,54 @@ def summarise(per_run: list[list[str]]) -> dict[str, int]:
         for kind in kinds:
             counts[kind] = counts.get(kind, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+# --------------------------------------------------------------------------
+# What the tools actually cost
+# --------------------------------------------------------------------------
+#
+# Otto had six tools and has seventeen, and the menu is restated on every call
+# -- 27% of the system prompt before a single word of the task. Two separate
+# results say that is worth a number rather than a shrug: tool OVERUSE is a
+# real cost (training the knowledge boundary cut tool use 24% while raising
+# performance 37%), and whether an agent manages its tool context at all
+# depends on model strength (reasoning models 90-94%, medium models 0-60%).
+# Otto routes across four vendors and several tiers, so both land here.
+#
+# Nothing in this argues for removing a tool. It argues for knowing the cost
+# before the menu grows again.
+
+def tool_usage(actions: list[str] | None) -> dict[str, int]:
+    """How many times each tool was called, most used first.
+
+    Read off the action record rather than newly recorded, for the same reason
+    the failure kinds are: it is already written, and a measurement that costs
+    nothing gets run on every task instead of on the ones somebody remembered.
+    """
+    counts: dict[str, int] = {}
+    for line in actions or []:
+        tool = _tool_of(line)
+        if tool:
+            counts[tool] = counts.get(tool, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def usage_by_seat(actions: list[str] | None) -> dict[str, int]:
+    """Calls per MODE, which is per model -- the breakdown that says whether a
+    weaker seat is flailing with a menu it cannot hold."""
+    counts: dict[str, int] = {}
+    for line in actions or []:
+        mode, sep, _ = (line or "").partition(":")
+        if sep and mode.strip():
+            key = mode.strip().split()[0]
+            counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def merge_usage(per_run: list[dict[str, int]]) -> dict[str, int]:
+    """Totals across a batch, most used first."""
+    total: dict[str, int] = {}
+    for counts in per_run:
+        for key, n in counts.items():
+            total[key] = total.get(key, 0) + n
+    return dict(sorted(total.items(), key=lambda kv: (-kv[1], kv[0])))
