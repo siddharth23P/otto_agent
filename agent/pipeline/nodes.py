@@ -307,10 +307,12 @@ _TOOL_BODY_HINT = (
     "recall_memory: a search query. "
     "code_map: `define <name>`, `uses <name>`, `imports <module>` or "
     "`outline <path>` -- exact names, Python only. "
-    "switch_mode: one word from " + "|".join(mode_names()) + ", optionally why "
-    "after it -- the conversation carries on. "
-    "delegate: that same word, then one bounded job. It runs on that mode's "
-    "model with none of this conversation and reports back. "
+    # Both take a mode name, so both are said once. This line is now the ONLY
+    # place the mode names appear in AGENT_PROMPT -- tests/test_prompt_tool_sync.py
+    # asserts the prompt offers every mode, and it reads them from here.
+    "switch_mode / delegate: one word from " + "|".join(mode_names())
+    + ". The second also takes one bounded job after it, and runs with none "
+    "of this conversation. "
     # The WHEN of asking used to live here too, and it is said again by
     # MUTATION_GATE_NOTE at the moment it applies -- which is where a model
     # can act on it. This block's job is what goes in the body.
@@ -341,7 +343,7 @@ _ACTION_BLOCK = (
     "reply with exactly\nACTION: <" + _TOOL_MENU + ">\nCODE:\n<"
     + _TOOL_BODY_HINT
     + ">\nand you will be shown the result, then you can continue. "
-    + ", ".join(_MUTATING_TOOLS) + " change things and cannot be undone. "
+    + ", ".join(_MUTATING_TOOLS) + " cannot be undone. "
 )
 
 _DIAGNOSTIC_HABITS = (
@@ -595,12 +597,13 @@ AGENT_PROMPT = (
     "You are an engineer with a shell, working a task end to end: find out "
     "what is true, do the work, and confirm it actually holds.\n\n"
     + _DIAGNOSTIC_HABITS + _MINIMALITY_LADDER +
-    "You work in a MODE, which sets both how you are thinking and which model "
-    "you are running on. You start in " + DEFAULT_MODE + ". Switch when the "
-    "KIND of work changes -- `ACTION: switch_mode` with one of "
-    + "|".join(mode_names()) + " -- not to restate what you are already doing. "
-    "The conversation carries over: everything above stays, and you keep every "
-    "tool.\n\n"
+    # The mode NAMES and "the conversation carries over" were both said again
+    # here, having already been said in _TOOL_BODY_HINT. Neither block knew
+    # the other existed, because one is derived and one is prose.
+    "You work in a MODE -- how you think and which model you run on. You "
+    "start in " + DEFAULT_MODE + ". Switch when the KIND of work changes, not "
+    "to restate what you are doing; the conversation carries over and you "
+    "keep every tool.\n\n"
     + _ACTION_BLOCK +
     "One tool call per reply.\n\n"
     "Before you finish, run something that would FAIL if the task were not "

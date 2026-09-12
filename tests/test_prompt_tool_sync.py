@@ -96,3 +96,32 @@ def test_being_lazy_never_reaches_the_safety_guards():
         "the ladder is about the solution; without this it reads as permission "
         "to skip understanding the problem"
     )
+
+
+def test_no_rule_is_stated_more_than_twice():
+    """The prompt was not full, it was redundant.
+
+    `switch_mode` appeared three times, the mode list twice, and "the
+    conversation carries over" twice -- because `_TOOL_BODY_HINT` is derived
+    from the tool registry and the mode paragraph is hand-written prose, and
+    neither block knew the other existed. Removing the second copies freed 229
+    characters without deleting a single behavioural rule, taking the headroom
+    under the cap from 73 to 302.
+
+    A character cap cannot express that. This can: at most twice is once where
+    the tool is listed and once where it is explained. A third is drift.
+    """
+    for phrase in ("switch_mode", "delegate", "conversation carries",
+                   "|".join(pn.mode_names())):
+        assert pn.AGENT_PROMPT.count(phrase) <= 2, (
+            f"{phrase!r} is stated {pn.AGENT_PROMPT.count(phrase)} times -- "
+            "the prompt is accreting duplicates again"
+        )
+
+
+def test_the_mode_names_survive_in_exactly_one_place():
+    """`test_the_agent_prompt_offers_every_mode` above reads the mode names
+    out of AGENT_PROMPT, and after the compression they appear only inside
+    `_TOOL_BODY_HINT`. Trimming that line would silently break mode
+    reachability, so the dependency is asserted rather than left implicit."""
+    assert "|".join(pn.mode_names()) in pn._TOOL_BODY_HINT
