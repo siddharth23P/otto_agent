@@ -15,6 +15,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read the code, and nothing else. Without this block the job gets whatever
+# the repository's default token scope happens to be, which on many repos is
+# write access to contents, issues, packages and more -- handed to a workflow
+# whose entire job is to run pytest.
+#
+# It matters most on exactly the event this workflow accepts: `pull_request`
+# runs a checkout of somebody else's branch, so any step that executes code
+# from the PR is executing it with whatever the token can do. Nothing here
+# needs to write anything, so nothing here is allowed to.
+permissions:
+  contents: read
+
 jobs:
   pytest:
     strategy:
