@@ -13,6 +13,7 @@ difference is the whole reason `check` returns text instead of raising.
 """
 import time
 
+from agent.pipeline import budget as bd
 from agent.pipeline.budget import (
     DEFAULT_MAX_MODEL_CALLS,
     WRAP_UP_NOTE,
@@ -283,13 +284,82 @@ def test_the_run_ceiling_still_wins_over_a_turn_share():
     assert budget.spent(), "a new turn resurrected an exhausted run"
 
 
-def test_the_harness_rations_per_turn():
-    """Not a unit of Budget: the claw harness has to actually call it, once
-    per turn, or the ceiling exists and nothing sets it."""
+def test_nothing_rations_per_turn_in_production():
+    """`begin_turn` works and is deliberately UNUSED.
+
+    It was written for issue #12, measured on C04, and made the task worse at
+    every budget tried -- 0.43 unrationed against 0.32 rationed, with the
+    grader reporting no assistant responses at all. A turn whose share runs
+    out returns no answer, so rationing converted one mediocre answer into
+    nine empty turns.
+
+    This test is what stops it being switched back on without the missing
+    half: a turn that ends its share by ANSWERING rather than by returning
+    nothing. Delete this test in the same change that adds that.
+    """
     import inspect
 
     from agent.eval import claw_bench
 
     source = inspect.getsource(claw_bench.run_one)
-    assert "begin_turn" in source
-    assert "max_rounds - rounds_used + 1" in source
+    called = [line for line in source.splitlines()
+              if "begin_turn" in line and not line.lstrip().startswith("#")]
+    assert called == [], called
+
+
+# --------------------------------------------------------------------------
+# The floor, which the first version did not have
+# --------------------------------------------------------------------------
+#
+# Rationing 480 seconds across C04's nine turns gave each one 53 seconds. The
+# grader's verdict on that run: "the provided conversation only contains user
+# messages and lacks any responses from the assistant" -- 0.32, against 0.43
+# for the unrationed run it was meant to improve. A share too small to answer
+# with is worse than no rationing at all.
+
+def test_a_turn_is_never_given_less_than_it_takes_to_answer():
+    """A turn pays for the criteria call before the loop and the judgment
+    after it, so a share of three calls is spent before any work happens."""
+    budget = Budget(max_model_calls=20)
+    budget.begin_turn(9)
+
+    assert budget.turn_max_calls - budget.turn_start_calls >= bd.MIN_TURN_CALLS
+
+
+def test_the_clock_share_has_a_floor_too():
+    import time
+
+    budget = Budget.of(480.0)
+    budget.begin_turn(9)
+
+    assert budget.turn_hard_at - time.monotonic() >= bd.MIN_TURN_SECONDS - 1
+
+
+def test_a_budget_that_cannot_pay_for_every_turn_pays_for_fewer():
+    """Fewer turns answered properly beats every turn answered with nothing.
+    480 seconds buys five 90-second turns, not nine 53-second ones."""
+    import time
+
+    budget = Budget.of(480.0)
+    budget.begin_turn(9)
+    share = budget.turn_hard_at - time.monotonic()
+
+    assert 90 <= share <= 110, f"{share:.0f}s is not a usable share"
+
+
+def test_a_generous_budget_still_divides_evenly():
+    """The floor is a floor, not a target -- it must not flatten a budget that
+    could give every turn more than the minimum."""
+    budget = Budget(max_model_calls=120)
+    budget.begin_turn(4)
+
+    assert budget.turn_max_calls == 30
+
+
+def test_the_floor_does_not_resurrect_an_exhausted_run():
+    budget = Budget(max_model_calls=5)
+    while not budget.spent():
+        budget.spend()
+
+    budget.begin_turn(3)
+    assert budget.spent(), "the floor handed out budget the run did not have"
