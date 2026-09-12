@@ -26,6 +26,16 @@ is what a caller writes a finished turn back with -- see agent/memory/
 wiring.py for the actual reconstruction/formatting logic, kept out of this
 file on purpose (this file's own job stays "session state, slash commands,
 completion, the per-turn renderer", not memory-engine internals).
+
+The workspace is session state too (2026-09-12, design call: "we need
+filesystem management so we can use it to write code and work on already
+implemented codebases"). It is one directory for the whole session rather than
+a per-turn argument, because that is what it means to a person: you open otto
+on a repository and every turn after that is about that repository. `/workspace`
+below is how to look at it or point it somewhere else mid-session, and
+`Session.reset()` deliberately KEEPS it -- a new session is a new conversation,
+not a different project. See agent/pipeline/workspace.py for what binding one
+actually grants and what it does not.
 """
 
 from __future__ import annotations
@@ -61,6 +71,12 @@ class Session:
     ctx: AppContext
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     trace_id: str | None = None
+    #: The directory every file tool in this session may touch, or None for
+    #: no file access at all (module docstring; agent/pipeline/workspace.py
+    #: for the boundary). Handed to run_pipeline_stream() on every turn --
+    #: NOT bound here, because the contextvar has to be set on whichever
+    #: thread actually consumes the stream, which for the TUI is not this one.
+    workspace: Path | None = None
     #: Counts turns that actually produced output, for output.py's filenames
     #: -- not every dispatched line (slash commands don't count).
     turn: int = 0
@@ -82,6 +98,13 @@ class Session:
         history_for_graph() for what each half actually contains."""
         return memory_wiring.history_for_graph(self.history_queue)
 
+    def workspace_arg(self) -> str | None:
+        """This session's workspace as run.py wants it: a plain string, or
+        None. One accessor rather than `str(s.workspace) if s.workspace else
+        None` repeated at four call sites, each of which could get the
+        empty-vs-None distinction wrong on its own."""
+        return str(self.workspace) if self.workspace is not None else None
+
     def record_turn(self, human: BaseMessage, ai: BaseMessage | None) -> None:
         """Write one finished turn into this session's memory -- `ai` is
         None for a turn that produced no final output (nothing worth
@@ -102,6 +125,10 @@ class Session:
         self.trace_id = None
         self.turn = 0
         self.history_queue = memory_wiring.new_history_queue(self.session_id)
+        # `workspace` is deliberately NOT reset: "clear history, start fresh"
+        # is about the conversation, and a person who opened otto on a repo and
+        # then cleared the chat is still working on that repo. Changing it is
+        # `/workspace <path>`, which is explicit.
 
 
 # --------------------------------------------------------------------------
@@ -189,6 +216,72 @@ def _new_cmd(session: Session, arg: str) -> None:
     err.print("[muted]new session[/]")
 
 
+def resolve_workspace(chosen: Path | None, disabled: bool) -> Path | None:
+    """What `--workspace PATH` / `--no-workspace` / neither actually means.
+
+    One resolver shared by `otto chat` and `otto tui` so the two cannot drift,
+    and the single place the "current directory by default" policy is written
+    down (2026-09-12 design call, asked explicitly: a session should work on
+    the repo you launched it in, the way every other developer tool does).
+
+    `--no-workspace` wins over `--workspace`, deliberately: the two together
+    are a contradiction, and resolving it towards LESS access is the only
+    direction that cannot surprise someone.
+    """
+    if disabled:
+        return None
+    if chosen is not None:
+        return chosen.expanduser().resolve()
+    return Path.cwd()
+
+
+def describe_workspace(workspace: Path | None) -> str:
+    """One line saying what file access this session has. Shared with the TUI
+    (agent/cli/tui.py) so both front ends say the same thing about the same
+    state -- the whole point of Session living in this module."""
+    if workspace is None:
+        return "no workspace: file tools are off (open one with --workspace, or /workspace <path>)"
+    return f"workspace: {workspace}"
+
+
+def set_workspace(session: Session, path: str) -> str | None:
+    """Point `session` at `path`, or return why it cannot be. Returns None on
+    success so a caller can treat a string as "show this and stop".
+
+    Rejects a path that is not an existing directory rather than creating it,
+    unlike `bind_workspace`, which creates because a harness genuinely wants a
+    fresh scratch dir. A person typing a path at a prompt has almost certainly
+    typo'd it, and silently creating `~/projcts` is worse than saying so.
+    """
+    candidate = Path(path).expanduser()
+    try:
+        resolved = candidate.resolve()
+    except OSError as exc:
+        return f"{path!r} is not a usable path: {exc}"
+    if not resolved.exists():
+        return f"{resolved} does not exist"
+    if not resolved.is_dir():
+        return f"{resolved} is not a directory"
+    session.workspace = resolved
+    return None
+
+
+def _workspace_cmd(session: Session, arg: str) -> None:
+    target = arg.strip()
+    if not target:
+        out.print(f"[muted]{describe_workspace(session.workspace)}[/]")
+        return
+    if target in {"off", "none"}:
+        session.workspace = None
+        err.print("[muted]workspace closed: file tools are off[/]")
+        return
+    problem = set_workspace(session, target)
+    if problem:
+        err.print(f"[warn]{problem}[/]")
+        return
+    err.print(f"[muted]workspace: {session.workspace}[/]")
+
+
 def _help_cmd(session: Session, arg: str) -> None:
     t = Table(box=None, show_header=False, pad_edge=False)
     t.add_column(style="chosen")
@@ -206,6 +299,10 @@ COMMANDS: dict[str, Slash] = {
     "/bad": Slash("/bad", "score the last answer 0.0", _bad_cmd),
     "/score": Slash("/score", r"score the last answer <0-1> \[comment]", _score_cmd),
     "/new": Slash("/new", "clear history, start a fresh session", _new_cmd),
+    "/workspace": Slash(
+        "/workspace", "show the working directory, or <path> to change it (off to close)",
+        _workspace_cmd, lambda: ["off"],
+    ),
     "/help": Slash("/help", "list these commands", _help_cmd),
 }
 

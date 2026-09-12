@@ -125,6 +125,20 @@ indication anything is happening, which is most of what "slow" meant here
 line render as it arrives; collapsing at the end keeps the resting
 transcript result-first, which is what this split was for.
 
+The workspace is shown, not discovered (2026-09-12, design call: "we need
+filesystem management so we can use it to write code and work on already
+implemented codebases"). `otto tui` now opens on the directory it was launched
+in and hands it to `run_pipeline_stream` on every turn -- as an ARGUMENT, not
+by binding the contextvar here, because `run_turn` consumes the stream on a
+worker thread and a contextvar set on the UI thread is not visible there (see
+agent/pipeline/run.py for the binding's new home). Which directory otto is
+pointed at decides what every answer this session can be, so `on_mount` says
+it in the transcript rather than leaving it to be discovered when a file tool
+refuses. `WorkspacePrompt` (below) and the "Workspace…" palette entry change
+it mid-session; both refuse while a turn is running, because a turn has
+already handed its workspace to the pipeline and changing it then would take
+effect NEXT turn while looking like it took effect on this one.
+
 `.thinking-log` is `height: auto` with a `max-height`, not a fixed
 `height: 12` (2026-09-12, same screenshot: a two-line log drawn as a
 twelve-row box, ten of them blank). RichLog is a ScrollView and this
@@ -138,7 +152,8 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
-from typing import Iterable
+from pathlib import Path
+from typing import Annotated, Iterable, Optional
 
 import typer
 from langchain_core.messages import AIMessage, HumanMessage
@@ -153,8 +168,11 @@ from textual.widgets import Collapsible, Footer, Header, Input, OptionList, Rich
 from textual.widgets.option_list import Option
 
 from agent.cli.context import AppContext
+from agent.cli.chat import NO_WORKSPACE_HELP, WORKSPACE_HELP
 from agent.cli.output import save_final
-from agent.cli.shell import Session, render_update
+from agent.cli.shell import (
+    Session, describe_workspace, render_update, resolve_workspace, set_workspace,
+)
 from agent.cli.ui import THEME
 from agent.pipeline.run import resume_pipeline_stream, run_pipeline_stream
 from agent.router.mapping import Task
@@ -205,6 +223,46 @@ class ScoreDialog(ModalScreen[tuple[float, str] | None]):
             self.dismiss(None)
             return
         self.dismiss((value, comment.strip()))
+
+    def key_escape(self) -> None:
+        self.dismiss(None)
+
+
+class WorkspacePrompt(ModalScreen[str | None]):
+    """Where a running session points its file tools (agent/pipeline/
+    workspace.py). A path is the one thing here that genuinely cannot be a
+    pick -- the same carve-out the module docstring makes for the message box
+    and the score value -- so this is an Input, pre-filled with the current
+    root so "same place, one level up" is an edit rather than retyping.
+    """
+
+    DEFAULT_CSS = """
+    WorkspacePrompt { align: center middle; }
+    WorkspacePrompt > Vertical { width: 80; height: auto; border: round $accent; padding: 1 2; }
+    WorkspacePrompt .hint { margin-bottom: 1; }
+    """
+
+    def __init__(self, current: Path | None) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(
+                "[bold]Workspace[/]\nA directory otto may read and write. "
+                "Type [bold]off[/] to take away file access. Esc to cancel.",
+                classes="hint",
+            ),
+            Input(value=str(self._current) if self._current else "", placeholder="path to a directory"),
+        )
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Module docstring, "Modal input must not escape into a new turn".
+        event.stop()
+        self.dismiss(event.value.strip())
 
     def key_escape(self) -> None:
         self.dismiss(None)
@@ -280,10 +338,10 @@ class OttoApp(App):
     IDLE_PLACEHOLDER = "type a message… (ctrl+p for commands)"
     BUSY_PLACEHOLDER = "working… one turn at a time"
 
-    def __init__(self, ctx: AppContext) -> None:
+    def __init__(self, ctx: AppContext, workspace: Path | None = None) -> None:
         super().__init__()
         self.ctx = ctx
-        self.session = Session(ctx=ctx)
+        self.session = Session(ctx=ctx, workspace=workspace)
         #: The last turn's raw final_output (module docstring, "Copying
         #: cleanly") -- exactly the string save_final() wrote to disk, no
         #: Panel/Markdown wrapper. None before any turn has finished, or
@@ -316,6 +374,10 @@ class OttoApp(App):
         self.console.push_theme(THEME)
         self.message_box.focus()
         self._post("[dim]otto:pipeline[/]")
+        # Said once, up front, rather than left to be discovered when a file
+        # tool refuses: which directory otto is pointed at decides what every
+        # answer this session can possibly be.
+        self._post(f"[dim]{describe_workspace(self.session.workspace)}[/]")
 
     @property
     def transcript(self) -> VerticalScroll:
@@ -414,6 +476,7 @@ class OttoApp(App):
         yield SystemCommand("Rate last answer: bad", "Score the last answer 0.0", lambda: self.action_score(0.0, ""))
         yield SystemCommand("Rate last answer…", "Score the last answer with a value and a comment", self.action_score_dialog)
         yield SystemCommand("Copy last answer", "Copy the raw final answer to your clipboard", self.action_copy_last)
+        yield SystemCommand("Workspace…", "Show or change the directory otto may read and write", self.action_workspace)
         yield SystemCommand("New session", "Clear history, start fresh", self.action_new_session)
 
     # ---- actions behind those commands --------------------------------
@@ -510,6 +573,26 @@ class OttoApp(App):
             self.action_score(*result)
         self.push_screen(ScoreDialog(), done)
 
+    def action_workspace(self) -> None:
+        if self._turn_running:
+            # A turn already handed its workspace to run_pipeline_stream, so
+            # changing it now would take effect on the NEXT turn while
+            # appearing to have taken effect on this one.
+            self._post("[yellow]a turn is still running; wait for it to finish[/]")
+            return
+
+        def done(answer: str | None) -> None:
+            if answer is None:
+                return
+            if answer.lower() in {"off", "none", ""}:
+                self.session.workspace = None
+            elif problem := set_workspace(self.session, answer):
+                self._post(f"[red]{problem}[/]")
+                return
+            self._post(f"[dim]{describe_workspace(self.session.workspace)}[/]")
+
+        self.push_screen(WorkspacePrompt(self.session.workspace), done)
+
     def action_new_session(self) -> None:
         if self._turn_running:
             # Resetting mid-turn would swap the session (and its memory
@@ -580,7 +663,8 @@ class OttoApp(App):
         history, memory_context = self.session.history_for_graph()
         try:
             stream = run_pipeline_stream(
-                text, session_id=self.session.session_id, history=history, memory_context=memory_context,
+                text, session_id=self.session.session_id, history=history,
+                memory_context=memory_context, workspace=self.session.workspace_arg(),
             )
             while stream is not None:
                 next_stream = None
@@ -594,8 +678,16 @@ class OttoApp(App):
                         ask = update["__ask__"]
                         answer = self._ask_user_blocking(ask["question"], ask["choices"])
                         self.call_from_thread(self._post, f"[bold]you[/] {answer}")
+                        # Breaking out leaves this generator suspended at its
+                        # yield, inside bind_budget/bind_store/bind_workspace,
+                        # so their contextvar tokens would be reset from
+                        # whatever context the GC runs in rather than this
+                        # worker thread. close() unwinds it here instead.
+                        stream.close()
                         next_stream = resume_pipeline_stream(
-                            answer, thread_id=ask["thread_id"], session_id=self.session.session_id,
+                            answer, thread_id=ask["thread_id"],
+                            session_id=self.session.session_id,
+                            workspace=self.session.workspace_arg(),
                         )
                         break
                     if "__final__" in update:
@@ -631,7 +723,11 @@ class OttoApp(App):
             self.call_from_thread(self._set_busy, False)
 
 
-def tui(ctx: typer.Context) -> None:
+def tui(
+    ctx: typer.Context,
+    workspace: Annotated[Optional[Path], typer.Option("--workspace", "-w", help=WORKSPACE_HELP)] = None,
+    no_workspace: Annotated[bool, typer.Option("--no-workspace", help=NO_WORKSPACE_HELP)] = False,
+) -> None:
     """Launch the full-screen TUI: the arrow-key-menu front end over the same
     pipeline `otto chat` drives."""
-    OttoApp(ctx.obj).run()
+    OttoApp(ctx.obj, workspace=resolve_workspace(workspace, no_workspace)).run()
