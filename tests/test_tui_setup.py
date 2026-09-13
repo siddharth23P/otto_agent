@@ -265,8 +265,7 @@ async def test_a_custom_endpoint_writes_both_variables_and_gets_a_row(setup_env,
     async with app.run_test(size=(120, 40)) as pilot:
         screen = await _open(app, pilot)
         screen.query_one("#key-provider", Select).value = "__custom__"
-        await pilot.pause()
-        assert screen.query_one("#custom").has_class("shown")
+        await _until(pilot, lambda: screen.query_one("#custom").has_class("shown"), "the custom box")
         screen.query_one("#custom-name", Input).value = "Local"
         screen.query_one("#custom-url", Input).value = "http://localhost:1234/v1"
         key = screen.query_one("#custom-key", Input)
@@ -319,9 +318,11 @@ async def test_apply_automap_then_save_pins_and_reloads(setup_env, monkeypatch, 
         screen.query_one("#tabs").active = "mapping"
         await pilot.pause()
         screen.query_one("#automap", Button).press()   # below the fold headless; press, not click
-        await pilot.pause()
-        await pilot.pause()
-        assert screen.query_one("#row-reason", MappingRow).select.value == "openai:gpt-5-mini"
+        await _until(
+            pilot,
+            lambda: screen.query_one("#row-reason", MappingRow).select.value == "openai:gpt-5-mini",
+            "the reason row's pin",
+        )
         assert screen.query_one("#row-chat_fast", MappingRow).select.value == "", "a shipped head needs no pin"
         screen.query_one("#save", Button).press()
         await _until(pilot, lambda: not isinstance(app.screen, SetupScreen), "the screen to close")
@@ -341,8 +342,7 @@ async def test_escape_discards_unsaved_pins_on_the_second_press(setup_env, monke
         await _until(pilot, lambda: "probe finished" in _status(screen), "the probe")
         row = screen.query_one("#row-summarize", MappingRow)
         row.select.value = "inception:mercury-2.5"
-        await pilot.pause()
-        assert screen._pending == {Task.SUMMARIZE: "inception:mercury-2.5"}
+        await _until(pilot, lambda: screen._pending == {Task.SUMMARIZE: "inception:mercury-2.5"}, "the pending pin")
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(app.screen, SetupScreen) and "unsaved" in _status(screen)
