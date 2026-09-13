@@ -1,5 +1,5 @@
-"""Provider registry -- Inception is the only vendor Otto knows.
-
+"""Provider registry: Inception, OpenAI, Anthropic, Gemini, and any named
+OpenAI-compatible endpoint (agent/router/llm_provider/custom.py).
 Still a registry, not a hardcoded import: a second vendor showing up later is
 a dict entry here, not a rewrite of every call site that reaches through
 get_provider()/provider_names(). Importing this package stays cheap for the
