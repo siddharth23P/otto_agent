@@ -23,3 +23,4 @@ agent/eval/data/**/*.tar.gz
 .claude/
 # per-run research documents (agent/pipeline/research.py)
 otto_research/
+research_papers
