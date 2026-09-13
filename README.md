@@ -175,7 +175,7 @@ that motivated it and where it landed in the code:
 - The shell is not sandboxed on the host; only the file tools are confined.
 - `code_map` covers Python only, by reading `ast`, and refuses other languages by name rather than answering partially.
 - `browse` and `browse_act` each drive a fresh page and restore cookies and storage from disk; in-page state that never touches storage does not survive between calls. `exercise` exists for sequences that need it.
-- The Android, iOS, Linux and Windows `exercise` drivers are covered by faked commands only; macOS was driven for real (issues #38 to #41).
+- The Android, iOS, Linux and Windows `exercise` drivers are covered by faked commands only; macOS was driven for real (issues #5 to #8).
 - Screen grounding is a description plus coordinates; expect look, act, look again.
 - Benchmark results are mostly single runs on small samples, and the harnesses say so.
 - Inception's Mercury models are absent from the price table on purpose, so a turn on them shows an unpriced marker rather than a guess.

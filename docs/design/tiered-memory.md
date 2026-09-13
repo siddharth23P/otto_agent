@@ -21,17 +21,17 @@ the older shape, it says so. Commit hashes are on the current `main`.
 
 | piece | where | commit |
 | --- | --- | --- |
-| the standalone engine: `TieredQueue`, `MemoryStore`, hashing, tokens, embeddings, retrieval | `agent/memory/` | `d190b72` |
-| the history tier wired into `otto chat` / `otto tui`, and the `recall_memory` tool | `agent/memory/wiring.py`, `session.py`, `agent/pipeline/tools.py` | `8ca337f` |
-| `otto eval-memory` on LoCoMo | `agent/eval/memory_bench.py` | `71364e8` |
-| every compacted item stays reachable (recall ~10% → 99%) | `_uncited_bullets`, `agent/memory/queue.py` | `3437a03` |
-| two-stage recall with neighbours and a token budget (→ 96% at a tenth of the text) | `agent/memory/retrieval.py` | `d044ed8` |
-| swappable, stamped embedding backends | `agent/memory/embeddings.py`, `store.py` | `7934cc1` |
-| `gemini-embedding-001` as the measured default, local BGE as the floor | `agent/memory/embeddings.py` | `983747e` |
-| a narrow read policy for mid-task recall | `agent/memory/retrieval.py` | `4c89f58` |
-| the context tier: evicted tool output stored and searchable | `agent/pipeline/nodes.py`, `retrieval.recall_chunks` | `1f5249f` |
-| type-aware compaction, and `otto eval-compaction` to prove it | `agent/memory/queue.py`, `agent/eval/compaction_bench.py` | `c607b3a` |
-| the live tiers mirrored to disk, so a session can be resumed | `MemoryStore.pending`, `TieredQueue(restore=True)`, `agent/memory/sessions.py` | `da9ada9` |
+| the standalone engine: `TieredQueue`, `MemoryStore`, hashing, tokens, embeddings, retrieval | `agent/memory/` | `7aba0e6` |
+| the history tier wired into `otto chat` / `otto tui`, and the `recall_memory` tool | `agent/memory/wiring.py`, `session.py`, `agent/pipeline/tools.py` | `2d5b0c0` |
+| `otto eval-memory` on LoCoMo | `agent/eval/memory_bench.py` | `c0a9f0a` |
+| every compacted item stays reachable (recall ~10% → 99%) | `_uncited_bullets`, `agent/memory/queue.py` | `89da621` |
+| two-stage recall with neighbours and a token budget (→ 96% at a tenth of the text) | `agent/memory/retrieval.py` | `03ff787` |
+| swappable, stamped embedding backends | `agent/memory/embeddings.py`, `store.py` | `25b44a6` |
+| `gemini-embedding-001` as the measured default, local BGE as the floor | `agent/memory/embeddings.py` | `e64867f` |
+| a narrow read policy for mid-task recall | `agent/memory/retrieval.py` | `3c6fcca` |
+| the context tier: evicted tool output stored and searchable | `agent/pipeline/nodes.py`, `retrieval.recall_chunks` | `9fa4a0a` |
+| type-aware compaction, and `otto eval-compaction` to prove it | `agent/memory/queue.py`, `agent/eval/compaction_bench.py` | `776e0f5` |
+| the live tiers mirrored to disk, so a session can be resumed | `MemoryStore.pending`, `TieredQueue(restore=True)`, `agent/memory/sessions.py` | `80fb070` |
 
 ## Two uses of one engine
 
@@ -192,7 +192,7 @@ be found):
 
 Temporal and multi-hop are the weakest, as expected: both need more than one
 turn, and multi-hop needs turns far apart, so neighbour expansion helps them
-least (issue #22).
+least (issue #4).
 
 ## Embeddings
 
@@ -357,7 +357,7 @@ The offline benchmark could not see this: its canned summariser cites
 perfectly by construction. Only a real model in the loop ever omitted
 anything.
 
-**Fix** (`_uncited_bullets()`, commit `3437a03`). Every item index no bullet
+**Fix** (`_uncited_bullets()`, commit `89da621`). Every item index no bullet
 cited gets its own bullet. An uncited prior bullet is carried forward exactly
 as it was, text and `hash_refs` both; an uncited raw item becomes a bullet
 holding a truncated excerpt of its own text, which keeps the words `recall()`
@@ -375,7 +375,7 @@ retrieval, which is what the two-stage recall above fixed.
    sessions, which `otto sessions --export` now makes possible.
 2. Every retrieval number here comes from LoCoMo conversations at a
    deliberately tiny budget, so the defaults are tuned to that shape of data.
-3. Multi-hop recall is the weakest category (issue #22). Neighbour expansion
+3. Multi-hop recall is the weakest category (issue #4). Neighbour expansion
    does not help questions whose evidence is far apart.
 4. BM25 blending is rejected on the evidence above. A narrower use for dates
    and proper nouns would need its own measurement.
