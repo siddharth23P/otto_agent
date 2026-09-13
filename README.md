@@ -75,6 +75,8 @@ score went 0.54 to 0.62 on the measured tasks when they collapsed into one.
 flowchart TD
     start([request]) --> rubric[write the criteria<br/>from the task alone]
     rubric -->|no task in it| chat[answer it<br/>one cheap call] --> done
+    rubric -->|a document| research[outline, then one section<br/>at a time with a continuity ledger]
+    research -->|report on the file| evaluator
     rubric -->|criteria| agent
 
     agent{{agent}} -->|ACTION| tools
@@ -119,6 +121,20 @@ flowchart TD
   would fail if the task were not done and handed no task, invented one. A real
   task pays nothing for the fast path: the decision falls out of the call that
   was already first.
+- **a document is a workflow, not a loop** -- the same rubric call says when
+  what is asked for is a long written document, and that goes to
+  `agent/pipeline/research.py`: an outline on the plan seat, then one plain
+  prose call per section on the reason seat (no tool protocol, so the whole
+  reply is the section), each carrying a small JSON ledger of named things
+  and settled facts forward so the tenth part can cite a law the first one
+  passed. Word counts and required sub-headings are checked in code, a
+  failing section is revised once, the sections are assembled into
+  `otto_research/<task>/document.md` (and a docx, pdf or xlsx when asked),
+  and the evaluator judges a report computed from the files. Asked for ten
+  generations with a 500-word narrative each, the loop had answered in 300
+  words in 23 seconds and been approved: its prompt asks for "the numbers,
+  the names, the decision", its replies stop at the seat's max_tokens, and
+  the criteria may not mention length. None of that was the model being lazy.
 - **the agent loop** -- one conversation, a text `ACTION:` / `CODE:` protocol
   rather than JSON tool calls, one tool call per reply. Before a mutating tool
   runs against a target for the first time, it is held once for a check --

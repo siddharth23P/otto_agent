@@ -284,6 +284,17 @@ class Budget:
         self.recon_warned = True
         return RECON_NOTE
 
+    def skip_recon(self) -> None:
+        """Consider the reconnaissance note already said.
+
+        For a caller that paces its own gathering -- the research workflow
+        (agent/pipeline/research.py) -- and spawns bounded loops that must
+        not be told to stop looking on their first iteration. The wrap-up
+        note is deliberately NOT skipped: running out is the same fact for
+        every caller.
+        """
+        self.recon_warned = True
+
     def phase(self) -> Phase:
         """Where this run is: working, wrapping up, or done.
 

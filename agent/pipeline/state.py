@@ -205,3 +205,16 @@ class AgentState(TypedDict):
     #: executor's claim about its own work is not evidence.
     checklist: list[dict] | None
     final_output: str | None
+    #: Which entry path this turn took -- "chat" (the one-call fast path),
+    #: "research" (the document workflow, agent/pipeline/research.py) or
+    #: "agent" (the tool loop). Set by agent() from the rubric on a fresh
+    #: turn. Read by the evaluator (a rejected document goes back to
+    #: `research`, not `agent`), by research itself (re-entry with feedback
+    #: means revise, not start over) and by the terminal edges (a document
+    #: run leaves no lesson and credits no seat -- see _distil, _record_seat).
+    route: str | None
+    #: Workspace-relative path of the assembled document, when this turn took
+    #: the research route. Its parent directory holds outline.json,
+    #: ledger.json and sections/, which is how a re-entered research node
+    #: finds its own work without carrying twenty thousand words in state.
+    document_path: str | None

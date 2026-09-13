@@ -389,8 +389,42 @@ def test_the_evaluator_prompt_promises_the_budget_it_is_given():
     import inspect
 
     source = inspect.getsource(pn.evaluator)
-    assert "max_iter=MAX_EVALUATOR_ITERATIONS" in source
+    # One local carries both the promise and the loop's bound, so they
+    # cannot drift -- and it is the research route's larger number there.
+    assert "max_iter = MAX_EVALUATOR_ITERATIONS" in source
+    assert "max_iter = RESEARCH_EVALUATOR_ITERATIONS" in source
+    assert "max_iter=max_iter" in source and "max_iterations=max_iter" in source
     assert "max_iter=MAX_TOOL_ITERATIONS" not in source
+
+
+def test_a_judge_that_ran_out_of_exchanges_is_asked_for_the_verdict_once(monkeypatch):
+    """Two exchanges spent looking, no FINAL rendered: one more call gets the
+    verdict instead of a rejection round. Three calls, not a rejection."""
+    from langchain_core.messages import AIMessageChunk
+
+    class _Model:
+        def __init__(self):
+            self.calls = 0
+            self.seen = []
+
+        def stream(self, messages):
+            self.calls += 1
+            self.seen.append(list(messages))
+            reply = {
+                1: "ACTION: execute_bash\nCODE:\nwc -w out.md",
+                2: "ACTION: execute_bash\nCODE:\nls",
+            }.get(self.calls, "FINAL:\nMET: 1/1\nBLOCKED: no\nAPPROVE: yes\nWHY: the count holds")
+            yield AIMessageChunk(content=reply)
+
+    model = _Model()
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: model)
+    result = pn.evaluator(_state(node="agent", output="an answer",
+                                 checklist=[{"text": "c", "status": "pending", "evidence": ""}]))
+
+    assert model.calls == 3
+    assert pn.VERDICT_NOW_NOTE in model.seen[-1][-1].content
+    assert result.goto == "__end__"
+    assert result.update["final_output"] == "an answer"
 
 
 # --------------------------------------------------------------------------

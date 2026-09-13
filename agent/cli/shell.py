@@ -374,7 +374,7 @@ def build_prompt_session() -> PromptSession:
 #: minutes of silence. The loop now writes each tool call and mode swap to the
 #: "custom" stream as it happens (nodes.py's `_emit`), in this same node-shaped
 #: form -- so these lines arrive live and the branch below needs no changes.
-_ROLE_NODES = ("agent",)
+_ROLE_NODES = ("agent", "research")
 
 
 def render_update(node: str, delta: dict, tally: Counter, sink: Callable[[object], None] = out.print) -> None:

@@ -144,6 +144,8 @@ def _initial(text: str, *, history: Sequence[BaseMessage] = (), memory_context: 
         "rejections": 0,
         "checklist": None,
         "final_output": None,
+        "route": None,
+        "document_path": None,
     }
 
 
@@ -239,6 +241,8 @@ def _score(run_span, final: AgentState) -> None:
         run_span.score_trace(name="final_mode", value=final["mode"], data_type="CATEGORICAL")
     if final.get("node"):
         run_span.score_trace(name="last_node", value=final["node"], data_type="CATEGORICAL")
+    if final.get("route"):
+        run_span.score_trace(name="route", value=final["route"], data_type="CATEGORICAL")
 
 
 def _as_ask_event(update: dict, graph_thread_id: str) -> dict | None:

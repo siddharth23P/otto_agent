@@ -198,8 +198,12 @@ def test_the_judgment_does_not_go_on_a_checking_expedition(monkeypatch):
         "context": "", "rejections": 0,
     })
 
-    # One rubric call plus the capped judging exchanges.
-    assert judge.calls <= 1 + pn.MAX_EVALUATOR_ITERATIONS
+    # One rubric call, the capped judging exchanges, and ONE more: a judge
+    # that spent its exchanges looking is asked for the verdict once
+    # (VERDICT_NOW_NOTE) instead of costing a rejection round -- the agent
+    # re-run and a fresh judgment -- which is what this exhausted shape used
+    # to buy.
+    assert judge.calls <= 1 + pn.MAX_EVALUATOR_ITERATIONS + 1
 
 
 def test_learning_costs_exactly_one_call_at_the_end_of_a_run(monkeypatch):

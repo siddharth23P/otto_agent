@@ -114,7 +114,8 @@ from agent.pipeline.progress import (
     check_cancelled, report as report_progress, watching as anyone_watching,
 )
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
-from agent.pipeline.workspace import workspace_note
+from agent.pipeline.workspace import current_workspace, workspace_note
+from agent.pipeline.execution import current_command_runner
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router import outcomes as seat_outcomes
 from agent.router import health as provider_health
@@ -518,7 +519,22 @@ RUBRIC_PROMPT = (
     "question that must be answered. Make them independent -- overlapping "
     "criteria double-count one mistake. Fewer is better.\n\n"
     "Do not write criteria about style, effort or presentation. Nothing else "
-    "in your reply, no preamble.\n\n"
+    "in your reply beyond the KIND line below and the criteria, no "
+    "preamble.\n\n"
+    "WHAT KIND OF TASK. When there is a task, the FIRST line of your reply "
+    "is `KIND: research` or `KIND: agent`, then the criteria. It is research "
+    "when what is asked for is a long written document -- a report, a "
+    "narrative, a guide, a multi-part write-up -- whose worth lies in every "
+    "part being written out at length. It is agent for everything else: a "
+    "change to make, a command to run, a value to find, a question "
+    "answerable in a few paragraphs. Length decides: if a complete answer "
+    "fits in under about a thousand words, it is agent. When unsure, "
+    "agent.\n\n"
+    "For research, the shape the request states is part of a correct answer, "
+    "and it is countable rather than a matter of style: how many sections or "
+    "parts, what each must contain, the least each may run to. Write those "
+    "as criteria. A document with ten parts asked for and three delivered "
+    "is wrong, not short.\n\n"
     "NOT EVERY MESSAGE IS A TASK. A greeting, thanks, a goodbye, small talk, "
     "or a question about you or about this conversation asks for nothing to "
     "be found out, worked out, changed or produced -- there is nothing in it "
@@ -761,8 +777,10 @@ def _result_header(tool_name: str) -> str:
 UNPARSEABLE_FEEDBACK = (
     "Your last reply didn't match either required format -- it had no "
     "ACTION: with a tool call, and no FINAL: followed by an answer (or "
-    "FINAL: was there but empty). Reply again using exactly one of those "
-    "two formats, with no other text."
+    "FINAL: was there but empty). Tools here are never called with "
+    "<function_calls> or <invoke> XML; that is not read. Reply again using "
+    "exactly one of those two formats, one tool call at most, with no other "
+    "text."
 )
 
 
@@ -925,6 +943,9 @@ def _parse_rubric(text: str) -> list[str]:
                 break
         else:
             continue
+        if line.upper().startswith(_KIND_PREFIX):
+            # A model that bullets its KIND line has not written a criterion.
+            continue
         if line:
             lines.append(line)
     return lines[:RUBRIC_MAX]
@@ -1043,6 +1064,15 @@ _NEXT_DIRECTIVE = re.compile(r"^[ \t]*(?:ACTION|FINAL):", re.MULTILINE)
 #: to remove.
 _SPECIAL_TOKEN = re.compile(r"<\|[a-z_]+\|>")
 
+#: A closing XML tag on a line of its own at the END of a CODE: body. A model
+#: that writes `ACTION: <read_file>` copies the prompt's angle-bracket
+#: placeholder and then closes it -- `</read_file>` -- after the body. The
+#: name resolves (the identifier is in there), but the closing line rode
+#: along into the path: seen live as "'sections/02-....md:1-100\n</read_file>'
+#: is not a file in the workspace", four times in a row from a judge that had
+#: named the right file each time.
+_CLOSING_TAG_TAIL = re.compile(r"(?:\n[ \t]*</[A-Za-z_][\w-]*>[ \t]*)+\s*$")
+
 
 def _code_body(text: str) -> str:
     """The CODE: body of the FIRST action in `text`, ending where the next
@@ -1064,7 +1094,8 @@ def _code_body(text: str) -> str:
     after = text.split("CODE:", 1)[1]
     match = _NEXT_DIRECTIVE.search(after)
     body = after[: match.start()] if match else after
-    return _SPECIAL_TOKEN.sub("", body).strip()
+    body = _SPECIAL_TOKEN.sub("", body).strip()
+    return _CLOSING_TAG_TAIL.sub("", body).strip()
 
 
 #: A bare identifier, for pulling a tool name out of whatever the model wrapped
@@ -1666,6 +1697,15 @@ def _actions_block(state: AgentState) -> str:
 #: cannot be taken on trust.
 MAX_EVALUATOR_ITERATIONS = 2
 
+#: The same, for judging a DOCUMENT (the research route). Measured live on
+#: a ten-section, 42,000-word document: told the table was exact, the judge
+#: still opened with read_file and list_files, and two exchanges ended
+#: three judgments in a row with no verdict -- each one paying for a
+#: revision pass that changed nothing. A look at the file is a reasonable
+#: thing for a judge of prose to want; four leaves room for two and the
+#: verdict.
+RESEARCH_EVALUATOR_ITERATIONS = 4
+
 #: Criteria per judgment. Small and non-overlapping is the point -- each is
 #: scored in turn, and overlapping criteria double-count one mistake.
 RUBRIC_MAX = 5
@@ -1693,6 +1733,19 @@ class Verdict:
 #: for the one thing that makes a second attempt differ from the first: an
 #: answer with its own check attached. A judge that ran out of its own tool
 #: budget trying to build that check is the case this exists for.
+#: The last thing a judge is told when its exchanges ran out with no verdict
+#: rendered. One more call, on exactly the judgments that were about to cost
+#: a whole rejection round (the agent re-run and a fresh judgment), which is
+#: the cheapest place to spend one. Seen live on a document: the judge spent
+#: every exchange looking, and had written "MET" against three of four
+#: criteria in prose it never turned into a FINAL block.
+VERDICT_NOW_NOTE = (
+    "You are out of exchanges and this is your last reply. Do not call a "
+    "tool. Give the verdict now, in exactly the FINAL format -- MET, BLOCKED, "
+    "APPROVE, WHY -- from what you have seen. If a criterion could not be "
+    "checked, say so in WHY and count it as not met."
+)
+
 NO_VERDICT_NOTE = (
     "the judge ran out of its own budget before it reached a verdict, so "
     "this is not a finding about your answer. Do not rewrite the answer. "
@@ -2012,6 +2065,21 @@ OUT_OF_BUDGET_NOTE = (
     "you already have -- partial is fine, and say what is uncertain. An "
     "incomplete answer somebody can read beats no answer at all."
 )
+
+
+def _verdict_from_what_is_here(llm, messages: list) -> str:
+    """One last call to a judge that ran out of exchanges: the verdict, or
+    "" when it still would not give one (a tool call, an empty stream, a
+    provider failure -- none of which is a verdict)."""
+    try:
+        reply = _call(llm, [*messages, HumanMessage(VERDICT_NOW_NOTE)])
+    except ProviderError as exc:
+        logger.info("could not get a verdict from a spent judgment: %s", exc)
+        return ""
+    kind, _, body = _parse_worker_reply(reply)
+    if kind == "final":
+        return body
+    return reply.strip() if "APPROVE:" in reply.upper() else ""
 
 
 def _answer_from_what_is_here(llm, messages: list) -> str:
@@ -2516,7 +2584,7 @@ def _switch_mode(messages: list, body: str, *, mode: str, swaps: int,
     return want, swaps + 1, False
 
 
-def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end__"]]:
+def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "research", "__end__"]]:
     """The one working node. Everything the four specialists did, in one
     conversation that is never thrown away.
 
@@ -2552,11 +2620,13 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
     # the request rather than from a candidate answer.
     checklist = state.get("checklist")
     conversational = False
+    kind = "agent"
     if checklist is None or redirected:
         report_progress("phase", "working out what done looks like")
         rubric = _rubric(ROUTER.chat_model(Task.EVALUATE), _requested(state))
         checklist = _new_checklist(rubric.criteria)
         conversational = rubric.conversational
+        kind = rubric.kind
 
     # Nothing was asked for, so there is nothing to verify, judge or learn
     # from: answer and stop. One further call, against the thirteen a greeting
@@ -2580,12 +2650,32 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
                     "output": reply,
                     "final_output": reply,
                     "checklist": checklist,
+                    "route": "chat",
                     "board": ["otto answered without starting a task"],
                     **({"model_calls": spent.calls}
                        if (spent := current_budget()) else {}),
                 },
                 goto=END,
             )
+
+    # A document was asked for. The same rubric call said so, at no extra
+    # cost, and the criteria it wrote are what the workflow builds from. Fresh
+    # turns only, for the same reason as the fast path above: a resumed turn
+    # already has an agent conversation behind it. And only where the
+    # workflow can actually run (research_available) -- otherwise the loop
+    # takes it, as it always has.
+    if kind == "research" and not resuming and research_available():
+        return Command(
+            update={
+                "node": "agent",
+                "checklist": checklist,
+                "route": "research",
+                "board": ["a document is asked for -- running the research workflow"],
+                **({"model_calls": spent.calls}
+                   if (spent := current_budget()) else {}),
+            },
+            goto="research",
+        )
 
     if resuming:
         # The same composition the seed used. Both read `reachable_tools()`
@@ -2635,6 +2725,10 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "__end_
             "checklist": checklist,
             "mode": mode,
             "model_calls": budget.calls if budget else state.get("model_calls") or 0,
+            # The loop ran, so this turn took the agent path -- unless it was
+            # already labelled (a research run that fell back keeps "agent"
+            # too; only the fast path and the workflow write anything else).
+            "route": state.get("route") or "agent",
             # Consumed above (or there was none). It is spliced into the
             # transcript now, so leaving it set would replay it into the next
             # run of this node as well.
@@ -2881,6 +2975,41 @@ class Rubric:
     #: False whenever the call failed, so a provider hiccup can only ever cost
     #: the run its criteria -- never route a real task to a one-line reply.
     conversational: bool = False
+    #: "agent" or "research" -- which working path a task takes. Never
+    #: "research" from a failed or criteria-less call: the research path is
+    #: the expensive one, and it builds from the criteria, so a reply that
+    #: named the kind and gave it nothing to build from reads as agent.
+    kind: str = "agent"
+
+    @property
+    def route(self) -> str:
+        """The entry path as AgentState.route spells it."""
+        return "chat" if self.conversational else self.kind
+
+
+#: The rubric reply's first line when there is a task. Case-insensitive,
+#: tolerates a bullet in front of it, and anything else on the line after the
+#: kind is ignored. Matched as a LINE, like _NO_TASK, so a criterion that
+#: mentions research cannot switch the route.
+_KIND_PREFIX = "KIND:"
+_KIND_LINE = re.compile(r"^\s*(?:[-*\u2022]\s*)?KIND:\s*(research|agent)\b", re.I | re.M)
+
+
+def _parse_kind(text: str) -> str:
+    found = _KIND_LINE.search(text)
+    return found.group(1).lower() if found else "agent"
+
+
+def research_available() -> bool:
+    """Whether the research workflow can run in this process.
+
+    A local workspace to write into, and no container runner: the workflow
+    re-reads its own sections from disk on re-entry through
+    resolve_in_workspace, which has no remote branch, and the benchmarks
+    that bind a runner are graded on the agent path. Without a workspace a
+    document has nowhere to live, so the task runs as an agent task instead.
+    """
+    return current_workspace() is not None and current_command_runner() is None
 
 
 def _rubric(llm, task_text: str) -> Rubric:
@@ -2912,7 +3041,7 @@ def _rubric(llm, task_text: str) -> Rubric:
     conversational = not criteria and any(
         line.strip().upper().startswith(_NO_TASK) for line in reply.splitlines()
     )
-    return Rubric(criteria, conversational)
+    return Rubric(criteria, conversational, _parse_kind(reply) if criteria else "agent")
 
 
 def _criteria(llm, task_text: str) -> list[str]:
@@ -2966,6 +3095,11 @@ def _record_seat(state: AgentState, *, approved: bool) -> None:
     """
     if state.get("mode_log"):
         return
+    if state.get("route") == "research":
+        # Three seats touched a document (plan for the outline, reason for
+        # the sections, evaluate for the checks) and one verdict came back.
+        # Same rule as a multi-mode run: crediting any of them is guessing.
+        return
     mode = state.get("mode") or DEFAULT_MODE
     task = MODES[mode].task
     try:
@@ -3007,6 +3141,12 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     """
     if not learning_enabled():
         return []
+    if state.get("route") == "research":
+        # Nothing on the research path reads lessons, and the bank is one flat
+        # namespace ranked by similarity with TOP_K=1 -- a lesson about
+        # writing sections could only ever displace one about fixing code.
+        # agent/memory/lessons.py's KIND is where a second kind would go.
+        return []
     if not (evidence := _evidence_tail(state)) and not state.get("actions"):
         return []
     # A retried run holds BOTH a worse attempt and a better one, which is the
@@ -3036,7 +3176,7 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     ))
 
 
-def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end__", "ask_user"]]:
+def evaluator(state: AgentState) -> Command[Literal["agent", "research", "evaluator", "__end__", "ask_user"]]:
     task_text = state["messages"][-1].content
     node = state.get("node") or "agent"
     output = state.get("output") or ""
@@ -3045,6 +3185,18 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end
     llm = ROUTER.chat_model(Task.EVALUATE)
     target, target_note = "ANSWER", "as a finished answer"
     human_label = "ANSWER"
+    max_iter = MAX_EVALUATOR_ITERATIONS
+    if state.get("route") == "research":
+        # The answer is a file on disk and what is shown is a report ABOUT
+        # it, computed in code from the sections -- word counts, parts found,
+        # checks passed. The judge may look at the file, within its exchanges.
+        target, target_note = "DOCUMENT", (
+            "as a finished document, judged from the report below -- whose "
+            "counts were computed by code and need no re-checking -- and, if "
+            "you look at the file itself, from at most one or two reads")
+        human_label = ("REPORT ON THE DOCUMENT (computed from the files by the "
+                       "workflow, not written by the model that wrote them)")
+        max_iter = RESEARCH_EVALUATOR_ITERATIONS
     # The SAME number the loop below is actually run with. It used to be
     # MAX_TOOL_ITERATIONS, so the prompt promised five exchanges and the loop
     # allowed two -- a model told it has budget it does not have will plan to
@@ -3072,7 +3224,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end
     rubric = [item["text"] for item in checklist]
 
     system_prompt = EVALUATOR_PROMPT.format(
-        target=target, target_note=target_note, max_iter=MAX_EVALUATOR_ITERATIONS,
+        target=target, target_note=target_note, max_iter=max_iter,
         rubric="\n".join(f"- {c}" for c in rubric) or "- the request is satisfied",
     )
     # It used to judge blind: conversation, request, output, nothing else. So
@@ -3099,8 +3251,14 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end
     ) if part)
     messages = [SystemMessage(system_prompt), HumanMessage(human_body)]
     try:
-        reply = _tool_loop(llm, messages, max_iterations=MAX_EVALUATOR_ITERATIONS,
+        reply = _tool_loop(llm, messages, max_iterations=max_iter,
                            asked=state.get("asks") or 0)
+        if "APPROVE:" not in reply.upper():
+            # The loop ran out with no verdict rendered. `messages` holds
+            # every exchange it had (the loop appends as it goes), so one
+            # more call can turn what it saw into a verdict -- or fail
+            # softly into the no-verdict path below, no worse than before.
+            reply = _verdict_from_what_is_here(llm, messages) or reply
     except NeedsUserInput as exc:
         # Seventh refinement (module docstring): the evaluator itself got
         # stuck judging something and needs the person's input to settle
@@ -3254,7 +3412,9 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "evaluator", "__end
             "board": [f"evaluator rejected {node}: {reason}"],
             **calls_so_far(),
         },
-        goto="agent",
+        # A rejected document goes back to the workflow that wrote it, which
+        # revises the weakest sections; a rejected answer goes back to the loop.
+        goto="research" if state.get("route") == "research" else "agent",
     )
 
 
@@ -3323,9 +3483,26 @@ def ask_user(state: AgentState) -> Command[Literal["agent", "evaluator"]]:
     return Command(update=update, goto=role)
 
 
+def research(state: AgentState) -> Command[Literal["evaluator", "agent", "__end__"]]:
+    """The research workflow: a document asked for is outlined, written
+    section by section with a continuity ledger, checked in code, assembled,
+    and handed to the evaluator once. A predefined code path, not a mode --
+    the model fills in content and never decides control flow.
+
+    Imported at call time: agent/pipeline/research.py reads `_call`,
+    `_agent_loop` and `ROUTER` from this module, so a top-level import would
+    be a cycle. Tests monkeypatch `ROUTER.chat_model` here exactly as they do
+    for the loop, and the workflow sees the patched one.
+    """
+    from agent.pipeline.research import run_research
+
+    return run_research(state)
+
+
 g = StateGraph(AgentState)
 for _name, _fn in (
     ("agent", agent),
+    ("research", research),
     ("evaluator", evaluator),
     ("ask_user", ask_user),
 ):

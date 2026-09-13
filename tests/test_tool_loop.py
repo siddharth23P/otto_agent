@@ -535,3 +535,14 @@ def test_a_run_with_extra_tools_bound_resolves_those_too(monkeypatch):
         "ACTION: `gmail_send_message`\nCODE:\n{}", allowed=allowed,
     )
     assert tool_name == "gmail_send_message"
+
+
+def test_a_closing_tag_after_the_body_is_not_part_of_the_path():
+    """`ACTION: <read_file>` ... `</read_file>`: the prompt's placeholder
+    brackets copied and then closed. The name resolved; the path did not."""
+    reply = "ACTION: <read_file>\nCODE: notes/01.md:1-100\n</read_file>"
+    kind, tool, body = pn._parse_worker_reply(reply, allowed=("read_file",))
+
+    assert (kind, tool, body) == ("action", "read_file", "notes/01.md:1-100")
+    # A closing tag INSIDE a body is content, only a trailing one is markup.
+    assert pn._code_body("CODE:\nprint('</b>')\n</execute_python>") == "print('</b>')"
