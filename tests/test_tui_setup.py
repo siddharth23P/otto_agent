@@ -451,3 +451,37 @@ def test_pin_options_narrow_by_requirement_and_provider():
     assert [v for _, v in pin_options(Task.SUMMARIZE, MODELS, TASK_ROUTES)] == ["", "inception:mercury-2.5", "openai:gpt-5-mini"]
     assert [v for _, v in pin_options(Task.WEB, MODELS, TASK_ROUTES)] == [""], "WEB is anthropic-only"
     assert [v for _, v in pin_options(Task.CODE_COMPLETE, MODELS, TASK_ROUTES)] == [""], "FIM needs an inception FIM model"
+
+
+# ---- mount order ------------------------------------------------------------
+
+@_async_test
+async def test_the_screen_fills_even_when_its_pane_widgets_mount_late(setup_env, monkeypatch, tmp_path):
+    """CI on Windows once raised NoMatches for `#key-provider` from on_mount:
+    the widgets inside the TabbedContent panes were not in the DOM yet when
+    the screen's own mount fired. The fill now waits a refresh for them.
+    Reproduced by making the first look-up of that widget miss."""
+    from textual.css.query import NoMatches as _NoMatches
+
+    app = _app(monkeypatch, tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        screen = SetupScreen(app._setup_backend())
+        original = screen.query_one
+        misses = {"n": 0}
+
+        def late(selector, *args, **kwargs):
+            if selector == "#key-provider" and misses["n"] == 0:
+                misses["n"] += 1
+                raise _NoMatches("not mounted yet")
+            return original(selector, *args, **kwargs)
+
+        monkeypatch.setattr(screen, "query_one", late)
+        app.push_screen(screen)
+        await _until(pilot, lambda: isinstance(app.screen, SetupScreen), "the setup screen")
+        await _until(
+            pilot,
+            lambda: "inception" in screen.query_one("#provider-table", DataTable).rows,
+            "the provider rows after a retried mount",
+        )
+        assert misses["n"] == 1, "the first look-up missed, the retry filled the screen"
+        assert _cell(screen, "inception", "key") == "********1234"

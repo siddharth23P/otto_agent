@@ -204,15 +204,35 @@ class SetupScreen(ModalScreen[dict | None]):
             yield Static("", id="setup-status")
 
     def on_mount(self) -> None:
-        table = self.query_one("#provider-table", DataTable)
-        table.add_columns(("provider", "provider"), ("key", "key"), ("status", "status"),
-                          ("models", "models"), ("detail", "detail"))
-        models = self.query_one("#model-table", DataTable)
-        models.add_columns(("provider", "provider"), ("model", "model"), ("context", "context"),
-                           ("max out", "maxout"), ("capabilities", "caps"))
+        self._finish_mount()
+
+    def _finish_mount(self) -> None:
+        """Set the tables up and fill them once every widget exists.
+
+        The tables, the key picker and the key box sit inside TabbedContent
+        panes, and Textual mounts a pane's children a beat after the screen
+        itself: on a slow runner (CI on Windows, once) the screen's mount
+        fired before `#key-provider` was in the DOM and the fill crashed with
+        NoMatches. So this waits a refresh when anything is missing, which
+        costs nothing when everything is already there.
+        """
+        try:
+            table = self.query_one("#provider-table", DataTable)
+            models = self.query_one("#model-table", DataTable)
+            self.query_one("#key-provider", Select)
+            key_input = self.query_one("#key-input", Input)
+        except NoMatches:
+            self.call_after_refresh(self._finish_mount)
+            return
+        if not table.columns:
+            table.add_columns(("provider", "provider"), ("key", "key"), ("status", "status"),
+                              ("models", "models"), ("detail", "detail"))
+        if not models.columns:
+            models.add_columns(("provider", "provider"), ("model", "model"), ("context", "context"),
+                               ("max out", "maxout"), ("capabilities", "caps"))
         self._fill_rows()
         self._status("probe to check keys, or paste one")
-        self.query_one("#key-input", Input).focus()
+        key_input.focus()
 
     # ---- helpers ----------------------------------------------------------
 
