@@ -1,6 +1,6 @@
 [project]
 name = "otto-cli-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Otto: a terminal AI agent built around measured results -- one agent loop, a rubric-first evaluator, tiered memory, multi-vendor routing, and six benchmark harnesses."
 readme = "docs/pypi.md"
 license = { file = "LICENSE" }
