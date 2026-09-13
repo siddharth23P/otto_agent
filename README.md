@@ -39,7 +39,7 @@ the tool trace and the judge as they happen, the answer with its model and
 time, the token and dollar ledger, then a greeting answered on the two-call
 fast path.
 
-[otto-demo.mp4](https://github.com/siddharth23P/otto_agent/releases/download/v0.1.0/otto-demo.mp4) (2.7 MB, from the [v0.1.0 release](https://github.com/siddharth23P/otto_agent/releases/tag/v0.1.0))
+[otto-demo.mp4](https://github.com/siddharth23P/otto_agent/releases/download/v0.1.0/otto-demo.mp4) (2.2 MB, from the [v0.1.0 release](https://github.com/siddharth23P/otto_agent/releases/tag/v0.1.0))
 
 ## Install
 
