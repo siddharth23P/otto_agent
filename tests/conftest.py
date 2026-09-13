@@ -107,6 +107,23 @@ def _no_real_outcome_log(request, tmp_path_factory):
         yield
 
 
+#: And never what the developer's models have taught it about temperature.
+#: agent/router/llm_provider/temperature.py remembers a refused temperature
+#: in ~/.otto/temperature.json and routes around it from then on, so a test
+#: that provoked one would change which parameters every later real call
+#: sends. Each test gets an empty store of its own.
+from agent.router.llm_provider import temperature as _temperature  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_real_temperature_store(request, tmp_path_factory):
+    if "temperature_store" in getattr(request, "fixturenames", ()):
+        yield  # that test binds its own
+        return
+    with _temperature.bind_store(tmp_path_factory.mktemp("temperature") / "temperature.json"):
+        yield
+
+
 #: Tests that can only run where the host shell is POSIX.
 #:
 #: Otto's remote branch -- every tool's container path -- generates POSIX

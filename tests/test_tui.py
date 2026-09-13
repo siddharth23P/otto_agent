@@ -926,6 +926,43 @@ async def test_export_proposes_a_dated_default_and_runs_off_thread(monkeypatch, 
 
 
 @_async_test
+async def test_the_trees_own_highlight_does_not_overwrite_a_typed_save_path(monkeypatch, tmp_path):
+    """DirectoryTree highlights its root by itself when it finishes loading.
+    In save mode that rewrote the Input to <root>/<basename> -- which, on a
+    slow enough machine, replaced the path the person had just typed before
+    they pressed Enter, and the export landed in the home directory (CI on
+    Windows caught it). Only a highlight the person made, by steering the
+    tree, may move the Input."""
+    from types import SimpleNamespace
+
+    app = _make_app(monkeypatch, tmp_path, lambda *a, **k: iter(()))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_export_lessons()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.PathPicker), "the save picker")
+        picker = app.screen
+        box = picker.query_one("#path", Input)
+        typed = str(tmp_path / "bank.json")
+        box.value = typed
+        await pilot.pause()
+
+        def highlight(directory):
+            picker.on_tree_node_highlighted(
+                SimpleNamespace(node=SimpleNamespace(data=SimpleNamespace(path=directory))))
+
+        # The Input has focus: the tree's own highlight is not the person's.
+        assert not _tree(app).has_focus
+        highlight(Path.home())
+        assert box.value == typed
+
+        # The person steers the tree: now the Input follows, keeping the name.
+        _tree(app).focus()
+        await pilot.pause()
+        (tmp_path / "elsewhere").mkdir()
+        highlight(tmp_path / "elsewhere")
+        assert box.value == str(tmp_path / "elsewhere" / "bank.json")
+
+
+@_async_test
 async def test_import_reports_kept_and_dropped(monkeypatch, tmp_path):
     from agent.memory.lessons import ImportReport
 

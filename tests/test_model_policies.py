@@ -205,3 +205,57 @@ def test_a_model_that_admits_no_choice_still_wins_over_a_published_ceiling():
         raw = {"max_temperature": 2.0}
 
     assert policy_for("openai", "o4-mini", _Model()).fixed
+
+
+# ---- anthropic: temperature removed from the Opus 4.7 generation on ---------
+
+
+def _claude(model_id: str, *, enabled_thinking: bool | None):
+    """A ModelInfo shaped like the anthropic provider builds it: `raw` is the
+    Models API payload. None means a payload with no capabilities block."""
+    from agent.router.llm_provider.base import ModelInfo
+
+    raw = {"id": model_id}
+    if enabled_thinking is not None:
+        raw["capabilities"] = {"thinking": {"supported": True, "types": {
+            "adaptive": {"supported": True},
+            "enabled": {"supported": enabled_thinking},
+        }}}
+    return ModelInfo(id=model_id, provider="anthropic", raw=raw)
+
+
+def test_a_claude_model_that_dropped_enabled_thinking_has_temperature_dropped():
+    """Opus 4.7 answers temperature=0.0 with `400 temperature is deprecated
+    for this model`; it went in the same generation as `thinking: enabled`,
+    which the Models API does publish. Verified live."""
+    model = _claude("claude-opus-4-7", enabled_thinking=False)
+    assert apply_to_params("anthropic", model.id, {"temperature": 0.0, "max_tokens": 8}, model) == {"max_tokens": 8}
+
+
+def test_a_claude_model_that_still_takes_enabled_thinking_keeps_temperature():
+    model = _claude("claude-haiku-4-5-20251001", enabled_thinking=True)
+    assert apply_to_params("anthropic", model.id, {"temperature": 0.0}, model)["temperature"] == 0.0
+
+
+def test_the_published_flag_beats_the_model_name():
+    """A future Claude name this file has never seen still gets it right,
+    in both directions, because the vendor's flag decides."""
+    unseen_new = _claude("claude-haiku-9", enabled_thinking=False)
+    assert "temperature" not in apply_to_params("anthropic", unseen_new.id, {"temperature": 0.0}, unseen_new)
+    looks_new_but_is_not = _claude("claude-opus-5", enabled_thinking=True)
+    assert apply_to_params("anthropic", looks_new_but_is_not.id, {"temperature": 0.0}, looks_new_but_is_not)["temperature"] == 0.0
+
+
+@pytest.mark.parametrize("model_id", [
+    "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5", "claude-fable-5-1",
+])
+def test_without_a_capabilities_block_the_known_family_is_recognised_by_name(model_id):
+    """The fallback for a catalogue entry fetched before the flag existed, or
+    a bare id with no catalogue entry at all."""
+    assert apply_to_params("anthropic", model_id, {"temperature": 0.0}, _claude(model_id, enabled_thinking=None)) == {}
+    assert apply_to_params("anthropic", model_id, {"temperature": 0.0}) == {}
+
+
+@pytest.mark.parametrize("model_id", ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"])
+def test_without_a_capabilities_block_the_older_family_keeps_temperature(model_id):
+    assert apply_to_params("anthropic", model_id, {"temperature": 0.0})["temperature"] == 0.0

@@ -119,6 +119,7 @@ from agent.pipeline.execution import current_command_runner
 from agent.router.llm_provider.base import ProviderError, translate_unknown
 from agent.router import outcomes as seat_outcomes
 from agent.router import health as provider_health
+from agent.router.llm_provider import temperature as temperature_policy
 from agent.router.mapping import Task
 from agent.router.router import Router
 
@@ -800,6 +801,31 @@ def _content_text(content: Any) -> str:
     return "".join(parts)
 
 
+def _without_temperature(current, exc: Exception):
+    """`current` rebuilt to send no temperature, if `exc` is the model
+    refusing the one it was sent; None if `exc` is anything else.
+
+    The one place a model no table knows gets its temperature policy: the
+    route's temperature is tried, the refusal is remembered
+    (agent/router/llm_provider/temperature.py, in ~/.otto/temperature.json)
+    so the router leaves it out of every later call, and this call is
+    retried at the model's default rather than failed.
+    """
+    if getattr(current, "temperature", None) is None:
+        return None
+    if not temperature_policy.looks_like_temperature_rejection(exc):
+        return None
+    provider = getattr(current, "_otto_provider", "")
+    if provider:
+        temperature_policy.note_rejects_temperature(
+            provider, _model_label(current), f"{type(exc).__name__}: {exc}")
+    logger.warning(
+        "%s refused temperature=%r -- retrying without one",
+        _model_label(current), getattr(current, "temperature", None),
+    )
+    return current.model_copy(update={"temperature": None})
+
+
 def _call(llm, messages: list) -> str:
     """Run one streamed chat call and return its settled text.
 
@@ -856,11 +882,22 @@ def _call(llm, messages: list) -> str:
             if attempt < MAX_DIFFUSION_RETRIES - 1:
                 continue  # transient often enough to be worth one more try
             return ""
-        except ProviderError:
+        except ProviderError as exc:
+            retry = _without_temperature(current, exc)
+            if retry is not None and attempt < MAX_DIFFUSION_RETRIES - 1:
+                current = retry
+                continue
             # Inception's own provider already translated this one; re-wrapping
             # would bury the specific subclass the callers branch on.
             raise
         except Exception as exc:
+            # A refused temperature is not a vendor failure: learn it, drop
+            # it, go again. Checked before the health bookkeeping so the
+            # vendor is not marked unhealthy for a request this side got wrong.
+            retry = _without_temperature(current, exc)
+            if retry is not None and attempt < MAX_DIFFUSION_RETRIES - 1:
+                current = retry
+                continue
             # The chat model here may be a LangChain class Otto does not own,
             # which raises its vendor's SDK errors straight out of .stream().
             # _run_role and evaluator catch only ProviderError, so an untranslated

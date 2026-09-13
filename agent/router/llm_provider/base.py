@@ -27,6 +27,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.language_models import BaseChatModel
 
+from agent.router.llm_provider.temperature import looks_like_temperature_rejection
 from agent.router.llm_provider.retired import (
     is_serviceable,
     looks_retired,
@@ -230,6 +231,15 @@ def translate_unknown(exc: Exception, *, provider: str = "", model_id: str = "")
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     name = type(exc).__name__
     detail = f"{name}: {exc}"
+
+    # Before the retirement check, because Anthropic phrases a refused
+    # temperature as "`temperature` is deprecated for this model" -- which
+    # reads as a retirement to the marker list below. The model is alive; it
+    # just takes no temperature, and nodes.py's _call has already learned
+    # that and retried. Treating it as retired would hide a live model for
+    # the rest of the run.
+    if looks_like_temperature_rejection(exc):
+        return ProviderError(detail)
 
     # A vendor saying a model is permanently gone is worth remembering: the
     # catalogue still lists it, so without this the next node in the same run

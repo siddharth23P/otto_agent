@@ -260,6 +260,15 @@ class PathPicker(ModalScreen[str | None]):
     # ---- keeping the Input and the tree in step ----------------------------
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        # Only a highlight the person made, by steering the tree, moves the
+        # Input. The tree also highlights its root on its own -- when it
+        # finishes loading, and again after every re-root -- and in save mode
+        # that rewrote the Input to <root>/<basename>, replacing a path the
+        # person had typed a moment before. On a slow enough machine that
+        # landed between typing a full path and pressing Enter, and the file
+        # was saved in the home directory instead (CI on Windows caught it).
+        if not self.tree.has_focus:
+            return
         data = getattr(event.node, "data", None)
         path = getattr(data, "path", None)
         if path is None:
