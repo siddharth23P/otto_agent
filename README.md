@@ -3,6 +3,7 @@
 [![tests](https://github.com/siddharth23P/otto_agent/actions/workflows/tests.yml/badge.svg)](https://github.com/siddharth23P/otto_agent/actions/workflows/tests.yml)
 ![python](https://img.shields.io/badge/python-3.12-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
+[![PyPI](https://img.shields.io/pypi/v/otto-cli-agent?label=pypi)](https://pypi.org/project/otto-cli-agent/)
 ![tests](https://img.shields.io/badge/tests-1552%20passed-brightgreen)
 
 Otto is a terminal AI agent that works on a codebase, a container, a browser
@@ -86,11 +87,11 @@ transcript without spending a turn.
 
 ## Install
 
-The wheel and sdist are attached to every release:
-
 ```bash
-pip install https://github.com/siddharth23P/otto_agent/releases/download/v0.1.0/otto_cli_agent-0.1.0-py3-none-any.whl
+pip install otto-cli-agent
 ```
+
+Python 3.12 or newer. The wheel and sdist are also attached to every [release](https://github.com/siddharth23P/otto_agent/releases).
 
 ## Quick start
 

@@ -20,7 +20,7 @@ tests that need no API key.
 ## Install
 
 ```bash
-pip install https://github.com/siddharth23P/otto_agent/releases/download/v0.1.0/otto_cli_agent-0.1.0-py3-none-any.whl
+pip install otto-cli-agent
 otto doctor
 otto tui
 ```
