@@ -186,6 +186,30 @@ def test_a_workspace_run_gets_the_file_tools(tmp_path):
     assert "browse" not in live
 
 
+def test_a_workspace_with_a_local_browser_gets_the_browser_but_not_the_desktop(tmp_path, monkeypatch):
+    """Playwright in some local interpreter makes `browse` and `look` real
+    for an ordinary chat turn -- the case that shipped a chess board that
+    never drew. Clicking a DESKTOP has no local path and never will."""
+    from agent.pipeline import browsing
+
+    monkeypatch.setattr(browsing, "_LOCAL", "/some/python")
+    live = _live(workspace=str(tmp_path))
+
+    assert {"browse", "browse_act", "exercise", "look"} <= set(live)
+    assert "look_act" not in live
+    assert "browse" not in _live(), "no workspace, nothing to open"
+
+
+def test_a_workspace_without_a_browser_still_gets_exercise(tmp_path):
+    """The shell backend -- `run <command>`, `expect`, `exit = N` -- needs
+    nothing installed, and a command-line tool is used exactly that way."""
+    live = _live(workspace=str(tmp_path))
+
+    assert "exercise" in live
+    assert "browse" not in live
+    assert "exercise" not in _live(), "no workspace, nothing to run in"
+
+
 def test_a_benchmark_run_reaches_everything(tmp_path):
     """Both bound, which is what SWE-bench and Claw-Eval do -- so filtering
     saves nothing there. Worth pinning, because I claimed otherwise once."""

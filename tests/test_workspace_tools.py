@@ -185,6 +185,60 @@ def test_with_no_workspace_bound_execution_stays_throwaway():
     assert "should_not_persist.txt" not in second.stdout
 
 
+# ---- text the codec cannot carry ------------------------------------------
+#
+# Found live, on a task whose file was full of three-byte chess glyphs: a
+# validation pipeline cut one in half, `subprocess.run(text=True)` raised
+# UnicodeDecodeError, and nothing in the tool loop catches that -- the whole
+# turn died and the person saw a codec traceback. The encode half is the same
+# shape from the other side: a lone surrogate a vendor's JSON let into the
+# model's reply reaches `write_text`, which raises something that is not an
+# OSError.
+
+
+@posix_only
+def test_output_that_cuts_a_multibyte_character_comes_back_as_text(workspace):
+    result = pt.execute_bash("printf '\u265f\u265f' | head -c 4")
+
+    assert result.returncode == 0
+    assert "\u265f" in result.stdout
+    assert "?" in result.stdout or "\ufffd" in result.stdout
+
+
+@posix_only
+def test_invalid_bytes_on_stderr_do_not_kill_the_turn(workspace):
+    result = pt.execute_bash("printf '\\xe2\\x99' >&2; exit 3")
+
+    assert result.returncode == 3
+
+
+def test_a_lone_surrogate_in_written_content_is_replaced_not_raised(workspace):
+    written = pt.write_file("a.txt\nhello \udce2 world")
+
+    assert written.returncode == 0
+    assert "hello ? world" in pt.read_file("a.txt").stdout
+
+
+def test_a_lone_surrogate_in_an_edit_is_replaced_not_raised(workspace):
+    pt.write_file("a.txt\nbefore\n")
+    edited = pt.edit_file("a.txt\n---OLD---\nbefore\n---NEW---\nafter \udce2")
+
+    assert edited.returncode == 0
+    assert "after ?" in pt.read_file("a.txt").stdout
+
+
+def test_a_lone_surrogate_in_a_snippet_is_replaced_not_raised(workspace):
+    result = pt.execute_python("print('x \udce2 y')")
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "x ? y"
+
+
+def test_clean_text_passes_through_untouched():
+    text = "chess \u265f \u2014 ok"
+    assert pt.utf8_clean(text) is text
+
+
 # ---- remote mode: the same tools, acting inside a container ---------------
 
 

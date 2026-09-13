@@ -106,7 +106,7 @@ def test_every_tool_is_registered_with_a_tier_and_dispatchable():
         "execute_python", "execute_bash", "web_search", "rag", "code_map",
         "complete_code", "predict_edit", "recall_memory",
         "read_file", "list_files", "write_file", "edit_file", "view_image",
-        "browse", "browse_act", "look", "look_act",
+        "browse", "browse_act", "exercise", "look", "look_act",
     }
     assert set(TOOL_DISPATCH) == set(TOOL_TIERS)
 

@@ -124,6 +124,26 @@ def _no_real_temperature_store(request, tmp_path_factory):
         yield
 
 
+#: And never a real browser, unless a test asks for one.
+#:
+#: agent/pipeline/browsing.py probes this machine once for a Python that can
+#: import Playwright, and `reachable_tools()` offers the browser tools when it
+#: finds one. A developer who has installed Playwright somewhere would
+#: otherwise see prompts and reachability tests change shape on their machine
+#: alone. Tests about the local browser set `browsing._LOCAL` themselves.
+from agent.pipeline import browsing as _browsing  # noqa: E402
+
+
+from agent.pipeline import walkthrough as _walkthrough  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_local_browser(monkeypatch):
+    monkeypatch.delenv("OTTO_BROWSER_PYTHON", raising=False)
+    monkeypatch.setattr(_browsing, "_LOCAL", None)
+    monkeypatch.setattr(_walkthrough, "_TTY", None)
+
+
 #: And never the developer's real session memory or session index.
 #:
 #: agent/pipeline/run.py opens ~/.otto/memory/<session_id>.db for every run,

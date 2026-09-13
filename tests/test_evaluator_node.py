@@ -592,3 +592,24 @@ def test_a_real_rejection_keeps_its_own_words(monkeypatch):
 
     assert "never ran the tests" in result.update["feedback"]
     assert pn.NO_VERDICT_NOTE not in result.update["feedback"]
+
+
+def test_the_judge_is_shown_walkthroughs_as_browser_evidence(monkeypatch):
+    """An `exercise` line in the action record is more than something the
+    agent did: every step's result was computed by code in a real browser.
+    It is pulled out and labelled so the judge reads it as evidence."""
+    from agent.pipeline import nodes as pn
+
+    state = {
+        "messages": [], "actions": [
+            "solve: write_file index.html -> ok: wrote index.html (80 lines)",
+            "solve: exercise open index.html -> ok: 4/4 steps passed: open index.html; "
+            "click New game; count css .piece = 32; expect not Checkmate",
+        ],
+    }
+    block = pn._walkthrough_block(state)
+
+    assert block.startswith("WALKTHROUGHS")
+    assert "4/4 steps passed" in block
+    assert "write_file" not in block
+    assert pn._walkthrough_block({"actions": ["solve: read_file a -> ok: 1"]}) == ""

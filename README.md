@@ -16,6 +16,93 @@ somewhere else with `--workspace PATH`, or hand it no file access at all with
 `--no-workspace`. `/workspace` in the REPL and "Workspace…" in the TUI's
 command palette (ctrl+p) change it mid-session.
 
+## Letting it see what it built
+
+A run with a workspace and no container had no browser, so a task like "a
+playable chess game" was checked the only way it could be: the move logic in
+a script, `node --check` on the source. Both passed on a page whose script
+threw at load and never drew the board, and the judge, with nothing that
+could load a page, approved it. Now `browse open index.html` loads a page
+from the workspace in a real headless browser, reports whatever it threw,
+and FAILS the call when a page of otto's own throws -- so it is the command
+that fails if the page is broken, which is what the evidence gate asks for.
+`look <question>` afterwards puts a screenshot of that page in front of the
+vision model. A turn that edited a page and tries to finish without loading
+it is held once and told to.
+
+Loading is not using. `browse` and `browse_act` each drive a fresh page, so
+a selected piece or a half-filled form is gone by the next call. `exercise`
+runs a whole sequence -- one step per line -- and its FIRST step says what
+kind of thing is being used:
+
+- `open index.html` -- a page in the workspace, in a real browser. Then
+  `click New game`, `click css .square:nth-child(53)`, `type Name = otto`,
+  `press Enter`, `expect Computer is thinking`, `expect not Checkmate`,
+  `count css .piece = 32`, `changed` (the screen differs from before the
+  last click, key or typed text -- the honest signal for a canvas game with
+  no DOM to count), `wait 300`.
+- `serve npm run dev -- --port 5173` then `open http://127.0.0.1:5173/` --
+  an app behind a dev server. The server is started for the walkthrough in
+  the workspace, waited for, used, and stopped. Loopback is allowed here
+  and nowhere else; the same steps as a page follow.
+- `run python3 tool.py --count 3` -- a command line. Then `expect 3 items`
+  (in what it printed), `exit = 0`, another `run`. A command that exits
+  non-zero fails the step unless the next line is `exit = N`, so a
+  walkthrough that tests error handling says so and one that does not
+  cannot walk past a crash. `serve uvicorn app:app --port 8000` with
+  `request GET http://127.0.0.1:8000/health`, `status = 200`, `expect ok`
+  does the same for an API; `request POST <url> {"name": "milk"}` sends
+  the rest of the line as a JSON body. A page walkthrough may `request`
+  its own server too, since an app has both.
+- `tty python3 app.py` -- a program in a terminal: a real pseudo-terminal
+  of 100 by 30, with `expect Name?` (on screen), `type otto`, `press
+  Enter`, `press ctrl+c`, `screen` (put the screen in the report), `exit =
+  0`. A Textual or curses app works the same way as a prompt.
+- `android com.example.app` (or `android build/app.apk com.example.app`),
+  `ios build/Demo.app` (or a bundle id, on the booted simulator), `mac
+  ./counter` (a command in the workspace) or `mac Calculator`, `linux
+  ./app`, `windows app.exe` -- an app on a device or a desktop. Then
+  `click Add one` (by what it says) or `click 120 40` (in the app's own
+  window), `type`, `press Enter`, `expect [not] <text>` (what the app
+  shows, read through its accessibility tree), `screen`, `changed`,
+  `wait`. Each one also watches the app underneath: Android's logcat crash
+  lines, an iOS or desktop process that died, its stderr. Android needs adb
+  and a running emulator or device; iOS needs a booted simulator and, to
+  read or tap the screen, idb; macOS needs Accessibility and Screen
+  Recording granted to the terminal running otto; Linux needs xdotool,
+  ImageMagick and AT-SPI's Python binding; Windows needs pywinauto in the
+  optional interpreter. Each driver addresses only the app it launched,
+  never the rest of the desktop.
+
+A turn that changed code and tries to finish having only run its own tests
+is held once and asked to `exercise` the thing; "nothing a person runs" is
+an accepted answer. Measured before that hold, five runs in a row (a CLI,
+an API, a curses app among them) each wrote a harness, passed it, and
+finished without using what they built; with it, all five walked through.
+
+Every kind stops at the first step that does not hold and reports each step
+as the machine saw it. That report is written by code, so the judge is
+shown it under its own heading as the evidence the thing works, and is told
+to run one itself when the answer is something a person uses and none was
+made. Pages come from the workspace and servers from commands run in it, so
+`exercise` never acts on a live site; a desktop app has no local path at
+all, for the reason `agent/pipeline/screen.py` gives, and is driven in a
+container only.
+
+Otto ships no browser and no terminal emulator. The shell kind needs
+nothing. The page and terminal kinds run their drivers through any Python
+that can import Playwright and `pyte`: install them once and point
+`OTTO_BROWSER_PYTHON` at that interpreter --
+
+```bash
+python3 -m venv ~/.otto/browser && ~/.otto/browser/bin/pip install playwright pyte && ~/.otto/browser/bin/playwright install chromium-headless-shell
+```
+
+then `OTTO_BROWSER_PYTHON=~/.otto/browser/bin/python` in the environment
+or in `.env`. Without it the browser tools are simply not offered, as
+before. Loopback and private addresses stay refused for URLs; a workspace
+path is the way to open your own page.
+
 ## Coming back to a session
 
 Every turn is written to the session's own file as it finishes, so a
@@ -122,7 +209,7 @@ flowchart TD
 
     agent -->|ask_user| pause([paused for a question])
 
-    subgraph tools [17 tools]
+    subgraph tools [18 tools]
         direction LR
         shell_and_python
         files

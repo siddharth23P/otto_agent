@@ -109,6 +109,7 @@ from agent.memory.session import current_store
 from agent.pipeline import codemap as _codemap
 from agent.pipeline import browsing
 from agent.pipeline import screen as screening
+from agent.pipeline import walkthrough
 from agent.pipeline.execution import current_command_runner
 from agent.pipeline.vision import describe_image, sniff_media_type
 from langchain_core.messages import HumanMessage
@@ -228,14 +229,19 @@ def execute_python(code: str, *, timeout: float | None = None) -> ToolResult:
         # would show up in `git status` and in its own next listing -- a file
         # nobody wrote, indistinguishable from one the task asked for.
         script = Path(holder) / "snippet.py"
-        script.write_text(code)
+        script.write_text(utf8_clean(code), encoding="utf-8")
         try:
+            # errors="replace" on the way back: a script that prints half of
+            # a multi-byte character (a `head -c`, a slice of a UTF-8 string
+            # handled as bytes) must come back as text with a `?` in it, not
+            # as a UnicodeDecodeError that kills the turn.
             proc = subprocess.run(
                 [sys.executable, str(script)],
                 cwd=tmp,
                 env=_env_with_pythonpath(tmp),
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=timeout,
             )
             return ToolResult(
@@ -370,12 +376,19 @@ def execute_bash(command: str, *, timeout: float | None = None) -> ToolResult:
 
     with _run_dir() as tmp:
         try:
+            # errors="replace": a command whose output cuts a multi-byte
+            # character in half (`head -c 4` on a file of chess glyphs, which
+            # is how this was found) is a command that printed something, and
+            # a `?` in its output is what it printed. Strict decoding raised
+            # instead, and a UnicodeDecodeError is not something a tool loop
+            # catches -- the whole turn died on it.
             proc = subprocess.run(
-                command,
+                utf8_clean(command),
                 shell=True,
                 cwd=tmp,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=timeout,
             )
             return ToolResult(
@@ -442,7 +455,26 @@ def _b64(text: str) -> str:
     """Text as base64, for shipping into a container through a shell command
     without a quoting story -- content with quotes, backslashes, newlines or a
     line that happens to read `OTTO_EOF` all survive unchanged."""
-    return base64.b64encode(text.encode()).decode()
+    return base64.b64encode(utf8_clean(text).encode()).decode()
+
+
+def utf8_clean(text: str) -> str:
+    """`text` as something UTF-8 can actually carry.
+
+    A model's reply arrives through JSON, and JSON can hold a lone surrogate
+    (`\\udce2`) that no encoder will write: `Path.write_text` raises
+    UnicodeEncodeError on it, and that is not an OSError, so it unwound the
+    whole turn -- the person saw a codec traceback instead of a failed tool
+    call. Seen live, alongside the decode half (`execute_bash` below), on a
+    task whose file was full of three-byte chess glyphs. Replacing the
+    character is the honest fix: the model wrote something unrepresentable,
+    and a `?` where it stood is what every other tool would have shown.
+    """
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "replace").decode("utf-8")
+    return text
 
 
 def read_file(body: str) -> ToolResult:
@@ -491,7 +523,7 @@ def read_file(body: str) -> ToolResult:
             f"{spec!r} is a {kind} image, not text -- use view_image to look at it",
         )
     try:
-        lines = path.read_text(errors="replace").splitlines()
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as exc:
         return _workspace_failure("read_file", f"could not read {spec!r}: {exc}")
 
@@ -562,7 +594,7 @@ def write_file(body: str) -> ToolResult:
         return _workspace_failure("write_file", "first line must be the file path")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
+        path.write_text(utf8_clean(content), encoding="utf-8")
     except OSError as exc:
         return _workspace_failure("write_file", f"could not write {head.strip()!r}: {exc}")
     return ToolResult(
@@ -712,12 +744,12 @@ def edit_file(body: str) -> ToolResult:
     if not path.is_file():
         return _workspace_failure("edit_file", f"{head.strip()!r} is not a file in the workspace")
 
-    original = path.read_text(errors="replace")
+    original = path.read_text(encoding="utf-8", errors="replace")
     located = _locate(original, old_text)
     if isinstance(located, str):
         return _workspace_failure("edit_file", f"{located} (in {head.strip()})")
     start, end, how = located
-    path.write_text(original[:start] + new_text + original[end:])
+    path.write_text(utf8_clean(original[:start] + new_text + original[end:]), encoding="utf-8")
     # Naming the pass that matched is not decoration: it tells the model its
     # quote was off, and how, so the next one is closer.
     note = "" if how == "exact" else f" (matched {how})"
@@ -999,11 +1031,13 @@ WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_use
 
 
 def look(question: str) -> ToolResult:
-    """Look at the container's desktop and answer a question about it. CODE:
-    body is the question, alone:
+    """Look at the screen and answer a question about it -- the container's
+    desktop, or, with no container, the page the last `browse` call
+    rendered. CODE: body is the question, alone:
 
         which window is in front, and what does its title bar say?
         roughly where is the OK button?
+        are all sixteen black pieces drawn, and do they differ from white?
 
     What comes back is WORDS. The capture goes through the vision model exactly
     as `view_image` does and the image never enters the conversation --
@@ -1016,25 +1050,36 @@ def look(question: str) -> ToolResult:
     """
     remote = current_command_runner()
     if remote is None:
-        return _workspace_failure(
-            "look", "no container is bound for this run, so there is no screen to look at",
-        )
-    if not question.strip():
-        return _workspace_failure("look", "say what you want to know about the screen")
-
-    stdout, stderr, code = remote(screening.CAPTURE, 30.0)
-    if code != 0 or not stdout.strip():
-        return _workspace_failure(
-            "look", stderr.strip() or "could not capture the screen -- is a desktop running?",
-        )
-    try:
-        # Whitespace stripped rather than trusted away: `base64 -w0` should
-        # produce none, but base64 wraps at 76 columns without it and
-        # strict decoding rejects the newline. That is exactly how this
-        # failed the first time it ran against a real desktop.
-        data = base64.b64decode("".join(stdout.split()), validate=True)
-    except (ValueError, binascii.Error) as exc:
-        return _workspace_failure("look", f"the capture did not transfer cleanly: {exc}")
+        # No desktop here. What there can be is the page the last local
+        # `browse` call rendered -- the driver leaves a screenshot of it --
+        # which is the picture a run building a page actually needs.
+        workspace = current_workspace()
+        shot = browsing.last_screenshot(workspace) if workspace is not None else None
+        if shot is None or not shot.is_file():
+            return _workspace_failure(
+                "look", "no container is bound for this run, so there is no screen "
+                "to look at -- open a page with `browse open <path or URL>` first "
+                "and look shows what it rendered",
+            )
+        if not question.strip():
+            return _workspace_failure("look", "say what you want to know about the page")
+        data = shot.read_bytes()
+    else:
+        if not question.strip():
+            return _workspace_failure("look", "say what you want to know about the screen")
+        stdout, stderr, code = remote(screening.CAPTURE, 30.0)
+        if code != 0 or not stdout.strip():
+            return _workspace_failure(
+                "look", stderr.strip() or "could not capture the screen -- is a desktop running?",
+            )
+        try:
+            # Whitespace stripped rather than trusted away: `base64 -w0` should
+            # produce none, but base64 wraps at 76 columns without it and
+            # strict decoding rejects the newline. That is exactly how this
+            # failed the first time it ran against a real desktop.
+            data = base64.b64decode("".join(stdout.split()), validate=True)
+        except (ValueError, binascii.Error) as exc:
+            return _workspace_failure("look", f"the capture did not transfer cleanly: {exc}")
     if len(data) > screening.MAX_CAPTURE_BYTES:
         return _workspace_failure("look", f"the capture is {len(data)} bytes, too large to read")
 
@@ -1109,11 +1154,15 @@ def _browse(body: str, allowed: tuple[str, ...], tool: str) -> ToolResult:
     Reading a page is not, and gating it would tax every step.
     """
     remote = current_command_runner()
-    if remote is None:
-        # Same refusal shape as the file tools with no workspace: the browser
-        # lives in a container, and an ordinary chat turn has not opened one.
+    # No container: the driver runs HERE, against the workspace, through
+    # whatever local interpreter has Playwright -- see browsing.py's module
+    # docstring for the chess game that made this necessary. No workspace
+    # either is the same refusal shape as the file tools: nothing to act in.
+    workspace = current_workspace() if remote is None else None
+    if remote is None and workspace is None:
         return _workspace_failure(
-            tool, "no container is bound for this run, so there is no browser to drive",
+            tool, "no container and no workspace is bound for this run, so there "
+            "is no browser to drive",
         )
     parsed = browsing.parse_op(body, allowed)
     if isinstance(parsed, str):
@@ -1121,25 +1170,253 @@ def _browse(body: str, allowed: tuple[str, ...], tool: str) -> ToolResult:
     op, argument = parsed
     if op in ("open", "click", "type", "find") and not argument:
         return _workspace_failure(tool, f"{op} needs something to act on")
-    # Checked HERE, before the driver script is built, so a refused URL never
-    # reaches the container. The agent chooses this URL and the agent reads web
-    # pages, so a page it already opened can steer the next request -- which is
-    # indirect prompt injection with a network call on the end of it. See
-    # agent/pipeline/browsing.py's check_url.
-    if op == "open" and (why := browsing.check_url(argument)):
-        return _workspace_failure(tool, why)
+    if op == "open":
+        if remote is None and not _looks_like_url(argument):
+            # A path in the workspace, opened as a file: URL. Confined the way
+            # every file tool is, so `../../etc/passwd` is refused here and
+            # `file:` typed directly is still refused by check_url below.
+            try:
+                page = resolve_in_workspace(argument)
+            except OutsideWorkspace as exc:
+                return _workspace_failure(tool, str(exc))
+            if not page.is_file():
+                return _workspace_failure(
+                    tool, f"{argument!r} is not a file in the workspace -- give a "
+                    "path to a page here, or an http(s) URL",
+                )
+            argument = page.as_uri()
+        # Checked HERE, before the driver script is built, so a refused URL
+        # never reaches the container. The agent chooses this URL and the
+        # agent reads web pages, so a page it already opened can steer the
+        # next request -- which is indirect prompt injection with a network
+        # call on the end of it. See agent/pipeline/browsing.py's check_url.
+        elif why := browsing.check_url(argument):
+            return _workspace_failure(tool, why)
 
-    limits = json.dumps({
+    limits = {
         "chars": browsing.MAX_DIGEST_CHARS, "links": browsing.MAX_LINKS,
         "fields": browsing.MAX_FIELDS, "headings": browsing.MAX_HEADINGS,
-    })
-    stdout, stderr, code = remote(
-        f"python3 -c {shlex.quote(browsing.DRIVER)} {shlex.quote(op)} "
-        f"{shlex.quote(argument)} {shlex.quote(limits)}",
-        90.0,
-    )
+        "errors": browsing.MAX_ERRORS,
+    }
+    if remote is not None:
+        stdout, stderr, code = remote(
+            f"python3 -c {shlex.quote(browsing.DRIVER)} {shlex.quote(op)} "
+            f"{shlex.quote(argument)} {shlex.quote(json.dumps(limits))}",
+            90.0,
+        )
+    else:
+        # The screenshot is what a local `look` shows afterwards.
+        limits["screenshot"] = str(browsing.last_screenshot(workspace))
+        stdout, stderr, code = browsing.run_local(
+            op, argument, json.dumps(limits), workspace=workspace,
+        )
     if code != 0:
         return _workspace_failure(tool, stderr.strip() or f"{op} failed")
+    # A page of the agent's own -- a file in the workspace -- that threw is a
+    # failed call, so `browse open index.html` is a command that fails when
+    # the page is broken (agent/pipeline/evidence.py's `is_check`). Somebody
+    # else's site throwing is reported in the digest and is not this run's
+    # problem: half the web logs an error on load.
+    errors = browsing.page_errors(stdout)
+    if errors and stdout.startswith("url: file:"):
+        return ToolResult(
+            stdout=_clip(stdout),
+            stderr=f"{tool}: the page threw -- " + "; ".join(errors[:3]),
+            returncode=1,
+        )
+    return ToolResult(stdout=_clip(stdout), stderr="", returncode=0)
+
+
+def _looks_like_url(argument: str) -> bool:
+    """Whether `open`'s argument names a URL rather than a workspace path."""
+    return re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", argument.strip()) is not None
+
+
+def exercise(body: str) -> ToolResult:
+    """USE what you built and get every step back as the machine saw it.
+    CODE: body is one step per line, and the FIRST says what kind of thing
+    it is:
+
+        open index.html                  a page, in a real browser
+        count css .piece = 32
+        click css .square:nth-child(53)
+        expect Computer is thinking
+        expect not Checkmate
+
+        serve npm run dev -- --port 5173 an app: its server, then its page
+        open http://127.0.0.1:5173/
+        click Sign in
+        type Email = a@b.c
+
+        run python3 tool.py --count 3    a command line
+        expect 3 items
+        exit = 0
+        run python3 tool.py --bogus
+        exit = 2
+
+        serve uvicorn app:app --port 8000   an API
+        request GET http://127.0.0.1:8000/health
+        status = 200
+        expect ok
+
+        tty python3 app.py               a program in a terminal
+        expect Name?
+        type otto
+        press Enter
+        expect Hello, otto
+        screen
+
+    `browse` loads a page and `look` shows it; neither can tell you the
+    thing WORKS, because each of their calls is a fresh page. This runs the
+    whole sequence in one page, one shell, or one terminal, stops at the
+    first step that fails, and names it. A page that throws fails the
+    call too.
+
+    The report is written by code -- what the browser found, what the
+    command printed, what was on the terminal -- which is why the judge is
+    shown it as evidence. Write steps that would FAIL if the feature were
+    broken: a count that must hold, a text that must appear after a click,
+    an exit code that must be what it is.
+
+    Pages come from the workspace and servers from commands run in it, so
+    this never acts on a live site: that is `browse_act` and its hold.
+    """
+    walk = walkthrough.parse_walk(body)
+    if isinstance(walk, str):
+        return _workspace_failure("exercise", walk)
+    remote = current_command_runner()
+    workspace = current_workspace() if remote is None else None
+    if remote is None and workspace is None:
+        return _workspace_failure(
+            "exercise", "no container and no workspace is bound for this run, so "
+            "there is nothing to use it in",
+        )
+    if walk.backend == "shell":
+        return _exercise_shell(walk, remote, workspace)
+    if walk.backend == "tty":
+        return _exercise_tty(walk, remote, workspace)
+    if walk.backend in walkthrough.DEVICE_KINDS:
+        return _exercise_device(walk, remote, workspace)
+    return _exercise_page(walk, remote, workspace)
+
+
+def _exercise_device(walk, remote, workspace) -> ToolResult:
+    """An app on a device or a desktop -- agent/pipeline/native.py. Local
+    only: the tools (adb, simctl, System Events, xdotool, pywinauto) are on
+    this machine, and a container has no screen of that kind."""
+    from agent.pipeline import native
+
+    if remote is not None:
+        return _workspace_failure(
+            "exercise", f"a {walk.backend} app is driven on this machine, not in the "
+            "container -- run without a container, or drive the container's desktop with look_act",
+        )
+    shot = str(browsing.last_screenshot(workspace))
+    if walk.backend == "windows":
+        limits = json.dumps({"screenshot": shot, "rows": 40})
+        stdout, stderr, code = native.run_windows("\n".join(walk.lines), limits, cwd=str(workspace))
+        return _walk_result(stdout, stderr, code, page=False)
+    try:
+        device = native.device_for(walk.backend, cwd=str(workspace))
+    except native.DeviceError as exc:
+        return _workspace_failure("exercise", str(exc))
+    report, failed = native.run_native(walk, device, screenshot=shot)
+    return _walk_result(report, "", 6 if failed else 0, page=False)
+
+
+def _exercise_page(walk, remote, workspace) -> ToolResult:
+    """A page in the workspace, or a served app, in the browser driver."""
+    lines = walk.lines
+    first = walk.steps[0]
+    typed = ""
+    if first.verb == "open":
+        if remote is not None:
+            if (bad := _remote_paths_are_the_containers_own("exercise", first.argument)) is not None:
+                return bad
+        else:
+            try:
+                page = resolve_in_workspace(first.argument)
+            except OutsideWorkspace as exc:
+                return _workspace_failure("exercise", str(exc))
+            if not page.is_file():
+                return _workspace_failure(
+                    "exercise", f"{first.argument!r} is not a file in the workspace",
+                )
+            typed = first.argument
+            lines[0] = f"open {page.as_uri()}"
+    script = "\n".join(lines)
+    limits = {
+        "chars": browsing.MAX_DIGEST_CHARS, "links": browsing.MAX_LINKS,
+        "fields": browsing.MAX_FIELDS, "headings": browsing.MAX_HEADINGS,
+        "errors": browsing.MAX_ERRORS, "serve_timeout": walkthrough.SERVE_TIMEOUT_S,
+    }
+    if remote is not None:
+        stdout, stderr, code = remote(
+            f"python3 -c {shlex.quote(browsing.DRIVER)} walk "
+            f"{shlex.quote(script)} {shlex.quote(json.dumps(limits))}",
+            180.0,
+        )
+    else:
+        limits["screenshot"] = str(browsing.last_screenshot(workspace))
+        stdout, stderr, code = browsing.run_local(
+            "walk", script, json.dumps(limits), workspace=workspace, timeout=180.0,
+        )
+    if typed and remote is None:
+        # The report names the page the way the step did, not as the file
+        # URL it became: that line is the action record's, and the judge
+        # should recognise the path it saw written.
+        stdout = stdout.replace(lines[0][len("open "):], typed)
+    return _walk_result(stdout, stderr, code, page=True)
+
+
+def _exercise_shell(walk, remote, workspace) -> ToolResult:
+    """Commands, and a server if asked, where execute_bash runs."""
+    shell = (walkthrough.RemoteShell(remote) if remote is not None
+             else walkthrough.LocalShell(str(workspace)))
+    report, failed = walkthrough.run_shell(walk, shell)
+    return _walk_result(report, "", 6 if failed else 0, page=False)
+
+
+def _exercise_tty(walk, remote, workspace) -> ToolResult:
+    """A program in a pseudo-terminal, through the terminal driver."""
+    script = "\n".join(walk.lines)
+    limits = json.dumps({"cols": 100, "rows": 30})
+    if remote is not None:
+        stdout, stderr, code = remote(
+            f"python3 -c {shlex.quote(walkthrough.PTY_DRIVER)} "
+            f"{shlex.quote(script)} {shlex.quote(limits)}",
+            150.0,
+        )
+    else:
+        stdout, stderr, code = walkthrough.run_tty_local(script, limits, cwd=str(workspace))
+    return _walk_result(stdout, stderr, code, page=False)
+
+
+def _walk_result(stdout: str, stderr: str, code: int, *, page: bool) -> ToolResult:
+    """One shape for every backend's outcome.
+
+    6 is a driver's "a step failed": the report was printed and is the thing
+    worth reading. Anything else non-zero is the walkthrough not having run
+    at all. A page that threw fails even a walkthrough whose steps all held.
+    """
+    if code not in (0, 6):
+        return _workspace_failure(
+            "exercise", stderr.strip() or "the walkthrough could not run",
+        )
+    if code == 6:
+        return ToolResult(
+            stdout=_clip(stdout),
+            stderr="exercise: " + (walkthrough.failed_step(stdout) or "a step failed"),
+            returncode=1,
+        )
+    if page:
+        errors = browsing.page_errors(stdout)
+        if errors:
+            return ToolResult(
+                stdout=_clip(stdout),
+                stderr="exercise: every step passed but the page threw -- " + "; ".join(errors[:3]),
+                returncode=1,
+            )
     return ToolResult(stdout=_clip(stdout), stderr="", returncode=0)
 
 
@@ -1147,6 +1424,7 @@ def browse(body: str) -> ToolResult:
     """Look at a web page. CODE: body is one operation:
 
         open https://example.com/search?q=widgets
+        open index.html
         read
         find the pricing table
         back
@@ -1156,6 +1434,11 @@ def browse(body: str) -> ToolResult:
     refining only the observation and action space, with no planner or critic
     or tree search, beat every scaffolding trick tried against it by +9.8
     points.
+
+    Whatever the page THREW comes back too, and a page in the workspace that
+    threw is a failed call: `open index.html` is the command that fails if
+    the page is broken, which is what makes it a check rather than a look.
+    `look` afterwards shows what it rendered.
 
     Reach for this only when code cannot do the job. An agent that prefers
     calling an API or a script over driving a UI takes 32% fewer steps, and on
@@ -1497,6 +1780,10 @@ TOOL_TIERS: dict[str, str] = {
     "write_file": WORKSPACE,
     "edit_file": WORKSPACE,
     "browse": READ_ONLY,
+    # Only ever opens a file in the workspace and drives that one page, so
+    # nothing outside this run can be changed by it. A page's own script may
+    # reach the network, exactly as a snippet under execute_python may.
+    "exercise": READ_ONLY,
     "look": READ_ONLY,
     "look_act": MUTATING,
     "browse_act": MUTATING,
@@ -1545,6 +1832,10 @@ ANYWHERE = "anywhere"
 NEEDS_CONTAINER = "container"
 NEEDS_WORKSPACE = "workspace_only"
 NEEDS_EITHER = "workspace_or_container"
+#: A container, or a workspace on a machine where some Python can import
+#: Playwright (browsing.local_interpreter). The browser tools' own first
+#: refusal names both halves.
+NEEDS_BROWSER = "container_or_local_browser"
 
 TOOL_NEEDS: dict[str, str] = {
     "execute_python": ANYWHERE,
@@ -1560,10 +1851,16 @@ TOOL_NEEDS: dict[str, str] = {
     "edit_file": NEEDS_EITHER,
     "list_files": NEEDS_EITHER,
     "view_image": NEEDS_EITHER,
-    # A browser and a screen live in the container; there is no local path.
-    "browse": NEEDS_CONTAINER,
-    "browse_act": NEEDS_CONTAINER,
-    "look": NEEDS_CONTAINER,
+    # The browser lives in the container, or runs here against the workspace
+    # when a local interpreter has Playwright. `look` follows it: locally it
+    # shows the page the last `browse` rendered. Clicking a DESKTOP has no
+    # local path and never will -- see agent/pipeline/screen.py.
+    "browse": NEEDS_BROWSER,
+    "browse_act": NEEDS_BROWSER,
+    # The shell backend needs nothing installed; the page and terminal
+    # backends say what is missing when it is.
+    "exercise": NEEDS_EITHER,
+    "look": NEEDS_BROWSER,
     "look_act": NEEDS_CONTAINER,
     # Both index files on this machine and have no remote branch.
     "rag": NEEDS_WORKSPACE,
@@ -1593,6 +1890,10 @@ def reachable_tools() -> dict[str, str]:
         elif need == NEEDS_WORKSPACE and has_workspace:
             live[name] = tier
         elif need == NEEDS_EITHER and (has_workspace or has_container):
+            live[name] = tier
+        elif need == NEEDS_BROWSER and (
+            has_container or (has_workspace and browsing.local_interpreter() is not None)
+        ):
             live[name] = tier
     return live
 
@@ -1676,6 +1977,7 @@ TOOL_DISPATCH: dict[str, Callable[[str], ToolResult]] = {
     "write_file": write_file,
     "edit_file": edit_file,
     "browse": browse,
+    "exercise": exercise,
     "look": look,
     "look_act": look_act,
     "browse_act": browse_act,

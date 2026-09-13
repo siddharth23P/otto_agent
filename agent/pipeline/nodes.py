@@ -107,7 +107,7 @@ from agent.pipeline.budget import Budget, current_budget, default_budget
 from agent.pipeline.usage import record_usage
 from agent.pipeline.modes import DEFAULT_MODE, MODES, mode_names, mode_reason, parse_mode_body
 from agent.pipeline.tools import (
-    reachable_tools,
+    reachable_tools, utf8_clean,
     MUTATING, READ_ONLY, THIRD_PARTY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
 )
 from agent.pipeline.progress import (
@@ -331,6 +331,15 @@ _BODY_HINTS: dict[str, str] = {
     "code_map": ("code_map: `define <name>`, `uses <name>`, "
                  "`imports <module>` or `outline <path>` -- exact names, "
                  "Python only."),
+    # Short, because AGENT_PROMPT has a measured ceiling. The one thing a
+    # caller cannot guess: a workspace path opens too, and a page that
+    # throws is a failed call.
+    # No `browse` hint: it takes a URL, which the name says, and that a
+    # workspace path opens too is taught by the line below and by the tool's
+    # own refusal. `press` and `wait` exist as steps too; the refusal lists
+    # them, and what is named here is what the name cannot teach.
+    "exercise": ("exercise: first `open <path>`, `serve <cmd>`, `run <cmd>`, `tty "
+                 "<cmd>`, `android|ios|mac|linux|windows <app>`; then one per line."),
 }
 
 #: The two mode-changing tools share a line, because both take a mode name.
@@ -522,6 +531,17 @@ RUBRIC_PROMPT = (
     "Do not write criteria about style, effort or presentation. Nothing else "
     "in your reply beyond the KIND line below and the criteria, no "
     "preamble.\n\n"
+    "A REPORT THAT SOMETHING IS BROKEN ASKS FOR IT TO BE FIXED. When the "
+    "task says a thing made or changed earlier is wrong -- it looks wrong, "
+    "it resizes, it went blank -- the criteria are about the thing AFTER the "
+    "change: the symptom is gone and what worked still works. A diagnosis, an "
+    "explanation or a suggested patch on its own meets none of them.\n\n"
+    "SOMETHING WITH A VISIBLE SURFACE -- a page, a game, a screen -- is only "
+    "done when it loads and runs without errors and shows what was asked "
+    "for; write that as a criterion, and it is checked by loading it and "
+    "USING it -- the clicks a person would make, and what must follow each "
+    "-- not by reading its source or testing its logic apart from the "
+    "page.\n\n"
     "WHAT KIND OF TASK. When there is a task, the FIRST line of your reply "
     "is `KIND: research` or `KIND: agent`, then the criteria. It is research "
     "when what is asked for is a long written document -- a report, a "
@@ -595,6 +615,18 @@ EVALUATOR_PROMPT = (
     "check passes, consider whether it would still pass a minute from now, "
     "and if you have reason to doubt it, look for what would change it "
     "back.\n\n"
+    "If the request was for something a person USES -- a page, an app, a "
+    "command, a program in a terminal -- the WALKTHROUGHS block is the "
+    "evidence it works: a walkthrough whose steps all passed meets that "
+    "criterion and a failed step fails it. One marked \"launch only\" "
+    "proves the thing starts and nothing more -- it meets no criterion "
+    "about what the thing does. With no walkthrough shown, the "
+    "agent's own tests passing is its word, not evidence: make `exercise` "
+    "your one check -- `run <cmd>`, `tty <cmd>`, `serve <cmd>` then `open` "
+    "or `request`, `open <path>`, or `mac|linux|windows|android|ios <app>` "
+    "for an app with a window -- with steps that would fail if the feature "
+    "were broken, and judge what it reports. A window is not out of reach: "
+    "that last form clicks it and reads what it shows.\n\n"
     "You may check ONE thing with a tool if a criterion genuinely cannot be "
     "settled from what you were shown: "
     # No `delegate`: `_tool_loop`, which the evaluator runs in, refuses it.
@@ -734,8 +766,9 @@ def compose_agent_prompt(live=None, *, may_delegate: bool = True) -> str:
         "you keep every tool.\n\n"
         + _action_block(live, may_delegate=may_delegate)
         + "One tool call per reply.\n\n"
-        "Before you finish, run something that would FAIL if the task were "
-        "not done, and read what it prints. An explanation is not evidence. "
+        "Before you finish, USE what you made (`exercise`), or run something "
+        "that would FAIL if the task were not done, and read what it prints. "
+        "An explanation is not evidence. "
         "When you have seen it work, reply with exactly\nFINAL:\n<the answer "
         "itself -- the numbers, the names, the decision. No preamble, no "
         "recap of your steps, no offer of further help.>"
@@ -941,7 +974,11 @@ def _call(llm, messages: list) -> str:
 
         finish_reason = (reply.response_metadata or {}).get("finish_reason")
         if not (getattr(current, "diffusing", False) and finish_reason == "length"):
-            return _content_text(reply.content)
+            # Cleaned HERE, at the one place every reply passes through, so
+            # a lone surrogate the vendor's JSON let in never reaches a file
+            # write, a session save or a database insert -- each of which
+            # raises on it, and none of which is caught as a tool failure.
+            return utf8_clean(_content_text(reply.content))
 
         # Everything below is Inception-only by construction: `diffusing` is a
         # ChatInception field, so no other vendor's model reaches it.
@@ -1719,6 +1756,29 @@ def _actions_block(state: AgentState) -> str:
     )
 
 
+def _walkthrough_block(state: AgentState) -> str:
+    """What the browser reported when the agent USED what it built.
+
+    Pulled out of the action record and labelled, because the judge reads
+    an action line as "something the agent did" and this one is more than
+    that: every step's result was computed by code in a real browser
+    (agent/pipeline/browsing.py's walk), so it is evidence in the sense
+    the evaluator prompt asks for -- a command that would have failed if
+    the thing did not work, and what it actually reported.
+    """
+    seen = [line for line in (state.get("actions") or []) if " exercise " in f" {line}"]
+    if not seen:
+        return ""
+    return (
+        "WALKTHROUGHS (the agent used what it built -- a page in a real "
+        "browser, commands in a shell, a program in a terminal, or an app on a "
+        "device or desktop; each result "
+        "is what the machine reported, computed by code, not narrated by the "
+        "model -- a FAILED one is a feature that does not work):\n"
+        + "\n".join(f"- {line}" for line in seen[-5:])
+    )
+
+
 #: How many exchanges the evaluator gets to reach a verdict.
 #:
 #: Measured, after giving it the evidence it had been missing: it went from
@@ -2184,6 +2244,9 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     #: and nothing run, and it is allowed to say that once.
     ledger = Ledger()
     asked_for_proof = False
+    #: The second, distinct hold: the run did exercise the thing -- and
+    #: only launched it. Once, like the first, and for the same reason.
+    asked_for_steps = False
     #: Asks refused because the TURN is out of them (MAX_REFUSED_ASKS). Local
     #: to this loop run, unlike state's `asks` which spans the whole turn.
     refused_asks = 0
@@ -2233,14 +2296,38 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
             # learns to answer rather than act on. It is also allowed to be
             # told there is nothing to run, because enforcement with no way to
             # say no gets routed around rather than obeyed.
-            if ledger.needs_check and not asked_for_proof:
-                asked_for_proof = True
+            # Two things can hold it: code changed with nothing run, or -- when
+            # this run can load a page at all -- a page changed that no browser
+            # has loaded. The second exists because the first was satisfied,
+            # live, by a Python script that tested a chess engine's move
+            # generation while the page it lived in threw on load.
+            live = reachable_tools()
+            browser, walker = "browse" in live, "exercise" in live
+            if walker and ledger.launch_only and ledger.needs_use and not asked_for_steps:
+                asked_for_steps = True
                 _emit({"agent": {"board": [
-                    "holding the answer: " + ", ".join(ledger.unproven[:3])
-                    + " changed with nothing run"
+                    f"holding the answer: `{ledger.launch_only[:60]}` only launched it"
                 ]}})
                 messages.append(AIMessage(text))
-                messages.append(HumanMessage(render_unproven(ledger)))
+                messages.append(HumanMessage(
+                    render_unproven(ledger, browser=browser, exercise=walker)))
+                continue
+            held = (ledger.needs_check or (browser and ledger.needs_render)
+                    or (walker and ledger.needs_use))
+            if held and not asked_for_proof:
+                asked_for_proof = True
+                if browser and ledger.needs_render:
+                    what, why = ledger.unrendered, "changed and no browser has loaded it"
+                elif walker and ledger.needs_use:
+                    what, why = ledger.unused, "changed and nothing has used it"
+                else:
+                    what, why = ledger.unproven, "changed with nothing run"
+                _emit({"agent": {"board": [
+                    "holding the answer: " + ", ".join(what[:3]) + " " + why
+                ]}})
+                messages.append(AIMessage(text))
+                messages.append(HumanMessage(
+                    render_unproven(ledger, browser=browser, exercise=walker)))
                 continue
             return _strip_code_fence(body), "final", mode
 
@@ -3279,6 +3366,7 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "research", "evalua
         f"WHAT WAS ASKED FOR:\n{_requested(state)}",
         f"{human_label}:\n{output}",
         _actions_block(state),
+        _walkthrough_block(state),
         (f"MODES USED:\n" + "; ".join(state.get("mode_log") or [])
          if state.get("mode_log") else ""),
         (f"HOW IT FINISHED (the end of otto's own working):\n{_evidence_tail(state)}"

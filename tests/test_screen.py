@@ -183,3 +183,57 @@ def test_looking_needs_a_question():
 
 def test_the_vocabulary_stays_small():
     assert len(screening.ACT_OPS) == 2
+
+
+# --------------------------------------------------------------------------
+# Locally: the page the last `browse` rendered
+# --------------------------------------------------------------------------
+
+def test_without_a_container_look_shows_the_page_browse_last_opened(tmp_path, monkeypatch):
+    """No desktop here; what there can be is the screenshot the local
+    browser driver left (agent/pipeline/browsing.py). Same route through the
+    vision model, same words-not-pixels contract."""
+    from agent.pipeline import browsing
+    from agent.pipeline.workspace import bind_workspace
+
+    class _LLM:
+        def __init__(self):
+            self.seen = None
+
+        def invoke(self, messages):
+            self.seen = messages
+
+            class _Reply:
+                content = "an empty dark square where a board should be"
+
+            return _Reply()
+
+    class _Router:
+        def __init__(self):
+            self.llm = _LLM()
+
+        def chat_model(self, task, **overrides):
+            return self.llm
+
+    router = _Router()
+    monkeypatch.setattr(pt, "_get_router", lambda: router)
+    shot = browsing.last_screenshot(tmp_path)
+    shot.parent.mkdir(parents=True, exist_ok=True)
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+
+    with bind_workspace(tmp_path):
+        result = pt.look("is the board drawn?")
+
+    assert result.returncode == 0
+    assert "empty dark square" in result.stdout
+    assert router.llm.seen is not None, "the screenshot never reached the vision model"
+
+
+def test_without_a_page_opened_look_says_what_to_do_first(tmp_path):
+    from agent.pipeline.workspace import bind_workspace
+
+    with bind_workspace(tmp_path):
+        result = pt.look("is the board drawn?")
+
+    assert result.returncode == 1
+    assert "browse open" in result.stderr
