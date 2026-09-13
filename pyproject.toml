@@ -2,7 +2,7 @@
 name = "otto-cli-agent"
 version = "0.1.0"
 description = "Otto: a terminal AI agent built around measured results -- one agent loop, a rubric-first evaluator, tiered memory, multi-vendor routing, and six benchmark harnesses."
-readme = "README.md"
+readme = "docs/pypi.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Siddharth Priyadarshi", email = "sid23p@gmail.com" }]
 requires-python = ">=3.12"

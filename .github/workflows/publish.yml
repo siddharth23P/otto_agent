@@ -1,0 +1,49 @@
+# Builds the wheel and sdist and publishes them to PyPI.
+#
+# Runs when a GitHub release is published, or by hand from the Actions tab.
+# Publishing uses PyPI's trusted publishing (OpenID Connect): PyPI trusts
+# this repository's workflow directly, so no API token is stored anywhere.
+# The one-time setup on pypi.org is in the README under "Publishing".
+
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv python install
+      - run: uv sync --locked
+      - run: uv run pytest -q
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/otto-cli-agent
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -240,6 +240,17 @@ that motivated it and where it landed in the code:
 - Benchmark results are mostly single runs on small samples, and the harnesses say so.
 - Inception's Mercury models are absent from the price table on purpose, so a turn on them shows an unpriced marker rather than a guess.
 
+## Publishing
+
+Releases are built and published to PyPI by `.github/workflows/publish.yml`
+through PyPI's trusted publishing, so no token is stored anywhere. It runs
+when a GitHub release is published, or by hand from the Actions tab. The
+one-time setup on pypi.org is a pending trusted publisher for the project
+`otto-cli-agent`: owner `siddharth23P`, repository `otto_agent`, workflow
+`publish.yml`, environment `pypi`. PyPI's project page uses
+[docs/pypi.md](docs/pypi.md) as its description, since PyPI cannot render
+this page's relative images.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
