@@ -1,0 +1,6 @@
+title: Otto
+description: A terminal AI agent that uses what it built and judges its own work against criteria it wrote before it started.
+theme: jekyll-theme-cayman
+show_downloads: false
+exclude:
+  - README.md
