@@ -124,6 +124,32 @@ def _no_real_temperature_store(request, tmp_path_factory):
         yield
 
 
+#: And never the developer's real session memory or session index.
+#:
+#: agent/pipeline/run.py opens ~/.otto/memory/<session_id>.db for every run,
+#: and agent/cli/shell.py's Session registers a finished turn in
+#: ~/.otto/sessions.db. Before this fixture existed, every test that ran the
+#: graph left an empty memory file behind in the developer's home -- 3,068 of
+#: them on the machine this was written on -- and a test that finished a turn
+#: would have listed a fake session next to the real ones. Each test gets a
+#: directory and an index of its own; a test that binds either itself
+#: (monkeypatching DB_DIR, or the `session_index` fixture name) still wins,
+#: because it runs inside this.
+from agent.memory import sessions as _sessions  # noqa: E402
+from agent.memory import store as _store  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_real_session_memory(request, monkeypatch, tmp_path_factory):
+    if "session_index" in getattr(request, "fixturenames", ()):
+        yield  # that test binds its own
+        return
+    root = tmp_path_factory.mktemp("otto-home")
+    monkeypatch.setattr(_store, "DB_DIR", root / "memory")
+    with _sessions.bind_index(root / "sessions.db"):
+        yield
+
+
 #: Tests that can only run where the host shell is POSIX.
 #:
 #: Otto's remote branch -- every tool's container path -- generates POSIX

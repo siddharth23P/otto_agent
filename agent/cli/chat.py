@@ -56,8 +56,8 @@ from rich.panel import Panel
 
 from agent.cli.output import save_final
 from agent.cli.shell import (
-    Session, build_prompt_session, describe_workspace, dispatch, render_update,
-    resolve_workspace,
+    Session, build_prompt_session, describe_workspace, dispatch, render_transcript,
+    render_update, resolve_workspace,
 )
 from agent.cli.ui import err, out
 from agent.pipeline.progress import Cancelled, Progress, bind_progress
@@ -242,7 +242,6 @@ def _drive_turn(s: Session, text: str, prompt_session) -> None:
             # On disk, not just on screen -- selecting a Rich panel's text
             # out of a live terminal mangles box-drawing borders and wrapped
             # lines (13.4's bug hunt). A plain file sidesteps that.
-            s.turn += 1
             path = save_final(s.session_id, s.turn, raw_output, None)
             err.print(f"[muted]saved to {path}[/]")
 
@@ -252,18 +251,47 @@ WORKSPACE_HELP = (
     "directory. See agent/pipeline/workspace.py for what this grants."
 )
 NO_WORKSPACE_HELP = "Give otto no file access at all. Wins over --workspace."
+RESUME_HELP = (
+    "Pick a saved session back up: its id, a unique prefix of it, or 'last'. "
+    "`otto sessions` lists them. Its workspace comes back with it unless "
+    "--workspace/--no-workspace say otherwise."
+)
+
+
+def open_session(ctx_obj, workspace: Optional[Path], no_workspace: bool, resume: Optional[str]) -> Session:
+    """The Session `otto chat` and `otto tui` both start from. Shared so
+    `--resume` means the same thing at both prompts: the saved session, with
+    its saved workspace, unless a workspace flag was given explicitly --
+    which is the one case `resolve_workspace`'s cwd default must NOT win,
+    since a person resuming work on a repository from their home directory
+    did not mean to move it there. Raises LookupError for an unknown ref.
+    """
+    s = Session(ctx=ctx_obj, workspace=resolve_workspace(workspace, no_workspace))
+    if resume is not None:
+        s.load(resume)
+        if workspace is not None or no_workspace:
+            s.workspace = resolve_workspace(workspace, no_workspace)
+    return s
 
 
 def chat(
     ctx: typer.Context,
     workspace: Annotated[Optional[Path], typer.Option("--workspace", "-w", help=WORKSPACE_HELP)] = None,
     no_workspace: Annotated[bool, typer.Option("--no-workspace", help=NO_WORKSPACE_HELP)] = False,
+    resume: Annotated[Optional[str], typer.Option("--resume", "-r", help=RESUME_HELP)] = None,
 ) -> None:
     """Talk to the pipeline."""
-    s = Session(ctx=ctx.obj, workspace=resolve_workspace(workspace, no_workspace))
+    try:
+        s = open_session(ctx.obj, workspace, no_workspace, resume)
+    except LookupError as exc:
+        err.print(f"[bad]{exc}[/]")
+        raise typer.Exit(1)
     err.print("[muted]otto:pipeline[/]")
     err.print(f"[muted]{describe_workspace(s.workspace)}[/]")
     err.print("[muted]/help for commands[/]")
+    if resume is not None:
+        err.print(f"[muted]resumed {s.session_id[:8]} · {s.title or '(untitled)'} · {s.turn} turn(s)[/]")
+        render_transcript(s)
 
     prompt_session = build_prompt_session()
 

@@ -16,6 +16,33 @@ somewhere else with `--workspace PATH`, or hand it no file access at all with
 `--no-workspace`. `/workspace` in the REPL and "Workspace…" in the TUI's
 command palette (ctrl+p) change it mid-session.
 
+## Coming back to a session
+
+Every turn is written to the session's own file as it finishes, so a
+conversation survives the process that had it. `otto sessions` lists what
+was saved, newest first: a short id, a title (the first thing you said,
+until `/rename`), how many turns, which workspace, when. `otto chat --resume
+<id>` and `otto tui --resume <id>` pick one up with its history and its
+workspace (`last` is the newest; a unique prefix of the id is enough, and an
+explicit `--workspace` still wins). Inside either front end, `/sessions`,
+`/resume` and `/rename` -- or "Sessions…" and "Rename session…" in the
+TUI's palette -- do the same without leaving. A session is saved once a turn
+has finished, not when it is opened, so quitting a prompt you never typed
+into leaves nothing behind. `otto sessions --delete <id>` forgets one,
+`--prune` clears memory files that no session owns and nothing was written
+to (every graph run before this left one behind, and the benchmarks still
+do).
+
+A session moves between machines as one JSON file: `otto sessions --export
+<id> [--to PATH]` writes it (recent turns verbatim, older ones as the
+summary they were compacted into, plus the retired text those summaries
+cite), and `otto sessions --import PATH` reads it into this machine's
+sessions, keeping the id unless one is already here. Embeddings are not in
+the file, so `recall_memory` ranks an imported session by recency until it
+is re-embedded. The TUI's palette has the whole set: "New session",
+"Sessions…" to load one, "Export session…", "Import session…" (which opens
+what it read), and "Delete session…", which asks before it forgets.
+
 ## Setting it up
 
 `otto tui` opens the setup screen itself the first time it starts with no keys

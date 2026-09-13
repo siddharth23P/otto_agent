@@ -71,6 +71,22 @@ CREATE TABLE IF NOT EXISTS bullets (
 );
 CREATE INDEX IF NOT EXISTS idx_bullets_kind_superseded ON bullets(kind, superseded);
 CREATE INDEX IF NOT EXISTS idx_chunks_kind_seq ON chunks(kind, seq);
+-- The queue's LIVE tiers (agent/memory/queue.py's `_x` and `_y_raw`), one
+-- row per item still verbatim, in append order. Until 2026-09-13 these were
+-- only ever in memory: a chunk reached this file when compaction retired it,
+-- so a session that ended before its first compaction -- which is nearly
+-- every session, X alone is 24K tokens -- left an empty database and no way
+-- back to the conversation. `tier` is 'x' or 'y'; an item moves from one to
+-- the other when X overflows and leaves the table when Y is compacted (its
+-- text is in `chunks` by then). A queue opened with restore=True reads these
+-- back and carries on exactly where the last process stopped.
+CREATE TABLE IF NOT EXISTS pending (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pending_kind ON pending(kind, id);
 """
 
 #: Columns added to `chunks` after the first release of this schema. SQLite's
@@ -104,6 +120,13 @@ _BULLET_MIGRATIONS = (("embedding_model", "TEXT"),)
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def session_db_path(session_id: str) -> Path:
+    """Where a session's own file lives. Looked up at call time through the
+    module global rather than at import time so a test (or agent/memory/
+    sessions.py's prune) that rebinds DB_DIR sees the rebinding."""
+    return DB_DIR / f"{session_id}.db"
 
 
 def _to_blob(embedding: "np.ndarray | None") -> bytes | None:
@@ -180,7 +203,7 @@ class MemoryStore:
 
     @classmethod
     def for_session(cls, session_id: str) -> "MemoryStore":
-        return cls(DB_DIR / f"{session_id}.db")
+        return cls(session_db_path(session_id))
 
     def close(self) -> None:
         self._conn.close()
@@ -353,3 +376,54 @@ class MemoryStore:
             )
             for r in rows
         ]
+
+    def latest_generation(self, kind: str) -> int:
+        """The newest compaction generation written for `kind`, 0 if none --
+        what a restored TieredQueue resumes counting from, so the generation
+        after a restart supersedes the right rows rather than colliding with
+        the one already on disk."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(generation), 0) FROM bullets WHERE kind = ?", (kind,),
+        ).fetchone()
+        return int(row[0])
+
+    # ---- pending (the queue's live tiers, mirrored) ----------------------
+
+    def add_pending(self, kind: str, text: str, tier: str = "x") -> None:
+        self._conn.execute(
+            "INSERT INTO pending (kind, tier, text) VALUES (?, ?, ?)", (kind, tier, text),
+        )
+        self._conn.commit()
+
+    def demote_pending(self, kind: str) -> None:
+        """Everything of `kind` still in X moves to Y -- the on-disk half of
+        agent/memory/queue.py's X overflow, which moves the whole tier at
+        once, never one item."""
+        self._conn.execute(
+            "UPDATE pending SET tier = 'y' WHERE kind = ? AND tier = 'x'", (kind,),
+        )
+        self._conn.commit()
+
+    def clear_pending(self, kind: str, tier: str) -> None:
+        """Drop one tier's rows -- called for 'y' once a compaction has
+        written their text to `chunks`, so nothing is ever lost from disk,
+        only moved."""
+        self._conn.execute("DELETE FROM pending WHERE kind = ? AND tier = ?", (kind, tier))
+        self._conn.commit()
+
+    def pending(self, kind: str) -> list[tuple[str, str]]:
+        """`(tier, text)` in append order -- Y's rows come first because they
+        were appended first, which is the order a restore needs."""
+        rows = self._conn.execute(
+            "SELECT tier, text FROM pending WHERE kind = ? ORDER BY id", (kind,),
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def is_empty(self) -> bool:
+        """Nothing in any table -- the state of a file that was opened and
+        never written to, which is what every run that ended before a turn
+        finished (and every test that ran the graph) leaves behind."""
+        for table in ("chunks", "bullets", "pending"):
+            if self._conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                return False
+        return True

@@ -1132,3 +1132,226 @@ async def test_copy_last_answer_goes_through_every_route(monkeypatch, tmp_path):
         await _until(pilot, lambda: not app._turn_running, "the turn to finish")
         await pilot.press("ctrl+y")
         await _until(pilot, lambda: copied == ["raw answer"], "the copy")
+
+
+# --------------------------------------------------------------------------
+# Saved sessions (2026-09-13): the palette picker, --resume, rename
+# --------------------------------------------------------------------------
+
+def _saved_session(tmp_path, turns: tuple[tuple[str, str], ...]) -> str:
+    """A finished session on disk, the way a previous process leaves one:
+    turns recorded through a real Session over the test's own memory dir."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from agent.cli.shell import Session
+
+    s = Session(ctx=FakeCtx(), workspace=tmp_path)
+    for asked, answered in turns:
+        s.record_turn(HumanMessage(asked), AIMessage(answered))
+    s.close()   # the previous process has quit; nothing holds the file
+    return s.session_id
+
+
+@_async_test
+async def test_picking_a_saved_session_replays_it_and_takes_its_workspace(monkeypatch, tmp_path):
+    from agent.memory import wiring
+
+    monkeypatch.setattr(wiring, "summarize_for_memory", lambda prompt: "")
+    sid = _saved_session(tmp_path, (("what is 2+2", "**4**"), ("and 3+3", "6")))
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("x")]))
+    app.session.workspace = None
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_sessions()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.SessionPicker), "the picker")
+        await pilot.press("enter")
+        await _until(pilot, lambda: app.session.session_id == sid and not app._turn_running, "the load")
+        await pilot.pause()
+
+        assert app.session.turn == 2 and app.session.title == "what is 2+2"
+        assert app.session.workspace == tmp_path
+        users = [w.content for w in app.query("#transcript > .user")]
+        assert users == ["[bold]you[/] what is 2+2", "[bold]you[/] and 3+3"]
+        assert len(_answer_headers(app)) == 2
+        assert any("resumed " + sid[:8] in t for t in _texts(app))
+        assert not app.query("#empty-state")
+        side = app.query_one("#side-session", Static).content
+        assert "what is 2+2" in _plain(side)
+
+
+@_async_test
+async def test_resume_flag_loads_on_mount_and_an_explicit_workspace_wins(monkeypatch, tmp_path):
+    from agent.memory import wiring
+
+    monkeypatch.setattr(wiring, "summarize_for_memory", lambda prompt: "")
+    sid = _saved_session(tmp_path, (("hello", "hi"),))
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.setattr(tui_mod, "run_pipeline_stream", lambda text, **kw: iter([_final("x")]))
+    monkeypatch.setattr(tui_mod, "save_final", lambda *a, **k: tmp_path / "out.md")
+    app = OttoApp(FakeCtx(), workspace=other, resume=sid[:8], keep_workspace=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _until(pilot, lambda: app.session.session_id == sid and not app._turn_running, "the load")
+        await pilot.pause()
+        assert app.session.workspace == other
+        assert app.session.turn == 1
+        assert [w.content for w in app.query("#transcript > .user")] == ["[bold]you[/] hello"]
+
+
+@_async_test
+async def test_with_nothing_saved_the_picker_is_not_opened(monkeypatch, tmp_path):
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("x")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_sessions()
+        await pilot.pause()
+        assert not isinstance(app.screen, tui_mod.SessionPicker)
+        assert any("no saved sessions yet" in t for t in _texts(app))
+
+
+@_async_test
+async def test_switching_sessions_is_refused_mid_turn(monkeypatch, tmp_path):
+    release = threading.Event()
+
+    def slow_stream(text, **kwargs):
+        release.wait(5)
+        yield _final("done")
+
+    app = _make_app(monkeypatch, tmp_path, slow_stream)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.message_box.value = "go"
+        await pilot.press("enter")
+        await _until(pilot, lambda: app._turn_running, "the turn to start")
+        app.action_sessions()
+        await pilot.pause()
+        assert any("still running" in t for t in _texts(app))
+        assert not isinstance(app.screen, tui_mod.SessionPicker)
+        release.set()
+        await _until(pilot, lambda: not app._turn_running, "the turn to finish")
+
+
+@_async_test
+async def test_renaming_names_the_session_in_the_index_and_the_sidebar(monkeypatch, tmp_path):
+    from agent.memory import sessions as index
+
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("x")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_rename_session()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.RenameDialog), "the dialog")
+        app.screen.query_one(Input).value = "the build fix"
+        await pilot.press("enter")
+        await _until(pilot, lambda: app.session.title == "the build fix", "the rename")
+        await pilot.pause()
+        assert index.get(app.session.session_id).title == "the build fix"
+        assert "the build fix" in _plain(app.query_one("#side-session", Static).content)
+        # And the rename did not start a turn on the dialog's text.
+        assert not app._turn_running
+        assert not app.query("#transcript > .user")
+
+
+def _plain(renderable) -> str:
+    import io
+
+    from rich.console import Console
+
+    buf = io.StringIO()
+    Console(file=buf, width=32, force_terminal=False).print(renderable)
+    return buf.getvalue()
+
+
+@_async_test
+async def test_export_then_import_opens_a_copy_of_the_session(monkeypatch, tmp_path):
+    from agent.memory import sessions as index
+    from agent.memory import wiring
+
+    monkeypatch.setattr(wiring, "summarize_for_memory", lambda prompt: "")
+    sid = _saved_session(tmp_path, (("hello", "hi"),))
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("x")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        # Nothing to export before a turn has finished in THIS session.
+        app.action_export_session()
+        await pilot.pause()
+        assert any("nothing to export yet" in t for t in _texts(app))
+
+        app.action_sessions()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.SessionPicker), "the picker")
+        await pilot.press("enter")
+        await _until(pilot, lambda: app.session.session_id == sid and not app._turn_running, "the load")
+
+        app.action_export_session()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.PathPicker), "the save picker")
+        box = app.screen.query_one("#path", Input)
+        assert box.value.startswith(str(Path.home())) and f"otto-session-{sid[:8]}" in box.value
+        box.value = str(tmp_path / "s.json")
+        await pilot.press("enter")
+        await _until(pilot, lambda: any("exported this session" in t for t in _texts(app)), "the export")
+        assert (tmp_path / "s.json").exists()
+
+        app.action_import_session()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.PathPicker), "the open picker")
+        app.screen.query_one("#path", Input).value = str(tmp_path / "s.json")
+        await pilot.press("enter")
+        await _until(pilot, lambda: app.session.session_id != sid and not app._turn_running
+                     and any("imported" in t for t in _texts(app)), "the import")
+        await pilot.pause()
+        assert app.session.title == "hello" and app.session.turn == 1
+        assert len(index.list_sessions()) == 2
+        assert [w.content for w in app.query("#transcript > .user")].count("[bold]you[/] hello") == 2
+
+
+@_async_test
+async def test_deleting_a_session_asks_first_and_deleting_the_current_one_resets(monkeypatch, tmp_path):
+    from agent.memory import sessions as index
+    from agent.memory import wiring
+    from agent.memory.store import session_db_path
+    from textual.widgets import Button
+
+    monkeypatch.setattr(wiring, "summarize_for_memory", lambda prompt: "")
+    other = _saved_session(tmp_path, (("other", "o"),))
+    mine = _saved_session(tmp_path, (("mine", "m"),))
+    app = _make_app(monkeypatch, tmp_path, lambda text, **kw: iter([_final("x")]))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.action_sessions()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.SessionPicker), "the picker")
+        await pilot.press("enter")   # newest first: `mine`
+        await _until(pilot, lambda: app.session.session_id == mine and not app._turn_running, "the load")
+
+        # Cancelling changes nothing.
+        app.action_delete_session()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.SessionPicker), "the delete picker")
+        await pilot.press("down", "enter")   # `other`
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.ConfirmDialog), "the confirmation")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert index.get(other) is not None
+
+        # Confirming deletes the row and the file.
+        app.action_delete_session()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.SessionPicker), "the delete picker")
+        await pilot.press("down", "enter")
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.ConfirmDialog), "the confirmation")
+        app.screen.query_one("#yes", Button).press()
+        # The row goes before the worker releases the session; the next
+        # delete is refused while it still holds it, so wait for both --
+        # windows-latest was slow enough to lose that race.
+        await _until(pilot, lambda: index.get(other) is None and not app._turn_running, "the delete")
+        assert not session_db_path(other).exists()
+        assert app.session.session_id == mine, "deleting another session leaves this one alone"
+
+        # Deleting the session you are in leaves you in a fresh one -- and
+        # its store was closed before its file went, which is what Windows
+        # requires (asserted through the connection so it holds everywhere).
+        import sqlite3
+
+        held = app.session.history_queue.store
+        app.action_delete_session()
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.SessionPicker), "the delete picker")
+        await pilot.press("enter")
+        await _until(pilot, lambda: isinstance(app.screen, tui_mod.ConfirmDialog), "the confirmation")
+        app.screen.query_one("#yes", Button).press()
+        await _until(pilot, lambda: app.session.session_id != mine and not app._turn_running
+                     and index.get(mine) is None, "the reset and delete")
+        assert index.list_sessions() == [] and app.session.turn == 0
+        assert not session_db_path(mine).exists()
+        with pytest.raises(sqlite3.ProgrammingError):
+            held.pending("history")
+        assert any("new session" in t for t in _texts(app))
+        assert any("deleted " + mine[:8] in t for t in _texts(app))

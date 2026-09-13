@@ -248,18 +248,21 @@ from textual.widgets import Collapsible, Footer, Input, RichLog, Static
 
 from agent.cli import art, clipboard
 from agent.cli.art import SPINNER, animations_enabled
-from agent.cli.chat import NO_WORKSPACE_HELP, WORKSPACE_HELP
+from agent.cli.chat import NO_WORKSPACE_HELP, RESUME_HELP, WORKSPACE_HELP
 from agent.cli.context import AppContext
 from agent.cli.lessons import lessons_table
 from agent.cli.modals import (  # noqa: F401 -- re-exported for tests and callers
-    AskUserModal, ModelPinDialog, PathPicker, ScoreDialog, TaskPicker, WorkspacePrompt,
+    AskUserModal, ConfirmDialog, ModelPinDialog, PathPicker, RenameDialog, ScoreDialog, SessionPicker,
+    TaskPicker, WorkspacePrompt,
 )
+from agent.cli.sessions import default_export_path
 from agent.cli.output import save_final
 from agent.cli.setup_screen import SetupBackend, SetupScreen, pin_options
+from agent.memory import sessions as session_index
 from agent.cli.shell import (
     Session, describe_workspace, render_update, resolve_workspace, set_workspace,
 )
-from agent.cli.ui import THEME
+from agent.cli.ui import THEME, err
 from agent.cli.usage_panel import UsagePanel, _ID_PREFIXES, _short_model, _thousands  # noqa: F401
 from agent.memory.lessons import all_lessons, bank_path, export_lessons, import_lessons
 from agent.pipeline.budget import WRAP_UP_FRACTION, default_budget
@@ -455,9 +458,10 @@ class Sidebar(Vertical):
         return grid
 
     def refresh_session(self, *, workspace: Path | None, turns: int, mode: str, model: str,
-                        turn_tokens: list[int] = ()) -> None:
+                        turn_tokens: list[int] = (), title: str = "") -> None:
         glyph = art.MODE_GLYPHS.get(mode, "")
         rows = [
+            ("title", title or "—"),
             ("workspace", workspace.name if workspace else "off"),
             ("turns", str(turns)),
             ("mode", f"{glyph} {mode}".strip() if mode else "—"),
@@ -475,6 +479,15 @@ class Sidebar(Vertical):
             ("pins", pinned),
             ("providers", ", ".join(providers) if providers else "none — f2"),
         ]))
+
+
+def _session_line(info: session_index.SessionInfo, current: str | None = None) -> str:
+    """One picker row: id, title, turns, workspace, age -- the columns
+    `otto sessions` prints, on one line."""
+    where = info.workspace.rsplit("/", 1)[-1] if info.workspace else "no workspace"
+    mark = " ◂ this one" if info.id == current else ""
+    return (f"{info.short_id}  {info.label}  ·  {info.turns} turn(s)  ·  {where}  ·  "
+            f"{session_index.describe_age(info.last_active_at)}{mark}")
 
 
 class OttoApp(App):
@@ -520,10 +533,19 @@ class OttoApp(App):
     IDLE_PLACEHOLDER = "type a message… (ctrl+p for commands)"
     BUSY_PLACEHOLDER = "working… one turn at a time"
 
-    def __init__(self, ctx: AppContext, workspace: Path | None = None) -> None:
+    def __init__(self, ctx: AppContext, workspace: Path | None = None, resume: str | None = None,
+                 keep_workspace: bool = False) -> None:
         super().__init__()
         self.ctx = ctx
         self.session = Session(ctx=ctx, workspace=workspace)
+        #: `--resume REF`: loaded once the screen is up (on_mount), not here,
+        #: because loading replays the session's turns into the transcript
+        #: and there is no transcript to post into before compose has run.
+        #: `keep_workspace` says an explicit --workspace/--no-workspace was
+        #: given and must win over the one the session saved (chat.py's
+        #: open_session makes the same call for the REPL).
+        self._resume = resume
+        self._keep_workspace = keep_workspace
         #: The last turn's raw final_output (module docstring, "Copying
         #: cleanly") -- exactly the string save_final() wrote to disk, no
         #: Panel/Markdown wrapper. None before any turn has finished, or
@@ -634,6 +656,9 @@ class OttoApp(App):
         # that only moves when the run moves reads as a frozen app. Five
         # frames a second when animating, so the spinner reads as motion.
         self.set_interval(0.2 if animations_enabled(self) else 1.0, self._tick)
+        if self._resume:
+            self._set_busy(True)
+            self._load_session(self._resume, keep_workspace=self._keep_workspace)
         if not configured_providers():
             # A fresh machine. Nothing can run yet, so say so by opening the
             # one screen that fixes it -- after this mount settles.
@@ -719,7 +744,8 @@ class OttoApp(App):
             rows = self.usage.snapshot()["models"]
             model = rows[-1]["model"] if rows else ""
         side.refresh_session(workspace=self.session.workspace, turns=self.session.turn,
-                             mode=self._mode, model=model, turn_tokens=self._turn_tokens)
+                             mode=self._mode, model=model, turn_tokens=self._turn_tokens,
+                             title=self.session.title)
         side.refresh_routing(pins=route_overrides.active_pins(), providers=configured_providers())
 
     def _refresh_chrome(self) -> None:
@@ -1061,6 +1087,16 @@ class OttoApp(App):
         yield SystemCommand("Export lessons…", "Write the lesson bank to a JSON file", self.action_export_lessons)
         yield SystemCommand("Import lessons…", "Merge a JSON file into the lesson bank, dropping duplicates", self.action_import_lessons)
         yield SystemCommand("New session", "Clear history, start fresh", self.action_new_session)
+        yield SystemCommand("Sessions…", "Pick a saved session back up, history and workspace included",
+                            self.action_sessions)
+        yield SystemCommand("Rename session…", "Give this session a title for the sessions list",
+                            self.action_rename_session)
+        yield SystemCommand("Export session…", "Write this session, history and all, to a JSON file",
+                            self.action_export_session)
+        yield SystemCommand("Import session…", "Read a session export in, and open it",
+                            self.action_import_session)
+        yield SystemCommand("Delete session…", "Forget a saved session: its history file and its entry",
+                            self.action_delete_session)
         yield SystemCommand("Toggle sidebar", "Show or hide the session, routing and usage sidebar",
                             self.action_toggle_usage)
 
@@ -1198,19 +1234,209 @@ class OttoApp(App):
         SQLite store (agent/memory/wiring.py's new_history_queue), which is
         disk work, not a field assignment."""
         try:
-            self.session.reset()
+            self._reset_in_worker()
+        finally:
+            self.call_from_thread(self._set_busy, False)
+
+    def _reset_in_worker(self) -> None:
+        """The reset itself, on whichever worker thread holds the session --
+        `_reset_session` and `_delete_session` (which must reset BEFORE it
+        deletes the current session's file, or Windows refuses the delete
+        while the store is open) both come through here."""
+        self.session.reset()
+        self._last_output = None
+        # The panel says "this session", so a new session starts it at
+        # nothing. Cleared in place rather than rebound: the widget holds
+        # the same object the turns record into.
+        self.usage.by_model.clear()
+        self._turn_tokens.clear()
+        self._shown_spend = (0, 0.0)
+        self.call_from_thread(self._refresh_usage)
+        self.call_from_thread(self._refresh_sidebar)
+        self.call_from_thread(self._post, "[dim]new session[/]")
+
+    # ---- saved sessions -------------------------------------------------
+
+    def action_sessions(self) -> None:
+        """Palette "Sessions…": the saved sessions newest first; picking one
+        loads it in place of this one. Refused mid-turn for the same reason
+        "New session" is -- a worker still holds the current one."""
+        if self._turn_running:
+            self._post("[yellow]a turn is still running; wait for it to finish[/]")
+            return
+        rows = session_index.list_sessions(limit=30)
+        if not rows:
+            self._post("[dim]no saved sessions yet -- a session is saved once a turn finishes[/]", "meta")
+            return
+        options = [(_session_line(r, current=self.session.session_id), r.id) for r in rows]
+
+        def done(chosen: str | None) -> None:
+            if chosen is None or chosen == self.session.session_id:
+                return
+            self._set_busy(True)
+            self._load_session(chosen)
+
+        self.push_screen(SessionPicker(options), done)
+
+    def action_rename_session(self) -> None:
+        def done(title: str | None) -> None:
+            if title is None:
+                return
+            self.session.rename(title)
+            self._post(f"[dim]session is now called {title!r}[/]", "meta")
+            self._refresh_sidebar()
+
+        self.push_screen(RenameDialog(self.session.title), done)
+
+    def action_export_session(self) -> None:
+        """Palette "Export session…": this session to a JSON file, through
+        the same save picker "Export lessons…" uses. A session that has not
+        finished a turn is not in the index and has nothing to export."""
+        if session_index.get(self.session.session_id) is None:
+            self._post("[dim]nothing to export yet -- a session is saved once a turn finishes[/]", "meta")
+            return
+        default = default_export_path(session_index.get(self.session.session_id), Path.home())
+
+        def done(path: str | None) -> None:
+            if path and path != "off":
+                self._export_session(Path(path).expanduser())
+
+        self.push_screen(PathPicker(Path.home(), mode="save", title="Export session to",
+                                    initial_text=str(default)), done)
+
+    @work(thread=True, exit_on_error=False)
+    def _export_session(self, path: Path) -> None:
+        try:
+            written = session_index.export_session(self.session.session_id, path)
+            self.call_from_thread(self._post, f"[dim]exported this session to {written}[/]", "meta")
+        except Exception as exc:
+            self.call_from_thread(self._post, f"[red]export failed: {type(exc).__name__}: {exc}[/]")
+
+    def action_import_session(self) -> None:
+        """Palette "Import session…": read an export in and open it, the way
+        "Sessions…" opens a saved one. Refused mid-turn because opening it
+        replaces the session a worker still holds."""
+        if self._turn_running:
+            self._post("[yellow]a turn is still running; wait for it to finish[/]")
+            return
+
+        def done(path: str | None) -> None:
+            if path and path != "off":
+                self._set_busy(True)
+                self._import_session(Path(path).expanduser())
+
+        self.push_screen(PathPicker(Path.home(), mode="file", title="Import session from",
+                                    suffixes={".json"}), done)
+
+    @work(thread=True, exit_on_error=False)
+    def _import_session(self, path: Path) -> None:
+        try:
+            info = session_index.import_session(path)
+        except Exception as exc:
+            self.call_from_thread(self._post, f"[red]import failed: {type(exc).__name__}: {exc}[/]")
+            self.call_from_thread(self._set_busy, False)
+            return
+        self.call_from_thread(self._post, f"[dim]imported {info.short_id} · {info.label} from {path}[/]", "meta")
+        # Hands the session over exactly as picking it from "Sessions…" would,
+        # and releases the box itself.
+        self._load_session(info.id)
+
+    def action_delete_session(self) -> None:
+        """Palette "Delete session…": pick one, confirm, and it is gone --
+        index row and history file. Deleting the one you are in resets to a
+        fresh session, since there is nothing left to be in."""
+        if self._turn_running:
+            self._post("[yellow]a turn is still running; wait for it to finish[/]")
+            return
+        rows = session_index.list_sessions(limit=30)
+        if not rows:
+            self._post("[dim]no saved sessions to delete[/]", "meta")
+            return
+        options = [(_session_line(r, current=self.session.session_id), r.id) for r in rows]
+
+        def confirmed(chosen: str, yes: bool) -> None:
+            if not yes:
+                return
+            self._set_busy(True)
+            self._delete_session(chosen)
+
+        def picked(chosen: str | None) -> None:
+            if chosen is None:
+                return
+            info = session_index.get(chosen)
+            label = f"{info.short_id} · {info.label} · {info.turns} turn(s)" if info else chosen[:8]
+            self.push_screen(
+                ConfirmDialog(f"Delete {label}?\n\nIts history file goes with it. This cannot be undone."),
+                lambda yes: confirmed(chosen, bool(yes)),
+            )
+
+        self.push_screen(SessionPicker(options, title="Delete a session",
+                                       hint="Enter picks, Esc cancels. You will be asked to confirm."), picked)
+
+    @work(thread=True)
+    def _delete_session(self, chosen: str) -> None:
+        """Off the UI thread, like every other session change. Deleting the
+        session you are in resets first, which closes its store -- the file
+        cannot go while it is open on Windows -- then removes the file."""
+        try:
+            info = session_index.get(chosen)
+            if chosen == self.session.session_id:
+                self._reset_in_worker()
+            try:
+                session_index.delete(chosen)
+            except OSError as exc:
+                self.call_from_thread(self._post, f"[red]{exc}[/]")
+                return
+            self.call_from_thread(
+                self._post,
+                f"[dim]deleted {info.short_id if info else chosen[:8]} · {info.label if info else ''}[/]",
+                "meta",
+            )
+        finally:
+            self.call_from_thread(self._set_busy, False)
+
+    @work(thread=True)
+    def _load_session(self, ref: str, keep_workspace: bool = False) -> None:
+        """Off the UI thread, like `_reset_session`: `Session.load()` reads
+        the session's file back (agent/memory/wiring.py, restore=True). On
+        success the transcript shows what came back -- the compacted part
+        dim, then each recent turn as it was first posted -- and the usage
+        panel starts at nothing, because it says "this session" and this
+        session's earlier spend was in a process that is gone."""
+        try:
+            workspace_before = self.session.workspace
+            try:
+                info = self.session.load(ref)
+            except LookupError as exc:
+                self.call_from_thread(self._post, f"[red]{exc}[/]")
+                return
+            if keep_workspace:
+                self.session.workspace = workspace_before
             self._last_output = None
-            # The panel says "this session", so a new session starts it at
-            # nothing. Cleared in place rather than rebound: the widget holds
-            # the same object the turns record into.
             self.usage.by_model.clear()
             self._turn_tokens.clear()
             self._shown_spend = (0, 0.0)
+            earlier, messages = self.session.transcript()
+            self.call_from_thread(self._replay, info, earlier, messages)
             self.call_from_thread(self._refresh_usage)
-            self.call_from_thread(self._refresh_sidebar)
-            self.call_from_thread(self._post, "[dim]new session[/]")
+            self.call_from_thread(self._refresh_chrome)
         finally:
             self.call_from_thread(self._set_busy, False)
+
+    def _replay(self, info: session_index.SessionInfo, earlier: str, messages: list) -> None:
+        """UI thread: post a resumed session's history into the transcript."""
+        self._drop_empty_state()
+        self._post(f"[dim]resumed {info.short_id} · {info.label} · {info.turns} turn(s)[/]", "meta")
+        self._post(f"[dim]{describe_workspace(self.session.workspace)}[/]", classes="meta")
+        if earlier:
+            self._post(Group(Text("earlier, compacted", style="dim"), Text(""), Text(earlier, style="dim")), "meta")
+        for message in messages:
+            text = str(message.content)
+            if isinstance(message, HumanMessage):
+                self._post(f"[bold]you[/] {text}", "user")
+            else:
+                glyph, style = art.SPARKLE_FRAMES[-1]
+                self._post(self._answer_block(Markdown(text), glyph, style, "final"), "answer")
 
     # ---- setup, pins ----------------------------------------------------
 
@@ -1482,7 +1708,6 @@ class OttoApp(App):
                         if raw_output:
                             # Same reasoning as chat.py: a file survives copying,
                             # a live RichLog selection does not.
-                            self.session.turn += 1
                             path = save_final(self.session.session_id, self.session.turn, raw_output, None)
                             self.call_from_thread(self._post, f"[dim]saved to {path}[/]", "meta")
                         continue
@@ -1564,7 +1789,19 @@ def tui(
     ctx: typer.Context,
     workspace: Annotated[Optional[Path], typer.Option("--workspace", "-w", help=WORKSPACE_HELP)] = None,
     no_workspace: Annotated[bool, typer.Option("--no-workspace", help=NO_WORKSPACE_HELP)] = False,
+    resume: Annotated[Optional[str], typer.Option("--resume", "-r", help=RESUME_HELP)] = None,
 ) -> None:
     """Launch the full-screen TUI: the arrow-key-menu front end over the same
     pipeline `otto chat` drives."""
-    OttoApp(ctx.obj, workspace=resolve_workspace(workspace, no_workspace)).run()
+    if resume is not None:
+        # Fail at the prompt, not inside a full-screen app that has to be
+        # quit to read the message.
+        try:
+            session_index.resolve(resume)
+        except LookupError as exc:
+            err.print(f"[bad]{exc}[/]")
+            raise typer.Exit(1)
+    OttoApp(
+        ctx.obj, workspace=resolve_workspace(workspace, no_workspace), resume=resume,
+        keep_workspace=workspace is not None or no_workspace,
+    ).run()

@@ -176,6 +176,10 @@ Temporal and multi-hop are the weakest, which is what you would expect: both nee
 
 All of it is tunable from the CLI: `otto eval-memory --max-chunks --neighbours --token-budget`. `run_one_conversation(keep_store=True)` leaves the SQLite file behind so a live replay can be re-scored under different settings without paying for another pass of the summarizer — the expensive part of a `--live` run is producing the chunks and bullets, not scoring them.
 
+## Resuming a session (2026-09-13)
+
+Until now the file only ever received what compaction retired, so X and Y's raw items -- the whole conversation, for any session shorter than X's 24K tokens -- lived in the process and died with it. `MemoryStore` now carries a `pending` table mirroring the live tiers (`add_pending` on append, `demote_pending` when X overflows, `clear_pending('y')` once a compaction has written the raw text to `chunks`), and `TieredQueue(restore=True)` rebuilds `_x`, `_y_raw`, `_y_bullets` (from `current_bullets`) and `_generation` (from `latest_generation`) from it. Opt-in, because the benchmarks build queues over stores they control and must start from what they constructed. `agent/memory/sessions.py` is the index of sessions a person had (`~/.otto/sessions.db`: id, title, workspace, timestamps, turns), written by `Session.record_turn` on the first finished turn; `otto sessions`, `--resume`, `/sessions`, `/resume`, `/rename` and the TUI's "Sessions…" sit on top of it. tests/conftest.py now keeps the suite out of `~/.otto/memory` and the index -- 3,068 empty per-session files had accumulated there from test and benchmark runs, and `otto sessions --prune` removes that kind of file.
+
 ## What's still pending
 
 1. In-turn `context`/`board` growth (`agent/pipeline/nodes.py`) — currently no cap across overseer retry rounds. Needs a `TieredQueue(kind="context", ...)` per run, which needs a place to persist a live `TieredQueue` across multiple node calls within one LangGraph run — `history`'s per-`Session` object didn't have to solve this (a `Session` already lives for the whole CLI process); still open.

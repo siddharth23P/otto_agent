@@ -56,14 +56,28 @@ def summarize_for_memory(prompt: str) -> str:
     return _call(llm, [SystemMessage(_SUMMARIZE_SYSTEM_PROMPT), HumanMessage(prompt)])
 
 
-def new_history_queue(session_id: str) -> TieredQueue:
-    """A fresh `kind="history"` TieredQueue backed by this session's own
-    SQLite store (agent/memory/store.py's `~/.otto/memory/<session_id>.db`
+def new_history_queue(session_id: str, *, restore: bool = False) -> TieredQueue:
+    """A `kind="history"` TieredQueue backed by this session's own SQLite
+    store (agent/memory/store.py's `~/.otto/memory/<session_id>.db`
     convention) -- one per otto chat/tui `Session` (agent/cli/shell.py),
     rebuilt on `/new`/"new session" exactly like the session id itself is.
+
+    `restore=True` is what `/resume` and `--resume` pass (agent/cli/
+    shell.py's `Session.load`): the queue reads back whatever the last
+    process left in that file -- recent turns verbatim, older ones as the
+    bullets they were compacted into -- instead of starting empty over a
+    file that is not.
     """
     store = MemoryStore.for_session(session_id)
-    return TieredQueue(kind="history", store=store, summarize=summarize_for_memory)
+    return TieredQueue(kind="history", store=store, summarize=summarize_for_memory, restore=restore)
+
+
+def recent_messages(queue: TieredQueue) -> list[BaseMessage]:
+    """X's verbatim items as typed messages -- the first half of
+    `history_for_graph()`, on its own, for a front end that wants to show a
+    resumed session's recent turns the way they were originally posted
+    (yours on one side, otto's on the other) rather than as prompt text."""
+    return [_to_message(item) for item in queue.recent_items]
 
 
 def _speaker_prefix(message: BaseMessage) -> str:
@@ -126,7 +140,7 @@ def history_for_graph(queue: TieredQueue) -> tuple[list[BaseMessage], str]:
     already displays via its existing "CONTEXT GATHERED SO FAR:" section --
     no new prompt plumbing needed on that side at all.
     """
-    messages = [_to_message(item) for item in queue.recent_items]
+    messages = recent_messages(queue)
     earlier = queue.earlier_view()
     memory_context = f"EARLIER CONVERSATION (compacted -- older than what's shown above):\n{earlier}" if earlier else ""
     return messages, memory_context

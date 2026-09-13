@@ -33,6 +33,7 @@ from agent.router.mapping import Task
 __all__ = [
     "TaskPicker", "ScoreDialog", "AskUserModal",
     "PathPicker", "WorkspacePrompt", "ModelPinDialog", "FilteredDirectoryTree",
+    "SessionPicker", "RenameDialog", "ConfirmDialog",
 ]
 
 
@@ -454,3 +455,116 @@ class ModelPinDialog(ModalScreen[str | None]):
 
     def key_escape(self) -> None:
         self.dismiss(None)
+
+
+# --------------------------------------------------------------------------
+# Saved sessions: pick one back up, or name this one
+# --------------------------------------------------------------------------
+
+class SessionPicker(ModalScreen[str | None]):
+    """One `OptionList` of saved sessions, newest first, each line the same
+    shape `otto sessions` prints. Dismisses with the chosen session id, or
+    None on Esc. Arrow keys and Enter, two keystrokes from the palette."""
+
+    DEFAULT_CSS = """
+    SessionPicker { align: center middle; }
+    SessionPicker > Vertical { width: 90; height: auto; max-height: 80%; border: round $accent; padding: 1 2; }
+    SessionPicker .hint { margin-bottom: 1; }
+    SessionPicker OptionList { height: auto; max-height: 20; }
+    """
+
+    def __init__(self, options: list[tuple[str, str]], *, title: str = "Resume a session",
+                 hint: str = "Enter picks, Esc cancels. Its workspace comes back with it.") -> None:
+        """`options` is `(label, session_id)` pairs in the order to show.
+        `title`/`hint` let the same list serve "which one to delete"."""
+        super().__init__()
+        self._options = options
+        self._title = title
+        self._hint = hint
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(f"[bold]{self._title}[/]\n[dim]{self._hint}[/]", classes="hint")
+            yield OptionList(*[Option(label, id=sid) for label, sid in self._options], id="sessions")
+
+    def on_mount(self) -> None:
+        options = self.query_one("#sessions", OptionList)
+        # Nothing is highlighted until a key moves the cursor, so a bare
+        # Enter would pick nothing. The newest session is the first row and
+        # the likeliest pick, so it starts under the cursor.
+        options.highlighted = 0
+        options.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self.dismiss(str(event.option.id))
+
+    def key_escape(self) -> None:
+        self.dismiss(None)
+
+
+class RenameDialog(ModalScreen[str | None]):
+    """A single Input for the session's title. Dismisses with the text, or
+    None on Esc / empty. Stops its own submission like every modal here."""
+
+    DEFAULT_CSS = """
+    RenameDialog { align: center middle; }
+    RenameDialog > Vertical { width: 72; height: auto; border: round $accent; padding: 1 2; }
+    RenameDialog .hint { margin-bottom: 1; }
+    """
+
+    def __init__(self, current: str = "") -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("[bold]Rename this session[/]\n[dim]Enter saves, Esc cancels.[/]", classes="hint")
+            yield Input(value=self._current, placeholder="a title", id="title")
+
+    def on_mount(self) -> None:
+        self.query_one("#title", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        title = event.value.strip()
+        self.dismiss(title or None)
+
+    def key_escape(self) -> None:
+        self.dismiss(None)
+
+
+class ConfirmDialog(ModalScreen[bool]):
+    """One question, two buttons. Dismisses True only on the explicit
+    yes; Esc and the other button are both no -- the shape a destructive
+    action needs, since the cheap answer must be the safe one."""
+
+    DEFAULT_CSS = """
+    ConfirmDialog { align: center middle; }
+    ConfirmDialog > Vertical { width: 72; height: auto; border: round $error; padding: 1 2; }
+    ConfirmDialog .question { margin-bottom: 1; }
+    ConfirmDialog Horizontal { height: auto; }
+    ConfirmDialog Button { margin-right: 2; }
+    """
+
+    def __init__(self, question: str, *, yes: str = "Delete") -> None:
+        super().__init__()
+        self._question = question
+        self._yes = yes
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self._question, classes="question")
+            with Horizontal():
+                yield Button(self._yes, variant="error", id="yes")
+                yield Button("Cancel", id="no")
+
+    def on_mount(self) -> None:
+        self.query_one("#no", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(event.button.id == "yes")
+
+    def key_escape(self) -> None:
+        self.dismiss(False)

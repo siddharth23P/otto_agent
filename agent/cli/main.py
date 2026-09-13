@@ -33,6 +33,7 @@ from agent.cli import eval_memory as eval_memory_cmd
 from agent.cli import lessons as lessons_cmd
 from agent.cli import models as model_cmd
 from agent.cli import route as route_cmd
+from agent.cli import sessions as sessions_cmd
 from agent.cli import chat as chat_cmd
 from agent.cli import tui as tui_cmd
 
@@ -58,6 +59,7 @@ for _name, _fn in (
     ("eval-compaction", eval_compaction_cmd.eval_compaction_cmd),
     ("eval-swe", eval_swe_cmd.eval_swe_cmd),
     ("lessons", lessons_cmd.lessons_cmd),
+    ("sessions", sessions_cmd.sessions_cmd),
 ):
     app.command(_name)(friendly(_fn))
 

@@ -318,6 +318,7 @@ class TieredQueue:
         y_budget: int = Y_BUDGET,
         reabstract: bool = REABSTRACT,
         protect: str = PROTECT_PREFIX,
+        restore: bool = False,
     ) -> None:
         self.kind = kind
         self.store = store
@@ -330,6 +331,29 @@ class TieredQueue:
         self._y_raw: list[str] = []
         self._y_bullets: list[NewBullet] = []
         self._generation = 0
+        if restore:
+            self._restore()
+
+    def _restore(self) -> None:
+        """Pick up where the last process left this `kind` of this store:
+        X and Y's verbatim items from the store's `pending` mirror, Y's
+        bullets from its current (non-superseded) generation, and the
+        generation counter from the newest one written -- so the next
+        compaction supersedes what is there rather than colliding with it.
+
+        Opt-in (`restore=True`) rather than the constructor's default, and
+        not because a fresh session would find anything -- it would not,
+        its file is new -- but because every benchmark in agent/eval/ builds
+        queues over stores it controls and must start from exactly the
+        state it constructed, never from whatever a previous run left.
+        """
+        for tier, text in self.store.pending(self.kind):
+            (self._x if tier == "x" else self._y_raw).append(text)
+        self._y_bullets = [
+            NewBullet(text=b.text, hash_refs=list(b.hash_refs))
+            for b in self.store.current_bullets(self.kind)
+        ]
+        self._generation = self.store.latest_generation(self.kind)
 
     # ---- writing -----------------------------------------------------
 
@@ -337,9 +361,15 @@ class TieredQueue:
         if not text:
             return
         self._x.append(text)
+        # Mirrored to disk as it happens (agent/memory/store.py's `pending`),
+        # so a session can be resumed after this process ends -- before
+        # this, the only route to disk was compaction, and most sessions
+        # end long before their first one.
+        self.store.add_pending(self.kind, text)
         if self._tokens(self._x) > self.x_budget:
             self._y_raw.extend(self._x)
             self._x = []
+            self.store.demote_pending(self.kind)
             self._compact_y_if_full()
 
     def _shed_oldest(self, bullets: list[NewBullet]) -> list[NewBullet]:
@@ -444,6 +474,9 @@ class TieredQueue:
             self.store.add_bullet(self.kind, self._generation, bullet.text, bullet.hash_refs, embedding)
 
         self.store.supersede_bullets(self.kind, before_generation=self._generation)
+        # Y's raw text is in `chunks` now (add_chunk, above), so its mirror
+        # rows have nothing left to preserve.
+        self.store.clear_pending(self.kind, "y")
 
         self._y_raw = []
         self._y_bullets = new_bullets

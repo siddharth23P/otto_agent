@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
@@ -59,7 +59,9 @@ from agent.cli.context import AppContext
 from agent.cli.doctor import health_table, router_view
 from agent.cli.models import models_table
 from agent.cli.route import _chain, _summary
+from agent.cli.sessions import sessions_table
 from agent.cli.ui import err, out
+from agent.memory import sessions as session_index
 from agent.memory import wiring as memory_wiring
 from agent.memory.queue import TieredQueue
 from agent.router.llm_provider import all_models
@@ -79,8 +81,14 @@ class Session:
     #: thread actually consumes the stream, which for the TUI is not this one.
     workspace: Path | None = None
     #: Counts turns that actually produced output, for output.py's filenames
-    #: -- not every dispatched line (slash commands don't count).
+    #: -- not every dispatched line (slash commands don't count). Advanced by
+    #: `record_turn` (2026-09-13), which is also what writes it to the
+    #: session index, so the two cannot disagree about how far a session got.
     turn: int = 0
+    #: What the session index calls this session (agent/memory/sessions.py):
+    #: the first message, cut short, until `/rename`. Empty until the first
+    #: turn is recorded -- an unnamed session is one nothing has happened in.
+    title: str = ""
     #: This session's own bounded conversation memory (module docstring) --
     #: `init=False`/set in __post_init__ rather than a `field(default_factory=...)`
     #: because building one needs `session_id`, which isn't available yet
@@ -110,8 +118,66 @@ class Session:
         """Write one finished turn into this session's memory -- `ai` is
         None for a turn that produced no final output (nothing worth
         remembering as "otto said"), same as chat.py/tui.py already treat
-        an empty `raw_output` as nothing to save to disk."""
+        an empty `raw_output` as nothing to save to disk.
+
+        Also counts the turn (when it produced output) and registers the
+        session in the index (agent/memory/sessions.py) -- creating its row
+        on the first turn, titled from what the person said, and bumping
+        its activity after. Here rather than in the two front ends because
+        both must do exactly this and neither may forget: a session the
+        index does not know is one `/resume` cannot find.
+        """
         memory_wiring.record_turn(self.history_queue, human, ai)
+        if ai is not None:
+            self.turn += 1
+        info = session_index.touch(
+            self.session_id,
+            title=self.title or session_index.title_from(str(human.content)),
+            workspace=self.workspace, turns=self.turn,
+        )
+        self.title = info.title
+
+    def load(self, ref: str) -> session_index.SessionInfo:
+        """Adopt a saved session in place -- the counterpart of `reset()`,
+        which mints a new one. `ref` is what agent/memory/sessions.py's
+        `resolve` accepts: "last", an id, or a unique prefix; LookupError
+        for anything else, with the reason in the message.
+
+        The saved workspace comes back with it when the directory still
+        exists: a session about a repository is still about that repository.
+        A caller with an explicit `--workspace` sets it after this returns.
+        Memory is the session's own file, read back rather than started
+        over (agent/memory/wiring.py's `restore=True`).
+        """
+        info = session_index.resolve(ref)
+        self.close()
+        self.session_id = info.id
+        self.trace_id = None
+        self.turn = info.turns
+        self.title = info.title
+        self.history_queue = memory_wiring.new_history_queue(info.id, restore=True)
+        if info.workspace and Path(info.workspace).is_dir():
+            self.workspace = Path(info.workspace)
+        return info
+
+    def rename(self, title: str) -> None:
+        self.title = session_index.rename(self.session_id, title, workspace=self.workspace).title
+
+    def transcript(self) -> tuple[str, list[BaseMessage]]:
+        """What a resumed session has to show for itself: everything older
+        than the recent turns as the compacted text the model will see, and
+        the recent turns as typed messages -- exactly what the next turn's
+        prompt is built from, so what is on screen is what otto knows."""
+        return self.history_queue.earlier_view(), memory_wiring.recent_messages(self.history_queue)
+
+    def close(self) -> None:
+        """Release this session's memory file. `reset()`/`load()` call it on
+        the store they replace, and anything about to delete the session
+        must call it first: Windows will not delete a file a connection
+        still holds open (CI's windows-latest job found this), and POSIX
+        would -- silently, leaving the connection writing into an unlinked
+        inode. Safe to call twice."""
+        self.history_queue.store.close()
 
     def reset(self) -> None:
         """New session, new memory -- `/new` (chat.py)/"new session"
@@ -122,9 +188,11 @@ class Session:
         disk, keyed by its own now-abandoned session_id, exactly as
         harmless and exactly as inaccessible as it always was once a
         session ended)."""
+        self.close()
         self.session_id = uuid.uuid4().hex
         self.trace_id = None
         self.turn = 0
+        self.title = ""
         self.history_queue = memory_wiring.new_history_queue(self.session_id)
         # `workspace` is deliberately NOT reset: "clear history, start fresh"
         # is about the conversation, and a person who opened otto on a repo and
@@ -217,6 +285,56 @@ def _new_cmd(session: Session, arg: str) -> None:
     err.print("[muted]new session[/]")
 
 
+def render_transcript(session: Session, sink: Callable[[object], None] | None = None) -> None:
+    """Print a resumed session's history the way it was first shown: the
+    compacted part as one dim panel, then each recent turn as the same
+    "you" line and final panel chat.py posts live. Shared shape with the
+    TUI's own replay, which posts the same pieces into its transcript.
+    `sink` defaults to the REPL console at call time, not definition time,
+    so a test that swaps the console sees what this prints."""
+    sink = sink or out.print
+    earlier, messages = session.transcript()
+    if earlier:
+        sink(Panel(earlier, title="[muted]earlier, compacted[/]", border_style="muted"))
+    for message in messages:
+        text = str(message.content)
+        if isinstance(message, HumanMessage):
+            sink(f"[bold]you[/] {text}")
+        else:
+            sink(Panel(Markdown(text), title="[spec]final[/]", border_style="ok"))
+
+
+def _sessions_cmd(session: Session, arg: str) -> None:
+    rows = session_index.list_sessions(limit=20)
+    if not rows:
+        out.print("[muted]no saved sessions yet -- a session is saved once a turn finishes[/]")
+        return
+    out.print(sessions_table(rows, current=session.session_id))
+    out.print("[muted]/resume <id> picks one up; /resume last is the newest[/]")
+
+
+def _resume_cmd(session: Session, arg: str) -> None:
+    if not arg:
+        err.print("[warn]usage: /resume <id or prefix | last>[/]")
+        return
+    try:
+        info = session.load(arg)
+    except LookupError as exc:
+        err.print(f"[warn]{exc}[/]")
+        return
+    err.print(f"[muted]resumed {info.short_id} · {info.label} · {info.turns} turn(s)[/]")
+    err.print(f"[muted]{describe_workspace(session.workspace)}[/]")
+    render_transcript(session)
+
+
+def _rename_cmd(session: Session, arg: str) -> None:
+    if not arg:
+        err.print("[warn]usage: /rename <title>[/]")
+        return
+    session.rename(arg)
+    err.print(f"[muted]session is now called {session.title!r}[/]")
+
+
 def resolve_workspace(chosen: Path | None, disabled: bool) -> Path | None:
     """What `--workspace PATH` / `--no-workspace` / neither actually means.
 
@@ -300,6 +418,12 @@ COMMANDS: dict[str, Slash] = {
     "/bad": Slash("/bad", "score the last answer 0.0", _bad_cmd),
     "/score": Slash("/score", r"score the last answer <0-1> \[comment]", _score_cmd),
     "/new": Slash("/new", "clear history, start a fresh session", _new_cmd),
+    "/sessions": Slash("/sessions", "list saved sessions, newest first", _sessions_cmd),
+    "/resume": Slash(
+        "/resume", "pick a saved session back up: <id or prefix>, or last", _resume_cmd,
+        lambda: ["last", *(r.short_id for r in session_index.list_sessions(limit=10))],
+    ),
+    "/rename": Slash("/rename", "give this session a title", _rename_cmd),
     "/workspace": Slash(
         "/workspace", "show the working directory, or <path> to change it (off to close)",
         _workspace_cmd, lambda: ["off"],
