@@ -26,6 +26,8 @@ before the attempt existed.
 
 ## What a run does
 
+![a run mid-judgment: the trace, the evidence hold, the exercise walkthrough, the verdict](../../docs/media/run-trace-and-judge.png)
+
 1. **The rubric.** One call writes what a correct answer must contain, from
    the task alone, before any attempt exists. It is the only information in
    the judgment the actor did not produce: a verifier that re-reads the
@@ -86,6 +88,8 @@ open on the checklist, and whether the agent should build itself a tool.
 Periodic, not constant, because said every turn they become wallpaper.
 
 ## Tools
+
+![todo.py written, exercised in three steps, judged 3/3](../../docs/media/exercise-todo-cli.png)
 
 | tool | tier | does |
 | --- | --- | --- |

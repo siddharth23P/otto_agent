@@ -27,6 +27,10 @@ failure is a one-line message rather than a traceback.
 
 ## The TUI
 
+![the setup screen](../../docs/media/setup-screen.png)
+
+![the Resume a session picker](../../docs/media/sessions-picker.png)
+
 - **Setup** (`f2`, or automatic when no key is configured): one row per
   vendor plus any named OpenAI-compatible endpoint (an OpenRouter key, a
   remote vLLM, Ollama); keys are written masked to the repository's `.env`;

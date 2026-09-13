@@ -79,6 +79,8 @@ rate limit degrades a compaction flush instead of taking it down.
 
 ## Sessions
 
+![a resumed session with its history replayed and a new turn in progress](../../docs/media/session-resumed-thinking.png)
+
 The live tiers are mirrored to a `pending` table on every append, demoted on
 `X` overflow and cleared once a compaction has retired their text to
 `chunks`, so `TieredQueue(restore=True)` rebuilds the exact in-memory state.

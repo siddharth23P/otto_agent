@@ -3,7 +3,7 @@
 [![tests](https://github.com/siddharth23P/otto_agent/actions/workflows/tests.yml/badge.svg)](https://github.com/siddharth23P/otto_agent/actions/workflows/tests.yml)
 ![python](https://img.shields.io/badge/python-3.12-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![tests](https://img.shields.io/badge/tests-1534%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-1552%20passed-brightgreen)
 
 Otto is a terminal AI agent that works on a codebase, a container, a browser
 or a desktop, uses what it built, and judges its own work against criteria it
@@ -34,12 +34,55 @@ with the measurement behind each change, is [docs/HISTORY.md](docs/HISTORY.md).
 
 ## See it run
 
-A one-minute recording of `otto tui`: a request to write and run a script,
-the tool trace and the judge as they happen, the answer with its model and
-time, the token and dollar ledger, then a greeting answered on the two-call
-fast path.
+![otto tui: a request to write and run a script, the tool trace and the judge as they happen, the answer, the ledger, then a greeting on the fast path](docs/media/otto-demo.gif)
 
-[otto-demo.mp4](https://github.com/siddharth23P/otto_agent/releases/download/v0.1.0/otto-demo.mp4) (2.2 MB, from the [v0.1.0 release](https://github.com/siddharth23P/otto_agent/releases/tag/v0.1.0))
+One minute of `otto tui`, unedited. Full quality:
+[otto-demo.mp4](https://github.com/siddharth23P/otto_agent/releases/download/v0.1.0/otto-demo.mp4)
+(2.2 MB, from the [v0.1.0 release](https://github.com/siddharth23P/otto_agent/releases/tag/v0.1.0)).
+
+Every screenshot below is a real run, taken while the thinking block was
+open, so the tool trace, the holds and the judge are visible.
+
+**The run, mid-judgment.** The agent wrote `fib.py`, was held once for
+running it without checking anything, exercised it against expected
+output, and the judge is scoring the answer against the two criteria it
+wrote before the attempt existed.
+
+![the tool trace, the evidence hold, the exercise walkthrough and the judge's verdict](docs/media/run-trace-and-judge.png)
+
+**Using what it built.** Asked for a small CLI, the agent wrote `todo.py`,
+walked through it with `exercise` (three steps, all passed), checked the
+files, and the judge approved on 3 of 3 criteria.
+
+![todo.py written, exercised in three steps, judged 3/3](docs/media/exercise-todo-cli.png)
+
+**Working on a codebase.** Asked where `TieredQueue` is defined and what
+uses it, with this repository as the workspace; the answer lists file paths
+and line numbers from `code_map` while the judge reads it.
+
+![code_map answering where a class is defined and which modules use it](docs/media/codebase-code-map.png)
+
+**Sessions.** Every turn is saved as it finishes. The picker lists what was
+saved, with its title, turns and workspace, and picking one brings its
+history and workspace back.
+
+![the Resume a session picker in the palette](docs/media/sessions-picker.png)
+
+**A resumed session, mid-turn.** Three earlier turns replayed, then a new
+request: read, edit, exercise with an expected output, the hold, and the
+judge checking, in one open trace.
+
+![a resumed session with its history replayed and a new turn in progress](docs/media/session-resumed-thinking.png)
+
+**Setup.** Providers with masked keys and a live probe, then models, then a
+per-seat mapping with pins.
+
+![the setup screen's Providers tab](docs/media/setup-screen.png)
+
+**The palette.** "Check providers" and "Route a task" run inside the
+transcript without spending a turn.
+
+![otto doctor and a route lookup from the command palette](docs/media/palette-doctor-route.png)
 
 ## Install
 
@@ -160,7 +203,7 @@ The pieces, each documented in its own folder:
 | [agent/eval](agent/eval/README.md) | the six benchmark harnesses, the failure taxonomy, the single-agent control |
 | [agent/config](agent/config/README.md) | the one `.env` file Otto reads and writes |
 | [containers](containers/README.md) | the throwaway desktop image the screen tools drive |
-| [tests](tests/README.md) | 1,534 tests that need no key and no network |
+| [tests](tests/README.md) | 1,552 tests that need no key and no network |
 | [docs](docs/README.md) | the development log, the research sources, the memory design |
 
 ## Evaluation
@@ -175,7 +218,7 @@ enforce: [agent/eval/README.md](agent/eval/README.md).
 
 ## Testing
 
-1,534 tests pass and 12 skip on macOS, Linux and Windows in under two minutes,
+1,552 tests pass and 12 skip on macOS, Linux and Windows in under two minutes,
 with no API keys and no network. Tests assert on the messages handed to the
 model, on the exact inputs that broke real runs, on call counts against the
 real compiled graph, and directly on the library behaviours the code relies
