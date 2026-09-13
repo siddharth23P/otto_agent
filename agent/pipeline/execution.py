@@ -48,11 +48,17 @@ def bind_command_runner(runner: CommandRunner | None) -> Iterator[None]:
     task and unbind between them without leaking one task's container into
     the next.
     """
+    previous = _current.get()
     token = _current.set(runner)
     try:
         yield
     finally:
-        _current.reset(token)
+        try:
+            _current.reset(token)
+        except ValueError:
+            # Unwound from a different context: a streaming run finalised
+            # on another thread (agent/pipeline/tracing.py).
+            _current.set(previous)
 
 
 def current_command_runner() -> CommandRunner | None:

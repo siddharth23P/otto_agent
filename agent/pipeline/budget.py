@@ -372,11 +372,18 @@ def bind_budget(budget: Budget | None) -> Iterator[Budget | None]:
     time a person spent answering an `ask_user` question is not the agent's,
     and an absolute deadline carried across would arrive already spent.
     """
+    previous = _current.get()
     token = _current.set(budget)
     try:
         yield budget
     finally:
-        _current.reset(token)
+        try:
+            _current.reset(token)
+        except ValueError:
+            # Unwound from a different context: a streaming run finalised
+            # on another thread (agent/pipeline/tracing.py). Restore by
+            # value instead of by token.
+            _current.set(previous)
 
 
 def current_budget() -> Budget | None:

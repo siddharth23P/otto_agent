@@ -93,11 +93,17 @@ def bind_extra_tools(tools: list[ExtraTool] | Mapping[str, ExtraTool] | None) ->
         mapping = dict(tools)
     else:
         mapping = {t.name: t for t in tools}
+    previous = _current.get()
     token = _current.set(mapping)
     try:
         yield
     finally:
-        _current.reset(token)
+        try:
+            _current.reset(token)
+        except ValueError:
+            # Unwound from a different context: a streaming run finalised
+            # on another thread (agent/pipeline/tracing.py).
+            _current.set(previous)
 
 
 def current_extra_tools() -> Mapping[str, ExtraTool]:

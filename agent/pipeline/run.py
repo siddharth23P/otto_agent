@@ -100,9 +100,6 @@ from contextlib import nullcontext
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from langfuse import get_client, propagate_attributes
-from langfuse.langchain import CallbackHandler
-
 from langgraph.types import Command
 
 from agent.memory.session import bind_store
@@ -110,6 +107,7 @@ from agent.pipeline.budget import bind_budget, current_budget, default_budget
 from agent.memory.store import MemoryStore
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
 from agent.pipeline.state import AgentState
+from agent.pipeline.tracing import callback_handler, closing_in_foreign_context, observe_run
 from agent.pipeline.usage import UsageLedger, bind_usage, current_usage
 from agent.pipeline.workspace import bind_workspace
 
@@ -158,7 +156,7 @@ def _config(graph_thread_id: str, handler) -> dict:
     return {
         "recursion_limit": _RECURSION_SAFETY_NET,
         "configurable": {"thread_id": graph_thread_id},
-        "callbacks": [handler],
+        "callbacks": [handler] if handler is not None else [],
     }
 
 
@@ -346,8 +344,7 @@ def run_pipeline(
         logger.warning("prewarm: %s", failures)
 
     initial = _initial(text, history=history, memory_context=memory_context)
-    client = get_client()
-    handler = CallbackHandler()
+    handler = callback_handler()
     config = _config(_graph_thread_id(session_id), handler)
     store = MemoryStore.for_session(session_id)
     # A run with nobody watching still needs a ceiling. Both benchmark harnesses
@@ -359,14 +356,7 @@ def run_pipeline(
     ledger = usage or current_usage() or UsageLedger()
 
     with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
-        with propagate_attributes(
-            trace_name="otto:pipeline",
-            session_id=session_id,
-            tags=["pipeline"],
-        ):
-            with client.start_as_current_observation(
-                name="otto:pipeline", as_type="agent", input=text
-            ) as run_span:
+        with observe_run(session_id=session_id, name="otto:pipeline", input=text, tags=["pipeline"]) as run_span:
                 try:
                     final = _salvage(app.invoke(initial, config))
                 except Exception as exc:
@@ -390,7 +380,7 @@ def run_pipeline(
     return final
 
 
-def run_pipeline_stream(
+def _run_pipeline_stream(
     text: str, *, session_id: str, history: Sequence[BaseMessage] = (),
     memory_context: str = "", workspace: str | None = None,
     usage: UsageLedger | None = None,
@@ -423,8 +413,7 @@ def run_pipeline_stream(
         logger.warning("prewarm: %s", failures)
 
     initial = _initial(text, history=history, memory_context=memory_context)
-    client = get_client()
-    handler = CallbackHandler()
+    handler = callback_handler()
     graph_thread_id = _graph_thread_id(session_id)
     config = _config(graph_thread_id, handler)
     store = MemoryStore.for_session(session_id)
@@ -440,14 +429,7 @@ def run_pipeline_stream(
     # throwaway -- agent/pipeline/usage.py.
     ledger = usage or current_usage() or UsageLedger()
     with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
-        with propagate_attributes(
-            trace_name="otto:pipeline",
-            session_id=session_id,
-            tags=["pipeline"],
-        ):
-            with client.start_as_current_observation(
-                name="otto:pipeline", as_type="agent", input=text
-            ) as run_span:
+        with observe_run(session_id=session_id, name="otto:pipeline", input=text, tags=["pipeline"]) as run_span:
                 stream = app.stream(initial, config, stream_mode=_STREAM_MODES)
                 for event, is_ask in _stream_events(stream, graph_thread_id):
                     if is_ask:
@@ -462,7 +444,7 @@ def run_pipeline_stream(
     yield {"__final__": final, "__trace_id__": trace_id}
 
 
-def resume_pipeline_stream(
+def _resume_pipeline_stream(
     answer, *, thread_id: str, session_id: str, workspace: str | None = None,
     usage: UsageLedger | None = None,
 ):
@@ -484,8 +466,7 @@ def resume_pipeline_stream(
     memory") -- recall_memory stays usable after a resume, not just on a
     run's first `run_pipeline_stream()` call.
     """
-    client = get_client()
-    handler = CallbackHandler()
+    handler = callback_handler()
     config = _config(thread_id, handler)
     store = MemoryStore.for_session(session_id)
     # A run with nobody watching still needs a ceiling. Both benchmark harnesses
@@ -500,14 +481,7 @@ def resume_pipeline_stream(
     # throwaway -- agent/pipeline/usage.py.
     ledger = usage or current_usage() or UsageLedger()
     with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
-        with propagate_attributes(
-            trace_name="otto:pipeline",
-            session_id=session_id,
-            tags=["pipeline", "resumed"],
-        ):
-            with client.start_as_current_observation(
-                name="otto:pipeline:resume", as_type="agent", input=str(answer)
-            ) as run_span:
+        with observe_run(session_id=session_id, name="otto:pipeline:resume", input=str(answer), tags=["pipeline", "resumed"]) as run_span:
                 stream = app.stream(Command(resume=answer), config, stream_mode=_STREAM_MODES)
                 for event, is_ask in _stream_events(stream, thread_id):
                     if is_ask:
@@ -520,3 +494,35 @@ def resume_pipeline_stream(
                 trace_id = run_span.trace_id
 
     yield {"__final__": final, "__trace_id__": trace_id}
+
+
+def run_pipeline_stream(*args, **kwargs):
+    """`_run_pipeline_stream`, closed quietly when the front end has gone.
+
+    A streaming run holds contextvars and a tracing context across its
+    yields. Quit the TUI mid-turn and the generator is finalised by whatever
+    thread the garbage collector is on, where those tokens cannot be reset
+    (agent/pipeline/tracing.py). That is the only ValueError swallowed here;
+    every other one still surfaces.
+    """
+    try:
+        yield from _run_pipeline_stream(*args, **kwargs)
+    except ValueError as exc:
+        if not closing_in_foreign_context(exc):
+            raise
+
+
+def resume_pipeline_stream(*args, **kwargs):
+    """`_resume_pipeline_stream`, with the same quiet close as
+    `run_pipeline_stream`."""
+    try:
+        yield from _resume_pipeline_stream(*args, **kwargs)
+    except ValueError as exc:
+        if not closing_in_foreign_context(exc):
+            raise
+
+
+# `inspect.getsource` follows `__wrapped__`, so a reader (and
+# tests/test_budget.py) sees the body that binds the budget, not the wrapper.
+run_pipeline_stream.__wrapped__ = _run_pipeline_stream  # type: ignore[attr-defined]
+resume_pipeline_stream.__wrapped__ = _resume_pipeline_stream  # type: ignore[attr-defined]

@@ -37,11 +37,17 @@ def bind_store(store: MemoryStore | None) -> Iterator[None]:
     exit, so a nested bind (there shouldn't be one today, but nothing here
     assumes there won't ever be) unwinds correctly.
     """
+    previous = _current.get()
     token = _current.set(store)
     try:
         yield
     finally:
-        _current.reset(token)
+        try:
+            _current.reset(token)
+        except ValueError:
+            # Unwound from a different context: a streaming run finalised
+            # on another thread. Restore by value instead of by token.
+            _current.set(previous)
 
 
 def current_store() -> MemoryStore | None:

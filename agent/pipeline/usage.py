@@ -226,11 +226,17 @@ def bind_usage(ledger: UsageLedger | None) -> Iterator[UsageLedger | None]:
     whole session and hands the same one to every turn and every resume, so
     what it shows is cumulative without anything having to add snapshots up.
     """
+    previous = _current.get()
     token = _current.set(ledger)
     try:
         yield ledger
     finally:
-        _current.reset(token)
+        try:
+            _current.reset(token)
+        except ValueError:
+            # Unwound from a different context: a streaming run finalised
+            # on another thread (agent/pipeline/tracing.py).
+            _current.set(previous)
 
 
 def current_usage() -> UsageLedger | None:

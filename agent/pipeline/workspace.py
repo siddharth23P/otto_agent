@@ -109,11 +109,17 @@ def bind_workspace(path: Path | str | None) -> Iterator[Path | None]:
     if path is not None:
         resolved = Path(path).expanduser().resolve()
         resolved.mkdir(parents=True, exist_ok=True)
+    previous = _current.get()
     token = _current.set(resolved)
     try:
         yield resolved
     finally:
-        _current.reset(token)
+        try:
+            _current.reset(token)
+        except ValueError:
+            # Unwound from a different context: a streaming run finalised
+            # on another thread (agent/pipeline/tracing.py).
+            _current.set(previous)
 
 
 def current_workspace() -> Path | None:
