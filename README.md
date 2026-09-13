@@ -32,6 +32,23 @@ with the measurement behind each change, is [docs/HISTORY.md](docs/HISTORY.md).
 | Golden set of 20 code, math and NP-hard tasks with real checkers | 20/20 |
 | SWE-bench Verified, graded by each repository's own tests | 2 resolved of 3 soundly graded, with a control run on an untouched repository as part of the harness |
 
+## See it run
+
+An 85-second fullscreen recording of `otto tui`: a request to write and run
+a script, the tool trace and the judge as they happen, the answer with its
+model and time, the token and dollar ledger, then a greeting answered on the
+two-call fast path.
+
+[otto-demo.mov](https://github.com/siddharth23P/otto_agent/releases/download/v0.1.0/otto-demo.mov) (19 MB, from the [v0.1.0 release](https://github.com/siddharth23P/otto_agent/releases/tag/v0.1.0))
+
+## Install
+
+The wheel and sdist are attached to every release:
+
+```bash
+pip install https://github.com/siddharth23P/otto_agent/releases/download/v0.1.0/otto_cli_agent-0.1.0-py3-none-any.whl
+```
+
 ## Quick start
 
 ```bash
