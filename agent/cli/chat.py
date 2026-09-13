@@ -30,8 +30,8 @@ what the run is doing and how long it has been doing it. Ctrl-C sets the
 same seam's cancel Event rather than killing the process, so a turn started
 by mistake ends within one model call instead of having to be waited out.
 
-Bounded conversation memory (2026-09-10, same day, Phase 2 of claude/
-otto-tiered-memory-design.md): `_run_turn` used to read `s.history[:-1]` --
+Bounded conversation memory (2026-09-10, same day, Phase 2 of
+docs/design/tiered-memory.md): `_run_turn` used to read `s.history[:-1]` --
 an unbounded, ever-growing raw list `chat()` appended this turn's own
 HumanMessage onto just before calling `_run_turn`, then appended the reply
 onto after. `Session` now keeps that history in a bounded

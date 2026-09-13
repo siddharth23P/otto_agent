@@ -17,3 +17,9 @@ agent/eval/data/*.json
 agent/eval/data/*.parquet
 agent/eval/data/**/*.parquet
 agent/eval/data/**/*.tar.gz
+
+# local caches and tooling state
+.pytest_cache/
+.claude/
+# per-run research documents (agent/pipeline/research.py)
+otto_research/

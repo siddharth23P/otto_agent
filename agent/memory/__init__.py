@@ -34,7 +34,7 @@ cross that boundary, since bridging it is their whole job:
                    real LangChain messages for agent/cli/shell.py's
                    `Session` and agent/pipeline/run.py.
 
-See claude/otto-tiered-memory-design.md in the project for the full design.
+See docs/design/tiered-memory.md in the project for the full design.
 As of Phase 2: cross-turn conversation history IS wired in (Session, via
 wiring.py/session.py); in-turn context/board growth within a single graph
 run is NOT yet -- it needs a place to persist a live TieredQueue across

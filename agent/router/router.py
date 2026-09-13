@@ -180,7 +180,7 @@ class Router:
     anything else with a valid key was skipped as "not the selected secondary".
     That single-secondary rule existed to give Phase 8's plain hive
     (`agent/graph/nodes.py`, `agent/graph/run.py`) one alternate vendor for
-    seat diversity -- and `agent/graph/` is now an empty package. The only
+    seat diversity -- and `agent/graph/` has since been removed. The only
     readers left were two display rows in `agent/cli/doctor.py`.
 
     It has to go, because the routing table now names four vendors at once:

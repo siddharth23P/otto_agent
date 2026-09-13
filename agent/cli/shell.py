@@ -15,7 +15,7 @@ to switch, since each node already routes its own calls (router on
 Task.CHAT_FAST, planner on Task.PLAN, solver on Task.REASON, ...)
 independently of anything a REPL command could select.
 
-Conversation memory (2026-09-10, same day, Phase 2 of claude/otto-tiered-
+Conversation memory (2026-09-10, same day, Phase 2 of docs/design/tiered-
 memory-design.md): `Session` used to carry conversation history as a plain
 `list[BaseMessage]`, growing every turn with nothing capping it -- that gap
 was flagged, not fixed, when agent/pipeline/run.py's `history` parameter

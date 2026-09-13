@@ -19,7 +19,7 @@ namespaces them in the store -- agent/memory/store.py) rather than one
 merged pool: mixing conversation turns and task-internal context into one
 summary would make either harder to read cleanly. Graph/CLI-side wiring of
 these two instances is tracked separately from this file -- see the
-project's claude/otto-tiered-memory-design.md for what's built vs. what's
+project's docs/design/tiered-memory.md for what's built vs. what's
 still pending. As of Phase 2 (agent/memory/wiring.py, agent/memory/
 session.py): the `kind="history"` instance IS wired in -- agent/cli/
 shell.py's Session owns one per session, seeded via `run_pipeline_stream`'s

@@ -50,8 +50,8 @@ summarizer/finder/evaluator design):
                      next from that alone. Good for "what's the obvious
                      next fix/continuation here", useless for "make this
                      specific change" -- see its own docstring.
-  recall_memory   -- real, added later the same day, Phase 2 of claude/
-                     otto-tiered-memory-design.md: semantic search
+  recall_memory   -- real, added later the same day, Phase 2 of
+                     docs/design/tiered-memory.md: semantic search
                      (agent/memory/retrieval.py's recall()) over THIS
                      session's own compacted-away conversation history --
                      what a caller reaches for when something from earlier

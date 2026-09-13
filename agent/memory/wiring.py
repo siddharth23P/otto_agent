@@ -1,5 +1,5 @@
 """Glue between the standalone agent/memory/ engine (TieredQueue, MemoryStore)
-and a live otto chat/tui session -- Phase 2 of claude/otto-tiered-memory-
+and a live otto chat/tui session -- Phase 2 of docs/design/tiered-memory-
 design.md (Phase 1, the engine itself, is agent/memory/{tokens,hashing,
 store,embeddings,queue,retrieval}.py, all of which stay free of any
 dependency on agent.pipeline/agent.router -- that package's own __init__.py

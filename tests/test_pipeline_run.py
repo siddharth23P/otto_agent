@@ -97,7 +97,7 @@ def test_initial_with_empty_history_list_behaves_like_no_history():
 
 
 def test_initial_seeds_context_from_memory_context(monkeypatch):
-    # Phase 2 of claude/otto-tiered-memory-design.md: whatever a session's
+    # Phase 2 of docs/design/tiered-memory.md: whatever a session's
     # TieredQueue has compacted away (agent/memory/wiring.py's
     # history_for_graph()) lands in state["context"] -- the SAME field
     # every prompt-builder in nodes.py already shows via "CONTEXT GATHERED

@@ -31,14 +31,14 @@ Deliberately NOT built here: any kind of summarization, truncation, or
 cross-SESSION persistence. `history` is exactly the in-memory list the
 REPL/TUI already had; a long-running chat's prompt grows every turn with
 nothing capping it. That's the same "project profile"/"personal lessons"
-territory claude/otto-memory-design.md already specs out for a *different*
+territory an earlier long-term-memory design specced out for a *different*
 purpose (learning across runs, not remembering within one) against the
 now-replaced code hive -- worth revisiting there, not smuggled into this
 fix, which only closes the "does the graph even see what I said two turns
 ago" gap.
 
 Bounding that conversation memory (2026-09-10, same day, Phase 2 of
-claude/otto-tiered-memory-design.md -- the paragraph above flagged
+docs/design/tiered-memory.md -- the paragraph above flagged
 "deliberately NOT built here" as its own explicit follow-up): `history` no
 longer needs to be the whole raw, unbounded list. `_initial()` gained a
 `memory_context` parameter, seeded from whatever `agent/memory/wiring.py`'s
