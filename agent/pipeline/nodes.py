@@ -114,6 +114,7 @@ from agent.pipeline.progress import (
     check_cancelled, report as report_progress, watching as anyone_watching,
 )
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
+from agent.pipeline.python_session import fresh_python_session, python_session_note
 from agent.pipeline.workspace import current_workspace, workspace_note
 from agent.pipeline.execution import current_command_runner
 from agent.router.llm_provider.base import ProviderError, translate_unknown
@@ -1348,7 +1349,7 @@ def _tool_loop(llm, messages: list, actions: list[str] | None = None,
     # this run that the prompt was built at import time without" -- see
     # agent/pipeline/workspace.py's workspace_note() for why a judge that does
     # not know the root cannot check a claim about a file.
-    for extra in (workspace_note(), render_note()):
+    for extra in (workspace_note(), python_session_note(), render_note()):
         if extra:
             messages.insert(1, SystemMessage(extra))
 
@@ -1641,7 +1642,7 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
     # happening anyway, and the agent node answers it on the chat seat
     # without seeding a transcript at all -- see CHAT_PROMPT.
     messages: list = [SystemMessage(compose_agent_prompt(reachable_tools()))]
-    for extra in (workspace_note(), render_note()):
+    for extra in (workspace_note(), python_session_note(), render_note()):
         if extra:
             messages.append(SystemMessage(extra))
     messages.append(HumanMessage(body))
@@ -2554,7 +2555,7 @@ def _delegate(state: AgentState, body: str, *, actions: list[str],
     # A delegate gets none of this conversation (DELEGATE_CONTRACT), so it
     # needs the workspace said to it directly -- it cannot infer the root from
     # a parent turn it never saw.
-    for extra in (workspace_note(), render_note()):
+    for extra in (workspace_note(), python_session_note(), render_note()):
         if extra:
             child.append(SystemMessage(extra))
     child.append(HumanMessage(DELEGATE_CONTRACT.format(instruction=instruction.strip())))
@@ -2563,10 +2564,16 @@ def _delegate(state: AgentState, body: str, *, actions: list[str],
     taken: list[str] = []
     _emit({"agent": {"board": [f"delegated to {want}: {instruction.strip()[:60]}"]}})
     try:
-        output, why, _ = _agent_loop(
-            state, child, mode=want, actions=taken, mode_log=[],
-            max_iterations=MAX_DELEGATE_ITERATIONS, may_delegate=False,
-        )
+        # Its own Python session, never the parent's (agent/pipeline/
+        # python_session.py, ISOLATION): the child runs with none of this
+        # conversation, so live objects it cannot know about are not its to
+        # reach, and a child that wedges an interpreter must not take the
+        # parent's remaining calls with it. Closed when the child returns.
+        with fresh_python_session():
+            output, why, _ = _agent_loop(
+                state, child, mode=want, actions=taken, mode_log=[],
+                max_iterations=MAX_DELEGATE_ITERATIONS, may_delegate=False,
+            )
     except NeedsUserInput:
         # The child cannot pause the run -- it does not own the conversation
         # with the person. Hand the question up as its result and let the
@@ -2807,7 +2814,7 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "resear
         # is byte-identical -- which is what the stored transcript assumes.
         messages = [
             SystemMessage(compose_agent_prompt(reachable_tools())),
-            *(SystemMessage(extra) for extra in (workspace_note(), render_note()) if extra),
+            *(SystemMessage(extra) for extra in (workspace_note(), python_session_note(), render_note()) if extra),
             *stored,
         ]
         # Coming back from an ask_user pause. The transcript above already
@@ -3195,7 +3202,7 @@ def _chat_reply(state: AgentState, task_text: str) -> str:
         # Same two notes the loop opens with. "where am I working" and "what
         # can you see" are exactly the kind of thing asked conversationally,
         # and answering them needs no tool -- just the note.
-        *(SystemMessage(extra) for extra in (workspace_note(), render_note()) if extra),
+        *(SystemMessage(extra) for extra in (workspace_note(), python_session_note(), render_note()) if extra),
         HumanMessage(body),
     ]
     return _call(ROUTER.chat_model(Task.CHAT_FAST), messages).strip()

@@ -16,6 +16,7 @@ before the attempt existed.
 | `profile.py` | standing tools taken off the menu for one run (a phone has no shell, no browser, no desktop) |
 | `workspace.py` | the bound workspace directory and path confinement |
 | `execution.py` | the command-runner seam: where a shell command actually runs (host or container) |
+| `python_session.py`, `_python_session_shim.py` | one persistent Python interpreter per run, and the child process that is it |
 | `evidence.py` | a ledger of what the run proved, and the three once-only holds it drives |
 | `budget.py` | the per-run model-call ceiling, counted at the one point every request passes through |
 | `usage.py`, `pricing.py` | tokens per model, and what they cost |
@@ -94,7 +95,7 @@ Periodic, not constant, because said every turn they become wallpaper.
 
 | tool | tier | does |
 | --- | --- | --- |
-| `execute_bash`, `execute_python` | read-only | a shell command or a script in the workspace or the container; nothing may detach, long output keeps both ends |
+| `execute_bash`, `execute_python` | read-only | a shell command or a script in the workspace or the container; nothing may detach, long output keeps both ends. `execute_python` runs in one interpreter that persists for the run, so what a snippet built is there for the next |
 | `read_file`, `list_files` | read-only | line-numbered reads with ranges; listings that skip `.git` and friends |
 | `write_file`, `edit_file` | workspace | writes into the bound root only; `edit_file` matches through a cascade (exact, trailing whitespace, indentation, first-and-last-line anchor) and still demands a unique hit |
 | `code_map` | read-only | `define`, `uses`, `imports`, `outline` from Python's `ast`, cached per tree state, no model call |
@@ -112,6 +113,20 @@ container through `execution.py`'s command runner, so the tools never learn
 what a container is. Content crosses into a container base64-encoded, never
 in a heredoc. The tier invariant is a test: anything irreversible is held
 before it runs, and a tier that disagrees with the gate fails the suite.
+
+`execute_python` has one interpreter per run (`python_session.py`, issue
+#1): a dataset loaded or an index built in one call is live in the next,
+instead of being rebuilt from the transcript or round-tripped through disk.
+The session is a per-run binding like the workspace, closed with the run and
+never shared: two runs, two golden-eval tasks, or a parent and the subagent
+it delegated to never see the same interpreter. A call that runs too long is
+interrupted on its own; one the interrupt cannot stop is killed and the
+result says the session restarted, so the model does not trust variables
+that are gone. Builtins are put back after every call, because a snippet
+that rebinds `len` breaks the plumbing that reads the next request. Inside a
+container the tool keeps its one-shot script, and says so. `OTTO_PYTHON_
+SESSION=0` turns the session off, which is how the two arms of the Claw-Eval
+comparison run from one checkout.
 
 ## The document workflow
 
