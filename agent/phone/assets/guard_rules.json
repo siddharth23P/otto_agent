@@ -18,7 +18,7 @@
     "bank", "pay", "upi", "wallet", "finance", "fintech", "loan", "credit", "trading",
     "invest", "insurance", "mutual", "broker", "crypto", "lend", "emi", "cashback"
   ],
-  "package_word_exceptions": ["payload", "player", "display", "paypal.shopping"],
+  "package_word_exceptions": ["payload", "paypal.shopping"],
   "sensitive_patterns": [
     "\\bupi\\s*pin\\b", "\\bm?pin\\b", "\\bpasscode\\b", "\\botp\\b",
     "\\bone[- ]time\\s+pass(word|code)\\b", "\\bcvv\\b", "\\bcvc\\b",

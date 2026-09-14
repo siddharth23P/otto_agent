@@ -27,6 +27,18 @@ Three verdicts, three kinds of evidence:
                     commit word ("Send", "Delete", "Confirm") is tappable only
                     through phone_commit, which the mutation gate holds once.
 
+WHAT THE LABEL VERDICT CANNOT SEE. `target_verdict` reads the words on the
+control: its text, or its content description when it has none (an icon
+button with a "Send" description is covered). A control with neither, or one
+labelled in a language the word lists do not carry, is an ordinary tap to
+this side. The phone shares the same lists and the same limit; the mutation
+gate and the person's own hand-over are what stand behind it, and the lists
+are meant to grow (guard_rules.json is data).
+
+`package_word_exceptions` are substrings removed before the money words are
+looked for, each guarding one word: "payload" and "paypal.shopping" hide a
+"pay" that is not money.
+
 Java-compatible regex only (the app compiles the same strings with
 java.util.regex): no lookbehind, no possessive quantifiers, no named groups.
 """
@@ -158,6 +170,22 @@ def target_verdict(label: str) -> str:
     return ""
 
 
+#: Longest a caption above a field may be to count as its label.
+MAX_LABEL_CHARS = 32
+
+
+def _labelled_sensitively(nodes: list, index: int) -> bool:
+    """Whether the text node just before `nodes[index]` reads like a form
+    label asking for a secret: short, and a sensitive match."""
+    for prev in nodes[max(0, index - 2):index]:
+        if prev.get("e") or prev.get("p"):
+            continue
+        label = normal(str(prev.get("t") or prev.get("d") or ""))
+        if label and len(label) <= MAX_LABEL_CHARS and sensitive_matches([label]):
+            return True
+    return False
+
+
 def snapshot_verdict(snapshot: dict) -> str:
     """package_verdict then screen_verdict over one snapshot."""
     app = snapshot.get("app") or {}
@@ -167,9 +195,15 @@ def snapshot_verdict(snapshot: dict) -> str:
     nodes = [n for n in (snapshot.get("nodes") or []) if isinstance(n, dict)]
     texts = [str(n.get("t") or n.get("d") or "") for n in nodes]
     # The input-field signal is the field itself asking: a password field,
-    # or an editable node whose own label/hint is the sensitive text.
+    # an editable node whose own label/hint is the sensitive text, or a
+    # field whose hint is generic ("Enter code") under a short label that
+    # is not ("Enter your OTP"). Short, because a form label is a few words
+    # and a chat line that happens to mention an OTP is a sentence -- the
+    # length is what keeps the benign corpus benign.
     asks = any(n.get("p") for n in nodes) or any(
-        n.get("e") and sensitive_matches([str(n.get("t") or n.get("d") or "")]) for n in nodes
+        n.get("e") and (sensitive_matches([str(n.get("t") or n.get("d") or "")])
+                        or _labelled_sensitively(nodes, i))
+        for i, n in enumerate(nodes)
     )
     return screen_verdict(texts, package=str(app.get("package") or ""),
                           label=str(app.get("label") or ""), editable=asks,
