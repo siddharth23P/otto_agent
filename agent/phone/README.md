@@ -10,7 +10,7 @@ and binds these through [agent/embed.py](../embed.py).
 | --- | --- |
 | `backend.py` | `PhoneBackend`, the Protocol a host implements (tree, tap, type, press, swipe, scroll, screenshot, apps, launch, settings, install); `PhoneError` with a code and a hand-over flag; `JsonBackend`, the adapter over a bridge whose methods return JSON envelopes |
 | `digest.py` | the accessibility snapshot as bounded, inert text: one `[index] "label" role flags @x,y` line per element, password fields never shown; `find_node` resolves a text target (exact, then unique substring, else the candidates) |
-| `guard.py` + `assets/guard_rules.json` | the rules the phone enforces and this side pre-checks: denied packages, money words, sensitive-screen patterns (two signals required), pay words (never tappable), commit words (only through `phone_commit`) |
+| `guard.py` + `assets/guard_rules.json` | the rules the phone enforces and this side pre-checks: denied packages, money words, sensitive-screen patterns (two signals required), pay words (never tappable), forward words that become pay words next to a checkout signal, commit words (only through `phone_commit`); a broken rules file is a `GuardRulesError` on every verdict |
 | `tools.py` | `phone_tools(backend)`: eight `ExtraTool`s, `PHONE_GUIDANCE`, and the standing tools a phone cannot run |
 
 ## The tools
@@ -39,9 +39,28 @@ Code, on both sides, and the phone's verdict wins:
 - A **sensitive screen** ("UPI PIN", "OTP", "CVV", "Pay ₹499"): refused only
   with a second signal -- an input field that asks for it, a money-worded
   package, or a secure window -- so a chat that mentions an OTP is not one.
-- A **pay word** on the target ("Pay now", "Place order", "Buy now"): never
-  tapped, whatever tool asks. Reaching checkout is allowed; paying is not.
-- A **commit word** ("Send", "Delete", "Confirm"): only `phone_commit`.
+- A **pay word** on the target ("Pay now", "Place order", and the bare
+  "Pay", "Buy", "Purchase", "Subscribe"): never tapped, whatever tool asks.
+  A **forward word** ("Continue", "Next", "Confirm", "Done") is a pay word
+  when the screen shows a **checkout signal** (a total, "payment", a card
+  field): that is what the last button of a checkout is usually called.
+- A **commit word** ("Send", "Delete", "Confirm", and "Checkout": reaching
+  the payment page is the person's call, once): only `phone_commit`.
+- `press enter` is the keyboard's submit. It has no label to judge, so the
+  screen is judged instead: the sensitive-screen verdict, then a checkout
+  signal or any pay button on the screen (what Enter would submit) refuses
+  it. `back`, `home` and `recents` are the way out and always allowed.
+- A tap by coordinates is judged by the element under the point. A point
+  with no element under it is refused on a screen that has clickable
+  elements (a checkout drawn on a canvas inside an ordinary page is exactly
+  the case). On a screen with none (a game, a canvas app) it needs a
+  `phone_look` taken on the current capture (every action installs a new
+  one, so: look, then tap) that described nothing payment-like. The phone
+  enforces the same capture-id rule.
+- Matching folds NFKC, strips invisible characters, and maps Cyrillic and
+  Greek look-alike letters to Latin, so "Pаy now" spelled with a Cyrillic а
+  is still "pay now". A label in a script the lists do not carry is the
+  limit; the lists are data and meant to grow.
 - A **password field**: never typed into.
 
 A refusal comes back as a result beginning `GUARD:`; when the phone itself

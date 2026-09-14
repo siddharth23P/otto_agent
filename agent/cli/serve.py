@@ -38,6 +38,8 @@ def serve(
     port: Annotated[int, typer.Option(help="Port to listen on.")] = 8765,
     token: Annotated[Optional[str], typer.Option(help=f"Shared secret the app presents; default {TOKEN_ENV} or a generated one.")] = None,
     qr: Annotated[bool, typer.Option("--qr", help="Print a pairing QR code (needs the qrcode package).")] = False,
+    allow_origin: Annotated[Optional[list[str]], typer.Option(
+        "--allow-origin", help="A browser origin allowed to connect (repeatable). Pages are refused otherwise.")] = None,
 ) -> None:
     """Serve the agent over a WebSocket for the phone app."""
     try:
@@ -68,6 +70,6 @@ def serve(
     if not embed.ready():
         err.print("[warn]INCEPTION_API_KEY is not set; turns will fail until it is (otto tui -> Setup)[/]")
     try:
-        asyncio.run(OttoServer(secret).run(host, port))
+        asyncio.run(OttoServer(secret, allowed_origins=tuple(allow_origin or ())).run(host, port))
     except KeyboardInterrupt:
         out.print("[muted]bye[/]")

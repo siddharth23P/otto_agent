@@ -373,8 +373,102 @@ def test_a_tap_by_coordinates_is_judged_by_what_is_under_the_point():
     by_name, _ = _tools(FakePhone([chat] * 2))
     by_name["phone_screen"]("{}")
     assert "phone_commit" in by_name["phone_act"]('{"op": "tap", "x": 980, "y": 2240}').stderr
-    assert by_name["phone_act"]('{"op": "tap", "x": 10, "y": 10}').ok  # nothing there: an ordinary tap
+    # Nothing under the point on a screen that has elements: the guard cannot
+    # judge what is drawn there, so it is not tapped (2026-09-14 review).
+    blind = by_name["phone_act"]('{"op": "tap", "x": 10, "y": 10}')
+    assert not blind.ok and "nothing in the tree is under that point" in blind.stderr
     assert not any(c[0] == "tap" and c[1] == 540 for c in phone.calls)
+
+
+def test_a_blind_tap_needs_a_look_on_this_very_capture():
+    """On a screen with no elements the only content-level check is a look,
+    and a look is good for one capture: every action installs a new one, and
+    in-app navigation must not carry a benign look onto a canvas-drawn
+    payment screen (2026-09-14 review of #13)."""
+    screens = [snapshot(f"g{i}", "com.example.game", "Blocks", []) for i in range(1, 6)]
+    phone = FakePhone(list(screens))
+    by_name, _ = _tools(phone, vision=lambda q, data, media: "a game board with falling blocks")
+    by_name["phone_screen"]("{}")                                           # g1
+    no_look = by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}')
+    assert not no_look.ok and "phone_look" in no_look.stderr
+    assert not any(c[0] == "tap" for c in phone.calls)
+    assert by_name["phone_look"]('{"question": "what is this"}').ok         # looks at g2
+    assert by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}').ok     # on g2; its after installs g3
+    again = by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}')      # g3: the look is spent
+    assert not again.ok and "phone_look" in again.stderr
+    assert [c for c in phone.calls if c[0] == "tap"] == [("tap", 300, 900)]
+
+
+def test_a_look_on_one_screen_does_not_cover_the_next_screen_of_the_same_app():
+    promo = snapshot("a1", "com.example.shop", "Shop", [])
+    canvas_checkout = snapshot("b1", "com.example.shop", "Shop", [])
+    phone = FakePhone([promo, promo, canvas_checkout, canvas_checkout])
+    by_name, _ = _tools(phone, vision=lambda q, data, media: "a promotional banner, nothing here")
+    by_name["phone_screen"]("{}")                                           # a1
+    assert by_name["phone_look"]('{"question": "what is this"}').ok         # a1 again
+    assert by_name["phone_act"]('{"op": "swipe", "direction": "up"}').ok    # after: b1
+    refused = by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}')
+    assert not refused.ok and "phone_look" in refused.stderr
+    assert not any(c[0] == "tap" for c in phone.calls)
+
+
+def test_a_look_that_saw_a_checkout_refuses_the_blind_tap():
+    canvas = [snapshot("c1", "com.example.shop", "Shop", []), snapshot("c2", "com.example.shop", "Shop", [])]
+    by_name, _ = _tools(FakePhone(canvas + [canvas[-1]]),
+                        vision=lambda q, data, media: "a checkout page: order total ₹499 and a Pay button")
+    by_name["phone_screen"]("{}")
+    by_name["phone_look"]('{"question": "what is this"}')
+    refused = by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}')
+    assert refused.stderr.startswith("GUARD:") and "payment step" in refused.stderr
+
+
+def test_pressing_enter_is_judged_like_a_tap_and_the_exit_keys_are_not():
+    """Enter is the keyboard's submit; on a screen the guard has handed
+    over it must not fire (2026-09-14 review)."""
+    from tests.phone_fakes import snapshot as snap
+    otp = snap("o", "com.example.shop", "Shop", [
+        node(1, "Enter your OTP", r="text"), node(2, "", r="edit-field", e=True, f=True, c=True),
+    ])
+    phone = FakePhone([otp] * 6)
+    by_name, _ = _tools(phone)
+    assert by_name["phone_screen"]("{}").stderr.startswith("GUARD:")
+    result = by_name["phone_act"]('{"op": "press", "key": "enter"}')
+    assert result.stderr.startswith("GUARD:")
+    assert by_name["phone_act"]('{"op": "press", "key": "back"}').ok
+    assert by_name["phone_act"]('{"op": "press", "key": "home"}').ok
+    assert [c[0] for c in phone.calls if c[0] == "press"] == ["press", "press"]
+    # A checkout with the focus on a quantity field and no OTP-style text:
+    # Enter would submit the Pay action, so it is refused by the screen.
+    checkout = snap("q", "com.example.shop", "Shop", [
+        node(1, "Qty", r="text"), node(2, "2", r="edit-field", e=True, f=True, c=True),
+        node(3, "Total ₹56", r="text"), node(4, "Pay", r="button", c=True),
+    ])
+    phone = FakePhone([checkout] * 4)
+    by_name, _ = _tools(phone)
+    assert by_name["phone_screen"]("{}").ok
+    refused = by_name["phone_act"]('{"op": "press", "key": "enter"}')
+    assert refused.stderr.startswith("GUARD:") and "Enter would submit" in refused.stderr
+    assert by_name["phone_act"]('{"op": "press", "key": "back"}').ok
+    assert not any(c == ("press", "enter") for c in phone.calls)
+
+
+def test_the_continue_of_a_checkout_is_refused_and_an_onboarding_continue_is_not():
+    checkout = snapshot("c", "com.grofers.customerapp", "Blinkit", [
+        node(1, "Order summary", r="text"), node(2, "Total ₹28", r="text"),
+        node(3, "Continue", r="button", b=(60, 2200, 1020, 2300), c=True),
+    ])
+    by_name, _ = _tools(FakePhone([checkout] * 3))
+    by_name["phone_screen"]("{}")
+    refused = by_name["phone_act"]('{"op": "tap", "target": "Continue"}')
+    assert refused.stderr.startswith("GUARD:") and "payment step" in refused.stderr
+    assert "payment step" in by_name["phone_commit"]('{"target": "Continue"}').stderr
+    onboarding = snapshot("w", "com.grofers.customerapp", "Blinkit", [
+        node(1, "Pick your location", r="text"),
+        node(2, "Continue", r="button", b=(60, 2200, 1020, 2300), c=True),
+    ])
+    by_name, _ = _tools(FakePhone([onboarding] * 3))
+    by_name["phone_screen"]("{}")
+    assert by_name["phone_act"]('{"op": "tap", "target": "Continue"}').ok
 
 
 def test_typing_without_a_target_respects_a_password_field():

@@ -11,7 +11,7 @@ embedded runtime is unavailable. Optional: `pip install "otto-cli-agent[serve]"`
 | --- | --- |
 | `protocol.py` | the message types in both directions, `PROTOCOL_VERSION` and the oldest client still served |
 | `proxy.py` | `SocketPhone`: a `PhoneBackend` whose phone is the connected client, one `device_call` per method, answered by a `device_result` |
-| `app.py` | the server: `hello` with a token compared in constant time, turns on a worker thread through `agent/embed.py`, events forwarded as they happen, sessions listed and resumed |
+| `app.py` | the server: a browser origin refused before the handshake unless `--allow-origin` names it, `hello` with a token compared in constant time, turns on the server's own bounded pool (`MAX_TURN_WORKERS`) through `agent/embed.py`, events forwarded as they happen, sessions listed and resumed |
 
 ```bash
 uv run otto serve                 # loopback, port 8765, a token written to the env file

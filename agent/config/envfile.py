@@ -66,8 +66,20 @@ def set_value(key: str, value: str, *, path: Path | None = None) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(mode=0o600)
     set_key(str(path), key, value, quote_mode="auto")
+    _private(path)
     os.environ[key] = value
     return masked(value)
+
+
+def _private(path: Path) -> None:
+    """Owner-only, on every write and not only on creation: the file may
+    have been made by a host app or by hand with a wider mode, and since
+    0.2.0 it also carries the `otto serve` pairing token. Windows has no
+    such mode; a failure to set it is not a failure to write."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def unset_value(key: str, *, path: Path | None = None) -> None:
@@ -79,4 +91,5 @@ def unset_value(key: str, *, path: Path | None = None) -> None:
         # unset_key logs a warning and returns (None, key) when the key is
         # absent; neither is an error for a caller that wants it gone.
         unset_key(str(path), key)
+        _private(path)  # a removal is a write too
     os.environ.pop(key, None)
