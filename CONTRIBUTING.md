@@ -7,7 +7,7 @@ built to: say what you measured, or what you would need to measure.
 
 ```bash
 uv sync
-uv run pytest -q          # 1,589 tests, no API key, no network, about two minutes
+uv run pytest -q          # 1,591 tests, no API key, no network, about two minutes
 uv run otto doctor        # once you have keys in .env
 ```
 

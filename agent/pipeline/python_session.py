@@ -137,6 +137,14 @@ NO_PERSISTENCE_NOTE = (
     "each call is a fresh script]"
 )
 
+#: Appended to a MemoryError under the ceiling. The old fresh-process path
+#: had no ceiling, so a snippet that used to work can now fail here, and a
+#: bare MemoryError does not say why or what to do about it.
+MEMORY_CEILING_NOTE = (
+    "[the python session's address space is capped at {mb} MB; set "
+    f"{MEMORY_LIMIT_ENV} to raise it, or to 0 for no cap]"
+)
+
 #: What a tool result says when the interpreter could not be started and the
 #: call ran in a fresh process instead. Distinct from the container note:
 #: nothing here is about where the code ran, only that it did not persist.
@@ -222,6 +230,12 @@ class LocalPythonSession:
     @property
     def private_dir(self) -> Path | None:
         return self._private
+
+    @property
+    def memory_limit_bytes(self) -> int:
+        """The address-space ceiling on the interpreter, 0 for none. Only
+        Linux enforces it -- see the module docstring."""
+        return self._memory_limit or 0
 
     def fresh(self) -> "LocalPythonSession":
         return LocalPythonSession(
@@ -440,7 +454,10 @@ class LocalPythonSession:
             return False
         try:
             if os.name == "posix":
-                os.kill(proc.pid, signal.SIGINT)
+                # The whole group, as a terminal Ctrl-C would: a snippet
+                # blocked on a subprocess it started (a test run, a build)
+                # has that subprocess interrupted too, not just itself.
+                os.killpg(proc.pid, signal.SIGINT)
             else:
                 os.kill(proc.pid, signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
             return True
