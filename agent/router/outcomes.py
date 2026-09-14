@@ -34,11 +34,14 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent.config.home import otto_home
+
 log = logging.getLogger(__name__)
 
 #: Where the log lives. Beside the memory stores rather than in the repo: it is
 #: a record of what this installation has observed, not a fact about the code.
-DB_DIR = Path.home() / ".otto"
+#: `~/.otto`, or OTTO_HOME (agent/config/home.py).
+DB_DIR = otto_home()
 
 #: How many runs a (task, model) pair needs before its number is allowed to
 #: move anything. Small samples on a benchmark whose own scores swing 0.36

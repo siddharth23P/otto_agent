@@ -1,4 +1,6 @@
 import weakref
+import logging
+
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from contextlib import contextmanager
@@ -15,6 +17,8 @@ from agent.router import outcomes as seat_outcomes
 from agent.router import health as provider_health
 from agent.router import overrides as route_overrides
 from agent.router.mapping import TASK_ROUTES, Candidate, Endpoint, Preference, Task
+
+_log = logging.getLogger(__name__)
 
 @dataclass(frozen=True,slots=True)
 class Skip:
@@ -76,7 +80,16 @@ class Catalogue(Protocol):
     
 class RegistryCatalogue:
     def is_configured(self, provider: str) -> bool:
-        return provider_class(provider).is_configured()
+        # A vendor whose SDK is not installed is not configured, rather than
+        # a broken router: langchain_openai needs tiktoken, langchain_anthropic
+        # needs jiter, and an embedded Otto (agent/embed.py) may ship without
+        # one of them. `health_report` names the import failure; here it only
+        # has to not take the other providers down with it.
+        try:
+            return provider_class(provider).is_configured()
+        except ImportError as exc:
+            _log.warning("provider %s is unavailable: %s", provider, exc)
+            return False
     def models(self, provider: str) -> list[ModelInfo]:
         return get_provider(provider).list_models()
     def reset(self) -> None:
