@@ -260,12 +260,17 @@ class OttoServer:
     async def run(self, host: str, port: int, *, ready: asyncio.Event | None = None) -> None:
         from websockets.asyncio.server import serve
 
-        async with serve(self.handler, host, port, max_size=protocol.MAX_FRAME_BYTES,
-                         process_request=self.check_origin) as server:
-            self.sockets = server.sockets
-            if ready is not None:
-                ready.set()
-            await server.serve_forever()
+        try:
+            async with serve(self.handler, host, port, max_size=protocol.MAX_FRAME_BYTES,
+                             process_request=self.check_origin) as server:
+                self.sockets = server.sockets
+                if ready is not None:
+                    ready.set()
+                await server.serve_forever()
+        finally:
+            # The pool belongs to this server: a test that builds several
+            # servers in one process must not keep their threads around.
+            self.executor.shutdown(wait=False, cancel_futures=True)
 
 
 def bound_port(server: OttoServer) -> int:

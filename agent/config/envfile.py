@@ -91,4 +91,5 @@ def unset_value(key: str, *, path: Path | None = None) -> None:
         # unset_key logs a warning and returns (None, key) when the key is
         # absent; neither is an error for a caller that wants it gone.
         unset_key(str(path), key)
+        _private(path)  # a removal is a write too
     os.environ.pop(key, None)
