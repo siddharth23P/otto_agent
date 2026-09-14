@@ -41,6 +41,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Mapping
 
+from agent.pipeline.profile import disabled_tools
 from agent.pipeline.tools import TOOL_DISPATCH, ToolResult
 
 
@@ -77,15 +78,26 @@ _current: contextvars.ContextVar[Mapping[str, ExtraTool]] = contextvars.ContextV
     "otto_current_extra_tools", default={},
 )
 
+#: Prose that rides with a toolkit: how these tools are meant to be used
+#: together, which a per-tool description of 300 characters cannot say. A
+#: phone's tools need "look, act, look again; stop at the payment page"
+#: (agent/phone/tools.py), and that belongs to the binding, not to any one
+#: tool. Rendered after the tool list by `render_note()`.
+_guidance: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "otto_current_tool_guidance", default="",
+)
+
 
 @contextmanager
-def bind_extra_tools(tools: list[ExtraTool] | Mapping[str, ExtraTool] | None) -> Iterator[None]:
+def bind_extra_tools(tools: list[ExtraTool] | Mapping[str, ExtraTool] | None, *,
+                     guidance: str = "") -> Iterator[None]:
     """Make `tools` callable by name for this block and anything it calls.
 
     Replaces rather than merges with an outer binding: a harness running task
     B must not inherit task A's tools, and nesting two toolkits is not a case
     that exists. Passing None or an empty collection unbinds, so a harness can
-    bind per task without leaking one into the next.
+    bind per task without leaking one into the next. `guidance` is bound and
+    unbound with the tools, for the same reason.
     """
     if tools is None:
         mapping: Mapping[str, ExtraTool] = {}
@@ -94,16 +106,20 @@ def bind_extra_tools(tools: list[ExtraTool] | Mapping[str, ExtraTool] | None) ->
     else:
         mapping = {t.name: t for t in tools}
     previous = _current.get()
+    previous_guidance = _guidance.get()
     token = _current.set(mapping)
+    guidance_token = _guidance.set(guidance or "")
     try:
         yield
     finally:
         try:
+            _guidance.reset(guidance_token)
             _current.reset(token)
         except ValueError:
             # Unwound from a different context: a streaming run finalised
             # on another thread (agent/pipeline/tracing.py).
             _current.set(previous)
+            _guidance.set(previous_guidance)
 
 
 def current_extra_tools() -> Mapping[str, ExtraTool]:
@@ -112,17 +128,28 @@ def current_extra_tools() -> Mapping[str, ExtraTool]:
     return _current.get()
 
 
+def current_guidance() -> str:
+    """The guidance bound with the innermost toolkit, or ""."""
+    return _guidance.get()
+
+
 def dispatch_table() -> dict[str, Callable[[str], ToolResult]]:
     """TOOL_DISPATCH plus whatever is bound, as one lookup for _tool_loop.
 
     Extra tools win on a name collision, deliberately: a benchmark that
     declares its own `read_file` against its own service means that one, and
     silently serving Otto's would make the agent act on the wrong filesystem.
+    Standing tools a profile disabled (agent/pipeline/profile.py) are left
+    out; a run-scoped tool under such a name is still served.
     """
+    disabled = disabled_tools()
+    standing = dict(TOOL_DISPATCH) if not disabled else {
+        name: fn for name, fn in TOOL_DISPATCH.items() if name not in disabled
+    }
     extra = current_extra_tools()
     if not extra:
-        return dict(TOOL_DISPATCH)
-    return {**TOOL_DISPATCH, **{name: t.call for name, t in extra.items()}}
+        return standing
+    return {**standing, **{name: t.call for name, t in extra.items()}}
 
 logger = logging.getLogger(__name__)
 
@@ -190,17 +217,36 @@ def _inert(text: str, limit: int) -> str:
     return collapsed
 
 
-def render_note(tools: Mapping[str, ExtraTool] | None = None) -> str:
-    """The block that tells a prompt these tools exist. Empty string when
-    nothing is bound, so a caller can append it unconditionally.
+#: Longest a guidance block may be once rendered. Long enough for a screen
+#: of rules, short enough that a host cannot spend the prompt with it.
+MAX_GUIDANCE_CHARS = 2400
+
+
+def _inert_block(text: str, limit: int) -> str:
+    """`_inert` for prose that keeps its line breaks: control characters
+    other than newline collapsed, blank runs squeezed, length bounded."""
+    lines = [" ".join(_CONTROL.sub(" ", line).split()) for line in (text or "").splitlines()]
+    block = "\n".join(line for line in lines if line).strip()
+    if len(block) > limit:
+        block = block[: limit - 1].rstrip() + "\u2026"
+    return block
+
+
+def render_note(tools: Mapping[str, ExtraTool] | None = None, *,
+                guidance: str | None = None) -> str:
+    """The block that tells a prompt these tools exist, and how to use them.
+    Empty string when nothing is bound, so a caller can append it
+    unconditionally.
 
     Written as an ADDITION to the menu each prompt already carries rather than
     a replacement for it: the standing tools still work, and saying so stops
     the model treating the note as a narrowing.
     """
     tools = current_extra_tools() if tools is None else tools
+    guidance = current_guidance() if guidance is None else guidance
+    guidance = _inert_block(guidance, MAX_GUIDANCE_CHARS)
     if not tools:
-        return ""
+        return f"HOW TO WORK HERE:\n{guidance}" if guidance else ""
     lines = [
         "TOOLS FOR THIS TASK, in addition to the ones already listed. "
         "Same protocol: ACTION: <name> then CODE: with the body below. "
@@ -216,6 +262,9 @@ def render_note(tools: Mapping[str, ExtraTool] | None = None) -> str:
             continue
         shape = _inert(_one_line_schema(tool.schema) if tool.schema else "(free text)", 400)
         lines.append(f"- {name} {shape} -- {_inert(tool.description, MAX_TOOL_DESCRIPTION_CHARS)}")
+    if guidance:
+        lines.append("HOW TO USE THEM:")
+        lines.append(guidance)
     return "\n".join(lines)
 
 

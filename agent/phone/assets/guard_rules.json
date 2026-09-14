@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "denied_packages": [
+    "com.phonepe.app", "com.google.android.apps.nbu.paisa.user", "net.one97.paytm",
+    "in.org.npci.upiapp", "com.dreamplug.androidapp", "com.mobikwik_new",
+    "com.freecharge.android", "in.amazon.mShop.android.shopping.paymentsdk",
+    "com.paypal.android.p2pmobile", "com.venmo", "com.squareup.cash",
+    "com.revolut.revolut", "com.wise", "com.coinbase.android", "com.binance.dev",
+    "com.zerodha.kite3", "in.upstox.pro", "com.nextbillion.groww", "com.angelbroking.angelwealth",
+    "com.sbi.lotusintouch", "com.snapwork.hdfc", "com.csam.icici.bank.imobile",
+    "com.axis.mobile", "com.msf.kbank.mobile", "com.infrasofttech.indianbank",
+    "com.chase.sig.android", "com.wf.wellsfargomobile", "com.infonow.bofa",
+    "com.citi.citimobile", "com.barclays.android.barclaysmobilebanking",
+    "com.starlingbank.android", "com.monzo.android", "com.samsung.android.spay",
+    "com.google.android.apps.walletnfcrel"
+  ],
+  "package_words": [
+    "bank", "pay", "upi", "wallet", "finance", "fintech", "loan", "credit", "trading",
+    "invest", "insurance", "mutual", "broker", "crypto", "lend", "emi", "cashback"
+  ],
+  "package_word_exceptions": ["payload", "player", "display", "paypal.shopping"],
+  "sensitive_patterns": [
+    "\\bupi\\s*pin\\b", "\\bm?pin\\b", "\\bpasscode\\b", "\\botp\\b",
+    "\\bone[- ]time\\s+pass(word|code)\\b", "\\bcvv\\b", "\\bcvc\\b",
+    "\\bcard\\s+number\\b", "\\bexpiry\\b", "\\bvalid\\s+thru\\b",
+    "\\bnet\\s*banking\\b", "\\bpassword\\b", "\\bpay\\s*(₹|rs\\.?|inr|\\$|€|£)\\s*[\\d,]+",
+    "\\bauthori[sz]e\\s+payment\\b", "\\benter\\s+(your\\s+)?(m?pin|passcode|cvv|otp)\\b"
+  ],
+  "pay_words": [
+    "pay now", "proceed to pay", "proceed to payment", "place order", "place your order",
+    "confirm order", "confirm and pay", "confirm payment", "complete payment", "make payment",
+    "pay with", "pay using", "swipe to pay", "slide to pay", "tap to pay", "buy now",
+    "pay ₹", "pay rs", "pay $", "subscribe now", "start free trial", "add money", "send money",
+    "transfer", "top up", "recharge now"
+  ],
+  "commit_words": [
+    "send", "delete", "confirm", "submit", "remove", "unsubscribe", "sign out", "log out",
+    "uninstall", "factory reset", "erase", "block", "report", "post", "publish", "share",
+    "accept", "agree", "allow", "turn off", "disable", "cancel order", "return item"
+  ],
+  "settings_pages": [
+    "display", "font", "wifi", "bluetooth", "apps", "sound", "battery", "notifications",
+    "accessibility", "location", "storage", "date", "language", "security", "app_details"
+  ]
+}
