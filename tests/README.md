@@ -1,6 +1,6 @@
 # tests/
 
-1,552 tests across 74 files, passing on macOS, Linux and Windows in under two
+1,586 tests across 75 files, passing on macOS, Linux and Windows in under two
 minutes with no API keys and no network. CI runs the full matrix on every
 push and pull request with a read-only token.
 
@@ -49,7 +49,7 @@ uv run pytest -q
 | area | files |
 | --- | --- |
 | the agent loop, evaluator, gates, modes, budget | `test_agent_loop.py`, `test_evaluator_node.py`, `test_pipeline_nodes.py`, `test_evidence.py`, `test_modes.py`, `test_call_budget.py`, `test_budget.py`, `test_chat_fast_path.py`, `test_ask_user_node.py` |
-| tools, workspace, container seam, browser, screen, walkthroughs | `test_tools_stubs.py`, `test_tool_loop.py`, `test_workspace_tools.py`, `test_workspace_session.py`, `test_run_scoped_toolkit.py`, `test_browsing.py`, `test_screen.py`, `test_walkthrough.py`, `test_native.py`, `test_codemap.py`, `test_vision_tool.py` |
+| tools, workspace, container seam, python session, browser, screen, walkthroughs | `test_tools_stubs.py`, `test_tool_loop.py`, `test_workspace_tools.py`, `test_workspace_session.py`, `test_python_session.py`, `test_run_scoped_toolkit.py`, `test_browsing.py`, `test_screen.py`, `test_walkthrough.py`, `test_native.py`, `test_codemap.py`, `test_vision_tool.py` |
 | the document workflow | `test_research_workflow.py`, `test_research_router.py` |
 | memory | `test_memory_*.py`, `test_evicted_context.py`, `test_retrieval_method.py`, `test_embedding_backends.py`, `test_lessons.py`, `test_sessions.py` |
 | routing and providers | `test_router.py`, `test_mapping.py`, `test_health.py`, `test_seat_outcomes.py`, `test_overrides.py`, `test_automap.py`, `test_reload.py`, `test_model_policies.py`, `test_temperature_learning.py`, `test_custom_endpoints.py`, `test_inception_*.py`, `test_diffusion_retry.py` |
