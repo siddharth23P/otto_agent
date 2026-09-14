@@ -1,6 +1,6 @@
 # tests/
 
-1,589 tests across 75 files, passing on macOS, Linux and Windows in under two
+1,591 tests across 75 files, passing on macOS, Linux and Windows in under two
 minutes with no API keys and no network. CI runs the full matrix on every
 push and pull request with a read-only token.
 

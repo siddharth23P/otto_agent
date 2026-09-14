@@ -33,6 +33,7 @@ import agent.pipeline.tools as pt
 from agent.pipeline.execution import bind_command_runner
 from agent.pipeline.python_session import (
     LocalPythonSession,
+    MEMORY_LIMIT_ENV,
     PYTHON_SESSION_ENV,
     RESET_NOTE,
     SessionResult,
@@ -362,6 +363,29 @@ def test_an_interruptible_hang_keeps_the_session_and_its_state():
     assert after.stdout.strip() == "kept"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="an interrupt on Windows is best-effort; "
+                    "the hard-kill path below is what is guaranteed there")
+def test_a_snippet_blocked_on_its_own_subprocess_is_interrupted_with_it():
+    """The interrupt goes to the process group, as a terminal Ctrl-C would:
+    the subprocess the snippet is waiting on stops too, and the session
+    survives with its state."""
+    with python_session(interrupt_grace_s=5.0):
+        pt.execute_python("before = 'kept'")
+        started = time.monotonic()
+        result = pt.execute_python(
+            "import subprocess, sys\n"
+            "subprocess.run([sys.executable, '-c', 'import time; time.sleep(60)'])",
+            timeout=1.0,
+        )
+        elapsed = time.monotonic() - started
+        assert result.timed_out and result.returncode == -1
+        assert elapsed < FAST_S
+        assert RESET_NOTE not in result.stderr
+        after = pt.execute_python("print(before)")
+    assert after.ok, after.stderr
+    assert after.stdout.strip() == "kept"
+
+
 def test_a_hang_the_interrupt_cannot_stop_is_hard_killed_and_replaced():
     """A snippet that ignores the interrupt (the stand-in for a C call that
     never checks for one). The session is killed, and the NEXT call on the
@@ -430,7 +454,19 @@ def test_the_memory_ceiling_is_a_clean_failure_not_an_oom_kill():
         assert result.returncode == 1
         assert "MemoryError" in result.stderr
         assert RESET_NOTE not in result.stderr
+        # The old path had no ceiling, so a snippet that used to work can
+        # fail here: the result says what the cap is and how to change it.
+        assert "capped at 512 MB" in result.stderr
+        assert MEMORY_LIMIT_ENV in result.stderr
         assert pt.execute_python("print(keep)").stdout.strip() == "still here"
+
+
+def test_a_memory_error_without_a_ceiling_carries_no_note():
+    """Nothing to blame the cap for when there is none."""
+    with python_session(memory_limit_bytes=0):
+        result = pt.execute_python("raise MemoryError('mine')")
+    assert "MemoryError: mine" in result.stderr
+    assert "capped at" not in result.stderr
 
 
 def test_a_max_calls_ceiling_evicts_and_recreates_the_session():

@@ -116,8 +116,8 @@ from agent.pipeline import screen as screening
 from agent.pipeline import walkthrough
 from agent.pipeline.execution import current_command_runner
 from agent.pipeline.python_session import (
-    NO_PERSISTENCE_NOTE, RESET_NOTE, UNAVAILABLE_NOTE, SessionUnavailable,
-    current_python_session,
+    MEMORY_CEILING_NOTE, NO_PERSISTENCE_NOTE, RESET_NOTE, UNAVAILABLE_NOTE,
+    SessionUnavailable, current_python_session,
 )
 from agent.pipeline.vision import describe_image, sniff_media_type
 from langchain_core.messages import HumanMessage
@@ -264,6 +264,9 @@ def execute_python(code: str, *, timeout: float | None = None) -> ToolResult:
             stderr += "\n[timed out]"
         if outcome.reset:
             stderr += "\n" + RESET_NOTE
+        limit = getattr(session, "memory_limit_bytes", 0)
+        if limit and "MemoryError" in stderr:
+            stderr += "\n" + MEMORY_CEILING_NOTE.format(mb=limit // (1024 * 1024))
         return ToolResult(
             stdout=_clip(outcome.stdout), stderr=_clip(stderr.strip("\n")),
             returncode=outcome.returncode, timed_out=outcome.timed_out,
