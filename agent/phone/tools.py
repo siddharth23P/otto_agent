@@ -257,8 +257,14 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                 # The way out is always allowed. Enter is not a way out: it
                 # is the keyboard's send/submit for the focused field, so it
                 # is judged like a tap on this screen.
-                if key not in EXIT_KEYS and (failure := current_allowed(name)):
-                    return failure
+                if key not in EXIT_KEYS:
+                    if failure := current_allowed(name):
+                        return failure
+                    # No label to judge: the screen is judged instead. A
+                    # checkout, or any pay button on it, is what Enter
+                    # would submit.
+                    if why := guard.submit_verdict(screen_texts()):
+                        return _refuse(name, why)
                 return after(backend.press(key), f"pressed {key}")
             if op in ("swipe", "scroll"):
                 direction = parsed.get("direction")

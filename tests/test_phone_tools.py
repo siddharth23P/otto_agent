@@ -411,6 +411,19 @@ def test_pressing_enter_is_judged_like_a_tap_and_the_exit_keys_are_not():
     assert by_name["phone_act"]('{"op": "press", "key": "back"}').ok
     assert by_name["phone_act"]('{"op": "press", "key": "home"}').ok
     assert [c[0] for c in phone.calls if c[0] == "press"] == ["press", "press"]
+    # A checkout with the focus on a quantity field and no OTP-style text:
+    # Enter would submit the Pay action, so it is refused by the screen.
+    checkout = snap("q", "com.example.shop", "Shop", [
+        node(1, "Qty", r="text"), node(2, "2", r="edit-field", e=True, f=True, c=True),
+        node(3, "Total ₹56", r="text"), node(4, "Pay", r="button", c=True),
+    ])
+    phone = FakePhone([checkout] * 4)
+    by_name, _ = _tools(phone)
+    assert by_name["phone_screen"]("{}").ok
+    refused = by_name["phone_act"]('{"op": "press", "key": "enter"}')
+    assert refused.stderr.startswith("GUARD:") and "Enter would submit" in refused.stderr
+    assert by_name["phone_act"]('{"op": "press", "key": "back"}').ok
+    assert not any(c == ("press", "enter") for c in phone.calls)
 
 
 def test_the_continue_of_a_checkout_is_refused_and_an_onboarding_continue_is_not():
