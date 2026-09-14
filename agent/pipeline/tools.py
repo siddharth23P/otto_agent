@@ -13,7 +13,11 @@ tool as this graph's whole tool box, per the router/planner/solver/
 summarizer/finder/evaluator design):
 
   execute_python -- real. Runs in the bound workspace if there is one,
-                     otherwise in a throwaway temp dir as it always did.
+                     otherwise in a throwaway temp dir as it always did;
+                     and, when agent/pipeline/python_session.py has bound
+                     one for this run, in ONE interpreter that persists
+                     across calls, so what a snippet built is there for
+                     the next. Nothing bound is a fresh process per call.
   execute_bash    -- real: a generic shell command, same sandboxing bar as
                      execute_python (see its own docstring for the honest
                      limits of that bar), and the same workspace behaviour.
@@ -111,6 +115,10 @@ from agent.pipeline import browsing
 from agent.pipeline import screen as screening
 from agent.pipeline import walkthrough
 from agent.pipeline.execution import current_command_runner
+from agent.pipeline.python_session import (
+    MEMORY_CEILING_NOTE, NO_PERSISTENCE_NOTE, RESET_NOTE, UNAVAILABLE_NOTE,
+    SessionUnavailable, current_python_session,
+)
 from agent.pipeline.vision import describe_image, sniff_media_type
 from langchain_core.messages import HumanMessage
 from agent.pipeline.workspace import (
@@ -194,8 +202,18 @@ class ToolResult:
 
 
 def execute_python(code: str, *, timeout: float | None = None) -> ToolResult:
-    """Run `code` as a standalone script in a fresh process, in the bound
-    workspace if there is one and otherwise in a fresh throwaway temp dir.
+    """Run `code` in this run's persistent interpreter when one is bound
+    (agent/pipeline/python_session.py), otherwise as a standalone script in a
+    fresh process -- in the bound workspace if there is one and otherwise in
+    a fresh throwaway temp dir.
+
+    The session is what lets one call build on the last: a dataset loaded
+    or an index built in call one is still there in call two, instead of
+    being rebuilt from the transcript or round-tripped through disk. Nothing
+    bound is the old behaviour exactly, and it is what agent/eval/runner.py's
+    golden checker gets, since that runs outside any run. A bound command
+    runner always wins over a session: the snippet has to land in the
+    container, so that path stays the one-shot command below and says so.
 
     Used by every role node/the evaluator as their ACTION/execute_python
     self-check before committing to a FINAL answer or a verdict (nodes.py's
@@ -210,6 +228,7 @@ def execute_python(code: str, *, timeout: float | None = None) -> ToolResult:
     """
     timeout = default_timeout() if timeout is None else timeout
     remote = current_command_runner()
+    session = current_python_session()
     if remote is not None:
         # base64 rather than a heredoc: a heredoc is only safe until the
         # snippet contains a line equal to the delimiter, and the snippet is
@@ -217,11 +236,48 @@ def execute_python(code: str, *, timeout: float | None = None) -> ToolResult:
         stdout, stderr, code = remote(
             f"echo {_b64(code)} | base64 -d | python3 -", timeout,
         )
+        if session is not None:
+            # Bound by hand alongside a runner (run.py never does): the
+            # runner won, and silently would be worse than saying so.
+            stderr = f"{stderr}\n{NO_PERSISTENCE_NOTE}".strip()
         return ToolResult(
             stdout=_clip(stdout), stderr=_clip(stderr),
             returncode=code, timed_out=(code == -1),
         )
 
+    if session is not None:
+        try:
+            outcome = session.run(utf8_clean(code), timeout)
+        except SessionUnavailable as exc:
+            # The interpreter would not start. One fresh process is still a
+            # correct answer to "run this"; it just does not persist, and
+            # the model is told which it got.
+            logger.warning("python session unavailable, running a fresh process: %s", exc)
+            fallback = _execute_python_fresh(code, timeout)
+            return ToolResult(
+                stdout=fallback.stdout,
+                stderr=f"{fallback.stderr}\n{UNAVAILABLE_NOTE}".strip(),
+                returncode=fallback.returncode, timed_out=fallback.timed_out,
+            )
+        stderr = outcome.stderr
+        if outcome.timed_out:
+            stderr += "\n[timed out]"
+        if outcome.reset:
+            stderr += "\n" + RESET_NOTE
+        limit = getattr(session, "memory_limit_bytes", 0)
+        if limit and "MemoryError" in stderr:
+            stderr += "\n" + MEMORY_CEILING_NOTE.format(mb=limit // (1024 * 1024))
+        return ToolResult(
+            stdout=_clip(outcome.stdout), stderr=_clip(stderr.strip("\n")),
+            returncode=outcome.returncode, timed_out=outcome.timed_out,
+        )
+
+    return _execute_python_fresh(code, timeout)
+
+
+def _execute_python_fresh(code: str, timeout: float) -> ToolResult:
+    """The original execute_python: one script, one process, gone when it
+    returns. Unchanged, and reachable exactly when no session is bound."""
     with _run_dir() as tmp, tempfile.TemporaryDirectory() as holder:
         # The script itself lives OUTSIDE the run dir, always. When the run dir
         # is a throwaway temp dir it makes no difference, but when it is a real

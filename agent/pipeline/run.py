@@ -92,6 +92,14 @@ runs. `workspace=None` is the old behaviour and stays the default, so the
 harnesses' own outer `bind_workspace` still wins for their calls (nesting
 unwinds correctly -- workspace.py's contract) and no single-turn caller
 changes.
+
+One Python session per run (issue #1, agent/pipeline/python_session.py):
+bound here for the same reason as the workspace, and INSIDE it, so the
+interpreter is closed before a harness's scratch directory is deleted from
+under it. Lazy -- no process until the first execute_python -- and absent
+for a run whose commands go to a container, or when OTTO_PYTHON_SESSION=0.
+A resume after an `ask_user` pause is a new binding: what the interpreter
+held before the question is not carried across it.
 """
 import logging
 import uuid
@@ -106,6 +114,7 @@ from agent.memory.session import bind_store
 from agent.pipeline.budget import bind_budget, current_budget, default_budget
 from agent.memory.store import MemoryStore
 from agent.pipeline.nodes import _RECURSION_SAFETY_NET, ROUTER, app
+from agent.pipeline.python_session import run_session_binding
 from agent.pipeline.state import AgentState
 from agent.pipeline.tracing import callback_handler, closing_in_foreign_context, observe_run
 from agent.pipeline.usage import UsageLedger, bind_usage, current_usage
@@ -355,7 +364,8 @@ def run_pipeline(
     budget = current_budget() or default_budget()
     ledger = usage or current_usage() or UsageLedger()
 
-    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
+    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace), \
+            run_session_binding():
         with observe_run(session_id=session_id, name="otto:pipeline", input=text, tags=["pipeline"]) as run_span:
                 try:
                     final = _salvage(app.invoke(initial, config))
@@ -428,7 +438,8 @@ def _run_pipeline_stream(
     # so its panel is cumulative across turns and resumes), otherwise a
     # throwaway -- agent/pipeline/usage.py.
     ledger = usage or current_usage() or UsageLedger()
-    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
+    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace), \
+            run_session_binding():
         with observe_run(session_id=session_id, name="otto:pipeline", input=text, tags=["pipeline"]) as run_span:
                 stream = app.stream(initial, config, stream_mode=_STREAM_MODES)
                 for event, is_ask in _stream_events(stream, graph_thread_id):
@@ -480,7 +491,8 @@ def _resume_pipeline_stream(
     # so its panel is cumulative across turns and resumes), otherwise a
     # throwaway -- agent/pipeline/usage.py.
     ledger = usage or current_usage() or UsageLedger()
-    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace):
+    with bind_budget(budget), bind_usage(ledger), bind_store(store), _workspace_binding(workspace), \
+            run_session_binding():
         with observe_run(session_id=session_id, name="otto:pipeline:resume", input=str(answer), tags=["pipeline", "resumed"]) as run_span:
                 stream = app.stream(Command(resume=answer), config, stream_mode=_STREAM_MODES)
                 for event, is_ask in _stream_events(stream, thread_id):

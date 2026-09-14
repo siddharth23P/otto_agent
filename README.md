@@ -4,7 +4,7 @@
 ![python](https://img.shields.io/badge/python-3.12-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 [![PyPI](https://img.shields.io/pypi/v/otto-cli-agent?label=pypi)](https://pypi.org/project/otto-cli-agent/)
-![tests](https://img.shields.io/badge/tests-1552%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-1593%20passed-brightgreen)
 
 Otto is a terminal AI agent that works on a codebase, a container, a browser
 or a desktop, uses what it built, and judges its own work against criteria it
@@ -130,6 +130,9 @@ uv run otto chat        # the same pipeline at a prompt
 
 Environment variables: `OTTO_MAX_MODEL_CALLS` (per-turn ceiling, default 120),
 `OTTO_COMMAND_TIMEOUT` (120 s with a workspace, 10 s without),
+`OTTO_PYTHON_SESSION=0` (a fresh process per `execute_python` call instead of
+one interpreter per run), `OTTO_PYTHON_SESSION_MEMORY_MB` (that interpreter's
+address-space ceiling on Linux, default 8192, 0 for none),
 `OTTO_EMBEDDING_MODEL` (`provider:model`; local BGE is the floor),
 `OTTO_MODEL_PRICES` (a JSON file that overrides the price table),
 `OTTO_IGNORE_ROUTES=1` (use the shipped routing table untouched; evals do),
@@ -204,7 +207,7 @@ The pieces, each documented in its own folder:
 | [agent/eval](agent/eval/README.md) | the six benchmark harnesses, the failure taxonomy, the single-agent control |
 | [agent/config](agent/config/README.md) | the one `.env` file Otto reads and writes |
 | [containers](containers/README.md) | the throwaway desktop image the screen tools drive |
-| [tests](tests/README.md) | 1,552 tests that need no key and no network |
+| [tests](tests/README.md) | 1,593 tests that need no key and no network |
 | [docs](docs/README.md) | the development log, the research sources, the memory design |
 
 ## Evaluation
@@ -219,7 +222,7 @@ enforce: [agent/eval/README.md](agent/eval/README.md).
 
 ## Testing
 
-1,552 tests pass and 12 skip on macOS, Linux and Windows in under two minutes,
+1,593 tests pass and 12 skip on macOS, Linux and Windows in under two minutes,
 with no API keys and no network. Tests assert on the messages handed to the
 model, on the exact inputs that broke real runs, on call counts against the
 real compiled graph, and directly on the library behaviours the code relies
