@@ -324,6 +324,7 @@ def test_output_of_a_child_process_is_captured_too(session):
     )
     assert result.ok, result.stderr
     assert "from child" in result.stdout
+    assert "\r" not in result.stdout
 
 
 # --------------------------------------------------------------------------
@@ -682,6 +683,18 @@ def test_long_output_is_bounded_but_keeps_both_ends(session):
     assert result.stdout.startswith("0\n")
     assert result.stdout.rstrip().endswith("199999")
     assert len(result.stdout) <= pt._TAIL + 100
+
+
+def test_line_endings_come_back_as_newlines_on_every_platform(session):
+    """CI on Windows: every line came back `\\r\\n`. The fresh-process path
+    decoded with universal newlines (`subprocess.run(text=True)`), so the
+    session must too -- the model reads the same text on every OS. Raw
+    bytes here so the case is exercised on Linux as well."""
+    result = pt.execute_python(
+        "import sys\nsys.stdout.buffer.write(b'a\\r\\nb\\r\\n')\nprint('c')"
+    )
+    assert result.ok, result.stderr
+    assert result.stdout == "a\nb\nc\n"
 
 
 def test_a_snippet_that_breaks_stdout_does_not_break_the_next_call(session):

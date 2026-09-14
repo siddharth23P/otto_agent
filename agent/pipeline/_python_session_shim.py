@@ -66,6 +66,7 @@ _os_dup2 = os.dup2
 _os_remove = os.remove
 _os_getsize = os.path.getsize
 _FileIO = io.FileIO
+_BytesIO = io.BytesIO
 _TextIOWrapper = io.TextIOWrapper
 
 
@@ -118,7 +119,7 @@ def _fresh_text_stream(fd: int):
     previous `sys.stdout` cannot take the next call's output with it."""
     return _TextIOWrapper(
         _FileIO(fd, "w", closefd=False), encoding="utf-8", errors="replace",
-        write_through=True,
+        write_through=True, newline="\n",
     )
 
 
@@ -158,7 +159,10 @@ def _read_capture(path: str) -> str:
             _os_remove(path)
         except OSError:
             pass
-    return data.decode("utf-8", errors="replace")
+    # Universal newlines, exactly as `subprocess.run(text=True)` decoded the
+    # fresh-process path: on Windows a print() or a child process writes
+    # `\r\n`, and the model must read the same `\n` it always did.
+    return _TextIOWrapper(_BytesIO(data), encoding="utf-8", errors="replace").read()
 
 
 def _exit_code(exc: SystemExit) -> int:
