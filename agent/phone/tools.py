@@ -237,6 +237,16 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
             if op == "tap" and "x" in parsed and "y" in parsed:
                 if failure := current_allowed(name):
                     return failure
+                under = _digest.node_at(state["snapshot"], parsed["x"], parsed["y"]) if state.get("snapshot") else None
+                if under is not None:
+                    label = _digest.label_of(under)
+                    kind = guard.target_verdict(label)
+                    if kind == "pay":
+                        return _refuse(name, f"{label!r} is a payment step -- the person does that")
+                    if kind == "commit":
+                        return _bad(name, f"{label!r} cannot be taken back; use phone_commit for it")
+                    if under.get("p"):
+                        return _refuse(name, "that is a password field -- the person types there")
                 return after(backend.tap(parsed["x"], parsed["y"]), f"tapped {parsed['x']},{parsed['y']}")
             if op in ("tap", "tap_text", "long_press"):
                 target = parsed.get("target") or ""
@@ -266,6 +276,15 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                         return _refuse(name, "that is a password field -- the person types there")
                 elif failure := current_allowed(name):
                     return failure
+                else:
+                    # Typing into whatever has focus: the focused field must
+                    # not be a password field, and with no known focus a
+                    # screen that has one is not typed into blind.
+                    nodes = [n for n in (state["snapshot"].get("nodes") or []) if isinstance(n, dict)]
+                    focused = [n for n in nodes if n.get("f")]
+                    if any(n.get("p") for n in focused) or (not focused and any(n.get("p") for n in nodes)):
+                        return _refuse(name, "a password field is on this screen -- say which field, and "
+                                             "never a password one; the person types those")
                 return after(backend.type_text(text, node), f"typed {_digest.inert_text(text, 60)!r}")
             return _bad(name, f"op must be one of {', '.join(ACT_OPS)}")
         except PhoneError as exc:
@@ -381,6 +400,14 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         if snapshot.get("secure"):
             return _refuse(name, "this window is protected (secure content) -- it is not captured "
                                  "and the person takes over")
+        # One signal is enough here. Acting needs two (a chat that mentions
+        # an OTP is safe to scroll), but a capture is a picture of the whole
+        # screen sent to a vision vendor, and a screen showing an OTP, a PIN
+        # or a card number is not one to photograph, whoever put it there.
+        seen = guard.sensitive_matches(_digest.label_of(n) for n in snapshot.get("nodes") or [] if isinstance(n, dict))
+        if seen:
+            return _refuse(name, f"the screen shows something sensitive ({seen[0]!r}) -- not captured; "
+                                 "phone_screen already lists the text")
         try:
             data = backend.screenshot()
         except PhoneError as exc:
@@ -421,7 +448,7 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         package, query = str(parsed.get("package") or "").strip(), str(parsed.get("query") or "").strip()
         if not package and not query:
             return _bad(name, "say package (com.example.app) or query (the app's name)")
-        if package and (why := guard.package_verdict(package, query)):
+        if why := guard.package_verdict(package, query):
             return _refuse(name, why + " -- not installed")
         try:
             result = backend.install(package, query)

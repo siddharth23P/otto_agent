@@ -146,6 +146,28 @@ def find_node(snapshot: dict, text: str, *, clickable_only: bool = False) -> tup
     return None, partial
 
 
+def node_at(snapshot: dict, x: int, y: int) -> dict | None:
+    """The smallest node whose bounds contain the point, or None. A tap by
+    coordinates is a tap on whatever is drawn there, and the guard has to
+    judge that element as it would one named by its text."""
+    best, best_area = None, None
+    for node in snapshot.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        b = node.get("b")
+        if not (isinstance(b, (list, tuple)) and len(b) == 4):
+            continue
+        try:
+            left, top, right, bottom = (int(v) for v in b)
+        except (TypeError, ValueError):
+            continue
+        if left <= x <= right and top <= y <= bottom:
+            area = max(1, right - left) * max(1, bottom - top)
+            if best_area is None or area < best_area:
+                best, best_area = node, area
+    return best
+
+
 def node_by_index(snapshot: dict, index: int) -> dict | None:
     for node in snapshot.get("nodes") or []:
         if isinstance(node, dict) and node.get("i") == index:

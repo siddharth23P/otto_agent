@@ -355,3 +355,62 @@ def test_phone_open_survives_a_malformed_package():
     by_name, _ = _tools(FakePhone([BLINKIT_SEARCH], apps=[{"label": "Odd", "package": 42}]))
     result = by_name["phone_open"]('{"app": "Odd"}')
     assert isinstance(result, ToolResult)
+
+
+# --------------------------------------------------------------------------
+# From the third and fourth reviews
+# --------------------------------------------------------------------------
+
+def test_a_tap_by_coordinates_is_judged_by_what_is_under_the_point():
+    """The digest hands the model every centre; a "Pay now" at 540,2250 is
+    still a pay button when tapped by number."""
+    phone = FakePhone([BLINKIT_CART] * 3)
+    by_name, _ = _tools(phone)
+    by_name["phone_screen"]("{}")
+    result = by_name["phone_act"]('{"op": "tap", "x": 540, "y": 2250}')
+    assert result.stderr.startswith("GUARD:") and "payment step" in result.stderr
+    chat = snapshot("k", "com.whatsapp", "WhatsApp", [node(1, "Send", r="button", b=(900, 2200, 1060, 2280), c=True)])
+    by_name, _ = _tools(FakePhone([chat] * 2))
+    by_name["phone_screen"]("{}")
+    assert "phone_commit" in by_name["phone_act"]('{"op": "tap", "x": 980, "y": 2240}').stderr
+    assert by_name["phone_act"]('{"op": "tap", "x": 10, "y": 10}').ok  # nothing there: an ordinary tap
+    assert not any(c[0] == "tap" and c[1] == 540 for c in phone.calls)
+
+
+def test_typing_without_a_target_respects_a_password_field():
+    focused_secret = snapshot("p1", "com.example.notes", "Notes",
+                              [node(1, "Unlock", r="text"), node(2, "", d="Secret", r="edit-field", e=True, p=True, f=True)])
+    phone = FakePhone([focused_secret] * 2)
+    by_name, _ = _tools(phone)
+    by_name["phone_screen"]("{}")
+    result = by_name["phone_act"]('{"op": "type", "text": "1234"}')
+    assert result.stderr.startswith("GUARD:") and "password" in result.stderr
+    unfocused_secret = snapshot("p2", "com.example.notes", "Notes",
+                                [node(1, "", d="Secret", r="edit-field", e=True, p=True), node(2, "Note", r="edit-field", e=True)])
+    by_name, _ = _tools(FakePhone([unfocused_secret] * 2))
+    by_name["phone_screen"]("{}")
+    assert by_name["phone_act"]('{"op": "type", "text": "hello"}').stderr.startswith("GUARD:")
+    assert by_name["phone_act"]('{"op": "type", "target": "Note", "text": "hello"}').ok
+    assert not any(c[0] == "type_text" for c in phone.calls)
+
+
+def test_install_by_name_is_guarded_like_install_by_package():
+    phone = FakePhone([SETTINGS_DISPLAY] * 4)
+    by_name, _ = _tools(phone)
+    for body in ('{"query": "PhonePe"}', '{"query": "Google Pay"}', '{"query": "Paytm wallet"}', '{"query": "HDFC Bank"}'):
+        assert by_name["phone_install"](body).stderr.startswith("GUARD:"), body
+    assert by_name["phone_install"]('{"query": "Wikipedia"}').ok
+    assert [c for c in phone.calls if c[0] == "install"] == [("install", "", "Wikipedia")]
+
+
+def test_phone_look_refuses_any_screen_that_shows_a_secret():
+    """Acting needs two signals; a capture needs one. A chat showing an OTP
+    may be scrolled, but not photographed for a vision vendor."""
+    calls = []
+    vision = lambda q, d, m: (calls.append(q), "words")[1]
+    by_name, _ = _tools(FakePhone([CHAT_WITH_OTP]), vision=vision)
+    result = by_name["phone_look"]('{"question": "what does mom say?"}')
+    assert result.stderr.startswith("GUARD:") and "sensitive" in result.stderr
+    assert calls == []
+    by_name, _ = _tools(FakePhone([SETTINGS_DISPLAY]), vision=vision)
+    assert by_name["phone_look"]('{"question": "ok?"}').ok

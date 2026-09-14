@@ -35,7 +35,9 @@ this side. The phone shares the same lists and the same limit; the mutation
 gate and the person's own hand-over are what stand behind it, and the lists
 are meant to grow (guard_rules.json is data).
 
-`package_word_exceptions` are substrings removed before the money words are
+`denied_names` are the labels of the denied apps, for an install asked for by
+name before any package is known, and for a listing whose package the phone
+cannot read. `package_word_exceptions` are substrings removed before the money words are
 looked for, each guarding one word: "payload" and "paypal.shopping" hide a
 "pay" that is not money.
 
@@ -82,6 +84,7 @@ def _compiled() -> dict:
     data = rules()
     return {
         "denied": frozenset(p.lower() for p in data["denied_packages"]),
+        "names": tuple(re.compile(r"(^|\W)" + re.escape(n.lower()) + r"($|\W)") for n in data.get("denied_names", ())),
         "words": tuple(w.lower() for w in data["package_words"]),
         "exceptions": tuple(w.lower() for w in data.get("package_word_exceptions", ())),
         "sensitive": tuple(re.compile(p, re.IGNORECASE) for p in data["sensitive_patterns"]),
@@ -111,6 +114,9 @@ def package_verdict(package: str, label: str = "") -> str:
     pkg = normal(package)
     if pkg in c["denied"]:
         return f"{package} is a payment or banking app"
+    shown = normal(label)
+    if shown and any(p.search(shown) for p in c["names"]):
+        return f"{label} is a payment or banking app"
     hit = _has_word(f"{pkg} {label or ''}", c["words"], c["exceptions"])
     if hit:
         return f"{label or package} looks money-related ({hit!r})"

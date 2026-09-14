@@ -99,8 +99,9 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
     process sees every configured key. One process is one person's Otto;
     a host that serves several people runs several processes.
 
-    Idempotent for the same home; a second call with a different one is a
-    mistake and raises. Called after a state module was already imported it
+    Idempotent for the same home, env file included: a repeat call that omits
+    `env_file` keeps the one already configured. A second call with a
+    different home is a mistake and raises. Called after a state module was already imported it
     still sets the variables but logs that the imported module resolved its
     paths before this ran -- the contract in agent/config/home.py.
     """
@@ -130,6 +131,8 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
         if late:
             logger.warning("configure() ran after %s were imported; their paths were "
                            "resolved from the environment at that time", ", ".join(late))
+    if env_path is None:
+        env_path = _configured.get("env_file")  # sticky: a repeat call without it keeps the file
     _configured.update(home=root, env_file=env_path)
     from agent.router import overrides
 
