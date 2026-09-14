@@ -233,15 +233,16 @@ def target_verdict(label: str, texts: Iterable[str] = ()) -> str:
     # whole ("Pay", "Pay ₹499", not "Payload"). A pay word may over-match;
     # it only ever refuses.
     squashed = text.replace(" ", "")
-    for word in c["pay"]:
+
+    def hit(word: str) -> bool:
         if " " in word:
-            if word in text or word.replace(" ", "") in squashed:
-                return "pay"
-        elif _whole(word, text):
-            return "pay"
-    if any(_whole(word, text) or (" " in word and word in text) for word in c["forward"]):
-        if checkout_context(texts):
-            return "pay"
+            return word in text or word.replace(" ", "") in squashed
+        return _whole(word, text)
+
+    if any(hit(word) for word in c["pay"]):
+        return "pay"
+    if any(hit(word) for word in c["forward"]) and checkout_context(texts):
+        return "pay"
     for word in c["commit"]:
         # Whole words: "Send" is a commit, "Sending…" is a status line.
         if _whole(word, text):
