@@ -127,4 +127,6 @@ def test_set_value_makes_the_file_private_even_when_it_already_was_not(monkeypat
     monkeypatch.delenv("OTTO_TEST_KEY", raising=False)
     envfile.set_value("OTTO_TEST_KEY", "abcd1234", path=target)
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
-    envfile.unset_value("OTTO_TEST_KEY", path=target)
+    target.chmod(0o644)
+    envfile.unset_value("OTTO_TEST_KEY", path=target)  # a removal is a write too
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
