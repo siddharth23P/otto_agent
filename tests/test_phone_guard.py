@@ -122,3 +122,10 @@ def test_every_package_word_exception_guards_a_real_word():
     data = guard.rules()
     for exc in data["package_word_exceptions"]:
         assert any(word in exc for word in data["package_words"]), f"{exc!r} guards nothing"
+
+
+def test_denied_names_catch_an_app_asked_for_by_name():
+    assert "payment or banking" in guard.package_verdict("", "PhonePe")
+    assert "payment or banking" in guard.package_verdict("", "Google Pay: Save and Pay")
+    assert guard.package_verdict("", "Wikipedia") == ""
+    assert guard.package_verdict("", "Otherwise Notes") == ""  # "wise" is a whole word only

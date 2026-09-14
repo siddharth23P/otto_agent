@@ -14,6 +14,11 @@
     "com.starlingbank.android", "com.monzo.android", "com.samsung.android.spay",
     "com.google.android.apps.walletnfcrel"
   ],
+  "denied_names": [
+    "phonepe", "google pay", "gpay", "paytm", "bhim", "cred", "mobikwik", "freecharge",
+    "amazon pay", "paypal", "venmo", "cash app", "revolut", "wise", "coinbase", "binance",
+    "zerodha", "kite", "upstox", "groww", "angel one", "samsung pay", "google wallet"
+  ],
   "package_words": [
     "bank", "pay", "upi", "wallet", "finance", "fintech", "loan", "credit", "trading",
     "invest", "insurance", "mutual", "broker", "crypto", "lend", "emi", "cashback"

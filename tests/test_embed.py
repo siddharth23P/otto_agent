@@ -263,3 +263,12 @@ def test_sessions_can_be_listed_resumed_and_deleted(configured, monkeypatch):
     resumed.close()
     assert runtime.delete_session(sid) is True
     assert not runtime.list_sessions()
+
+
+def test_configure_keeps_its_env_file_on_a_repeat_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(embed, "_configured", {})
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embed.configure(tmp_path / "home", env_file=tmp_path / "keys.env")
+    embed.configure(tmp_path / "home")  # the docstring's safe repeat
+    embed.set_key("OPENAI_API_KEY", "sk-persisted1234")
+    assert "OPENAI_API_KEY=" in (tmp_path / "keys.env").read_text()
