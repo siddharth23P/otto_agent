@@ -106,3 +106,25 @@ def test_set_value_writes_the_current_env_path_not_the_import_time_one(monkeypat
     assert "OTTO_TEST_KEY=" in target.read_text()
     envfile.unset_value("OTTO_TEST_KEY")
     assert "OTTO_TEST_KEY=" not in target.read_text()
+
+
+def test_set_value_makes_the_file_private_even_when_it_already_was_not(monkeypatch, tmp_path):
+    """The file now carries the serve token too; a copy made by a host or
+    by hand with a wide mode is tightened on every write, not only when
+    otto creates it (2026-09-14 review)."""
+    import os
+    import stat
+
+    from agent.config import envfile
+
+    if os.name == "nt":
+        import pytest
+
+        pytest.skip("POSIX file modes")
+    target = tmp_path / ".env"
+    target.write_text("OTHER=1\n")
+    target.chmod(0o644)
+    monkeypatch.delenv("OTTO_TEST_KEY", raising=False)
+    envfile.set_value("OTTO_TEST_KEY", "abcd1234", path=target)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    envfile.unset_value("OTTO_TEST_KEY", path=target)

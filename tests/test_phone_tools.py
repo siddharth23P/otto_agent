@@ -373,8 +373,63 @@ def test_a_tap_by_coordinates_is_judged_by_what_is_under_the_point():
     by_name, _ = _tools(FakePhone([chat] * 2))
     by_name["phone_screen"]("{}")
     assert "phone_commit" in by_name["phone_act"]('{"op": "tap", "x": 980, "y": 2240}').stderr
-    assert by_name["phone_act"]('{"op": "tap", "x": 10, "y": 10}').ok  # nothing there: an ordinary tap
+    # Nothing under the point on a screen that has elements: the guard cannot
+    # judge what is drawn there, so it is not tapped (2026-09-14 review).
+    blind = by_name["phone_act"]('{"op": "tap", "x": 10, "y": 10}')
+    assert not blind.ok and "nothing in the tree is under that point" in blind.stderr
     assert not any(c[0] == "tap" and c[1] == 540 for c in phone.calls)
+
+
+def test_a_blind_tap_is_allowed_only_on_an_elementless_screen_that_no_look_called_a_checkout():
+    canvas = snapshot("g", "com.example.game", "Blocks", [])
+    phone = FakePhone([canvas] * 6)
+    by_name, _ = _tools(phone, vision=lambda q, data, media: "a game board with falling blocks")
+    by_name["phone_screen"]("{}")
+    assert by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}').ok
+    assert by_name["phone_look"]('{"question": "what is this"}').ok
+    assert by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}').ok
+    by_name, _ = _tools(FakePhone([canvas] * 6),
+                        vision=lambda q, data, media: "a checkout page: order total ₹499 and a Pay button")
+    by_name["phone_screen"]("{}")
+    by_name["phone_look"]('{"question": "what is this"}')
+    refused = by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}')
+    assert refused.stderr.startswith("GUARD:") and "payment step" in refused.stderr
+
+
+def test_pressing_enter_is_judged_like_a_tap_and_the_exit_keys_are_not():
+    """Enter is the keyboard's submit; on a screen the guard has handed
+    over it must not fire (2026-09-14 review)."""
+    from tests.phone_fakes import snapshot as snap
+    otp = snap("o", "com.example.shop", "Shop", [
+        node(1, "Enter your OTP", r="text"), node(2, "", r="edit-field", e=True, f=True, c=True),
+    ])
+    phone = FakePhone([otp] * 6)
+    by_name, _ = _tools(phone)
+    assert by_name["phone_screen"]("{}").stderr.startswith("GUARD:")
+    result = by_name["phone_act"]('{"op": "press", "key": "enter"}')
+    assert result.stderr.startswith("GUARD:")
+    assert by_name["phone_act"]('{"op": "press", "key": "back"}').ok
+    assert by_name["phone_act"]('{"op": "press", "key": "home"}').ok
+    assert [c[0] for c in phone.calls if c[0] == "press"] == ["press", "press"]
+
+
+def test_the_continue_of_a_checkout_is_refused_and_an_onboarding_continue_is_not():
+    checkout = snapshot("c", "com.grofers.customerapp", "Blinkit", [
+        node(1, "Order summary", r="text"), node(2, "Total ₹28", r="text"),
+        node(3, "Continue", r="button", b=(60, 2200, 1020, 2300), c=True),
+    ])
+    by_name, _ = _tools(FakePhone([checkout] * 3))
+    by_name["phone_screen"]("{}")
+    refused = by_name["phone_act"]('{"op": "tap", "target": "Continue"}')
+    assert refused.stderr.startswith("GUARD:") and "payment step" in refused.stderr
+    assert "payment step" in by_name["phone_commit"]('{"target": "Continue"}').stderr
+    onboarding = snapshot("w", "com.grofers.customerapp", "Blinkit", [
+        node(1, "Pick your location", r="text"),
+        node(2, "Continue", r="button", b=(60, 2200, 1020, 2300), c=True),
+    ])
+    by_name, _ = _tools(FakePhone([onboarding] * 3))
+    by_name["phone_screen"]("{}")
+    assert by_name["phone_act"]('{"op": "tap", "target": "Continue"}').ok
 
 
 def test_typing_without_a_target_respects_a_password_field():

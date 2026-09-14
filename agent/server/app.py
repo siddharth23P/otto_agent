@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from http import HTTPStatus
 from typing import Any
 
 from agent.server import protocol
@@ -33,14 +35,22 @@ class ProtocolError(Exception):
 #: one thing the shared-token trust model does not otherwise limit.
 MAX_SESSIONS_PER_CONNECTION = 8
 
+#: Turns across every connection share one pool of this size, not Python's
+#: process-wide default executor: a server bound wider than loopback with
+#: many clients queues turns here, visibly, instead of starving whatever
+#: else the process runs in that default pool.
+MAX_TURN_WORKERS = 8
+
 
 class Connection:
     """State for one client socket."""
 
-    def __init__(self, websocket, token: str, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, websocket, token: str, loop: asyncio.AbstractEventLoop,
+                 executor: ThreadPoolExecutor | None = None) -> None:
         self.ws = websocket
         self.token = token
         self.loop = loop
+        self.executor = executor
         self.phone: SocketPhone | None = None
         self.capabilities: set[str] = set()
         self.handles: dict[str, Any] = {}
@@ -153,7 +163,7 @@ class Connection:
         def run() -> None:
             handle.run(text, events=events, tools=tools, guidance=guidance, disabled_tools=disabled)
 
-        self.turns[session_id] = self.loop.run_in_executor(None, run)
+        self.turns[session_id] = self.loop.run_in_executor(self.executor, run)
 
     async def sessions(self, message: dict) -> None:
         op = str(message.get("op") or "list")
@@ -184,33 +194,47 @@ class Connection:
 
     async def close(self) -> None:
         """Best-effort teardown: nothing here may raise, but everything that
-        goes wrong is logged at debug level so a field problem can be read."""
+        goes wrong is logged as a warning so a field problem can be read."""
         if self.phone is not None:
             self.phone.fail_all("the client disconnected")
         for handle in self.handles.values():
             try:
                 handle.cancel()
             except Exception:
-                logger.debug("serve: cancel on close failed for %s", handle.id, exc_info=True)
+                logger.warning("serve: cancel on close failed for %s", handle.id, exc_info=True)
         for session_id, future in list(self.turns.items()):
             try:
                 await asyncio.wait_for(asyncio.shield(future), timeout=10)
             except Exception:
-                logger.debug("serve: turn %s did not finish within the close window", session_id, exc_info=True)
+                logger.warning("serve: turn %s did not finish within the close window", session_id)
         for handle in self.handles.values():
             try:
                 handle.close()
             except Exception:
-                logger.debug("serve: close failed for %s", handle.id, exc_info=True)
+                logger.warning("serve: close failed for %s", handle.id, exc_info=True)
 
 
 class OttoServer:
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, *, allowed_origins: tuple[str, ...] = (),
+                 max_workers: int = MAX_TURN_WORKERS) -> None:
         self.token = token
+        self.allowed_origins = tuple(o.rstrip("/").lower() for o in allowed_origins)
+        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="otto-turn")
+
+    def check_origin(self, connection, request):
+        """Refuse a browser. A native client sends no Origin header; a page
+        in a browser always does, and a page has no business on this port
+        unless `allowed_origins` names its origin. The token would stop it
+        anyway; this stops it before the token is ever tried."""
+        origin = request.headers.get("Origin")
+        if origin is None or origin.rstrip("/").lower() in self.allowed_origins:
+            return None
+        logger.warning("serve: refused a connection from origin %s", origin)
+        return connection.respond(HTTPStatus.FORBIDDEN, "origin not allowed\n")
 
     async def handler(self, websocket) -> None:
         loop = asyncio.get_running_loop()
-        connection = Connection(websocket, self.token, loop)
+        connection = Connection(websocket, self.token, loop, self.executor)
         try:
             try:
                 first = await asyncio.wait_for(websocket.recv(), timeout=15)
@@ -236,7 +260,8 @@ class OttoServer:
     async def run(self, host: str, port: int, *, ready: asyncio.Event | None = None) -> None:
         from websockets.asyncio.server import serve
 
-        async with serve(self.handler, host, port, max_size=protocol.MAX_FRAME_BYTES) as server:
+        async with serve(self.handler, host, port, max_size=protocol.MAX_FRAME_BYTES,
+                         process_request=self.check_origin) as server:
             self.sockets = server.sockets
             if ready is not None:
                 ready.set()

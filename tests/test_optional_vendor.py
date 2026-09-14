@@ -38,3 +38,14 @@ def test_health_report_names_the_import_failure(monkeypatch):
         assert "import failed" in reports["openai"].detail
     finally:
         llm_provider.reset()
+
+
+def test_the_model_list_skips_the_vendor_whose_sdk_is_missing(monkeypatch):
+    """`otto models`, the TUI picker and /model all go through all_models();
+    it used to import every adapter unguarded (2026-09-14 review)."""
+    _without_openai_sdk(monkeypatch)
+    try:
+        models = llm_provider.all_models()
+        assert all(m.provider != "openai" for m in models)
+    finally:
+        llm_provider.reset()
