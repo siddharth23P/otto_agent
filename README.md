@@ -119,7 +119,7 @@ uv run otto chat        # the same pipeline at a prompt
 | --- | --- |
 | `otto tui` / `otto chat` | interactive sessions; `--workspace PATH`, `--no-workspace`, `--resume <id\|prefix\|last>` |
 | `otto sessions` | list, `--delete`, `--rename`, `--export`, `--import`, `--prune` |
-| `otto serve` | the agent behind a WebSocket for the phone app; `--host`, `--port`, `--token`, `--qr` |
+| `otto serve` | the agent behind a WebSocket for the phone app; `--host`, `--port`, `--token`, `--qr`, `--allow-origin` |
 | `otto doctor` | provider and route health, exit 2 on a missing required key |
 | `otto models` | every model each configured vendor lists, with detected capabilities |
 | `otto route <task>` | the fallback chain for a seat, pins starred, observed outcomes shown |
@@ -234,6 +234,8 @@ session = runtime.open_session()
 session.run("make my font bigger", events=print,
             tools=phone_tools(backend), guidance=PHONE_GUIDANCE,
             disabled_tools=PHONE_DISABLED_STANDING_TOOLS)   # blocks; ask/answer from another thread
+# Keys given through configure(environ=...) switch execute_bash/execute_python off unless
+# disabled_tools says otherwise: a subprocess inherits the environment, keys included.
 ```
 
 Events are plain dicts (`progress`, `board`, `ask`, `final`, `error`), a run

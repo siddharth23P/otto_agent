@@ -23,9 +23,15 @@ Three verdicts, three kinds of evidence:
                     counted any input field and stopped the agent on both.
 
   target_verdict    the thing about to be tapped. A pay word ("Pay now",
-                    "Place order") is never tappable, whatever tool asks. A
-                    commit word ("Send", "Delete", "Confirm") is tappable only
-                    through phone_commit, which the mutation gate holds once.
+                    "Place order", and the bare "Pay", "Buy", "Checkout") is
+                    never tappable, whatever tool asks. A forward word
+                    ("Continue", "Next", "Confirm") is a pay word when the
+                    screen shows a checkout signal (a total, "payment", a
+                    card field): that is what the last button of a checkout
+                    is usually called. A commit word ("Send", "Delete", and
+                    "Checkout": reaching the payment page is the person's
+                    call, once) is tappable only through phone_commit, which
+                    the mutation gate holds once.
 
 WHAT THE LABEL VERDICT CANNOT SEE. `target_verdict` reads the words on the
 control: its text, or its content description when it has none (an icon
@@ -59,12 +65,31 @@ from typing import Iterable
 _INVISIBLE = re.compile("[\u200b-\u200f\u2060-\u2064\u00ad\ufeff\u202a-\u202e\u2066-\u2069]")
 
 
+#: Letters from other scripts that draw the same as a Latin one -- the
+#: Cyrillic and Greek look-alikes a label can be spelled with so that
+#: "Pаy now" (Cyrillic а) reads as "Pay now" to a person and as nothing to a
+#: word list. NFKC does not fold across scripts, so this table does, after
+#: lower-casing (the capitals lower-case to these). Not exhaustive; the
+#: rest of Unicode's confusables table is a long tail, and a label spelled
+#: in a script the lists do not carry is the limit the module docstring
+#: names.
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i",
+    "ј": "j", "ѕ": "s", "һ": "h", "ԁ": "d", "ԛ": "q", "ԝ": "w", "ѵ": "v", "ԍ": "g",
+    "ӏ": "l", "к": "k", "т": "t", "м": "m", "в": "b", "н": "h", "ь": "b", "ѡ": "w",
+    "α": "a", "ο": "o", "ρ": "p", "ν": "v", "ι": "i", "κ": "k", "υ": "u", "τ": "t",
+    "ε": "e", "β": "b", "χ": "x", "γ": "y", "ς": "s",
+})
+
+
 def normal(text: str) -> str:
-    """NFKC-folded, invisible characters removed, lower-cased, one space
-    between words: the form every verdict matches against. The Kotlin side
-    applies the same steps."""
+    """NFKC-folded, invisible characters removed, lower-cased, look-alike
+    letters from other scripts folded to Latin, one space between words: the
+    form every verdict matches against. The Kotlin side applies the same
+    steps."""
     folded = unicodedata.normalize("NFKC", str(text or ""))
-    return " ".join(_INVISIBLE.sub("", folded).lower().split())
+    lowered = _INVISIBLE.sub("", folded).lower().translate(_CONFUSABLES)
+    return " ".join(lowered.split())
 
 RULES_RESOURCE = ("agent.phone", "assets/guard_rules.json")
 
@@ -74,24 +99,46 @@ def rules_text() -> str:
     return resources.files(RULES_RESOURCE[0]).joinpath(RULES_RESOURCE[1]).read_text(encoding="utf-8")
 
 
+class GuardRulesError(RuntimeError):
+    """The rules file is missing, not JSON, or missing a section. Raised by
+    every verdict until it is fixed: a guard with no rules refuses, it does
+    not guess."""
+
+
 @lru_cache(maxsize=1)
 def rules() -> dict:
-    return json.loads(rules_text())
+    try:
+        data = json.loads(rules_text())
+    except (OSError, ValueError) as exc:
+        raise GuardRulesError(f"guard_rules.json is unreadable ({exc}); reinstall otto-cli-agent") from exc
+    missing = [k for k in _REQUIRED_SECTIONS if not isinstance(data.get(k), list)]
+    if not isinstance(data, dict) or missing:
+        raise GuardRulesError(f"guard_rules.json lacks {', '.join(missing) or 'its sections'}; reinstall otto-cli-agent")
+    return data
+
+
+_REQUIRED_SECTIONS = ("denied_packages", "package_words", "sensitive_patterns", "pay_words",
+                      "commit_words", "settings_pages")
 
 
 @lru_cache(maxsize=1)
 def _compiled() -> dict:
     data = rules()
-    return {
-        "denied": frozenset(p.lower() for p in data["denied_packages"]),
-        "names": tuple(re.compile(r"(^|\W)" + re.escape(n.lower()) + r"($|\W)") for n in data.get("denied_names", ())),
-        "words": tuple(w.lower() for w in data["package_words"]),
-        "exceptions": tuple(w.lower() for w in data.get("package_word_exceptions", ())),
-        "sensitive": tuple(re.compile(p, re.IGNORECASE) for p in data["sensitive_patterns"]),
-        "pay": tuple(w.lower() for w in data["pay_words"]),
-        "commit": tuple(w.lower() for w in data["commit_words"]),
-        "pages": tuple(data["settings_pages"]),
-    }
+    try:
+        return {
+            "denied": frozenset(p.lower() for p in data["denied_packages"]),
+            "names": tuple(re.compile(r"(^|\W)" + re.escape(n.lower()) + r"($|\W)") for n in data.get("denied_names", ())),
+            "words": tuple(w.lower() for w in data["package_words"]),
+            "exceptions": tuple(w.lower() for w in data.get("package_word_exceptions", ())),
+            "sensitive": tuple(re.compile(p, re.IGNORECASE) for p in data["sensitive_patterns"]),
+            "pay": tuple(w.lower() for w in data["pay_words"]),
+            "forward": tuple(w.lower() for w in data.get("forward_words", ())),
+            "checkout": tuple(re.compile(p, re.IGNORECASE) for p in data.get("checkout_signals", ())),
+            "commit": tuple(w.lower() for w in data["commit_words"]),
+            "pages": tuple(data["settings_pages"]),
+        }
+    except (TypeError, AttributeError, re.error) as exc:
+        raise GuardRulesError(f"guard_rules.json has a malformed entry ({exc}); reinstall otto-cli-agent") from exc
 
 
 def settings_pages() -> tuple[str, ...]:
@@ -155,23 +202,49 @@ def screen_verdict(texts: Iterable[str], *, package: str = "", label: str = "",
             f"{', '.join(reasons)}) -- the person takes over here")
 
 
-def target_verdict(label: str) -> str:
+def _whole(word: str, text: str) -> bool:
+    return re.search(r"(^|\W)" + re.escape(word) + r"($|\W)", text) is not None
+
+
+def checkout_context(texts: Iterable[str]) -> str:
+    """The first screen string that says this is a checkout -- a total, an
+    order summary, "payment", a card field -- or "". What turns a forward
+    word into a pay word."""
+    c = _compiled()
+    for text in texts:
+        s = normal(text)
+        if s and any(p.search(s) for p in c["checkout"]):
+            return str(text or "")[:60]
+    return ""
+
+
+def target_verdict(label: str, texts: Iterable[str] = ()) -> str:
     """'pay' for a button the model may never tap, 'commit' for one only
-    phone_commit may tap, '' for anything else."""
+    phone_commit may tap, '' for anything else. `texts` are the other
+    strings on the screen: a forward word ("Continue") is a pay word only
+    when one of them is a checkout signal."""
     c = _compiled()
     text = normal(label)
     if not text:
         return ""
-    # Also with every space removed: a zero-width character hidden inside
-    # "Pay now" normalises to "paynow", and "PayNow" is how some apps spell
-    # it anyway. A pay word may over-match; it only ever refuses.
+    # A phrase matches as a substring, and also with every space removed: a
+    # zero-width character hidden inside "Pay now" normalises to "paynow",
+    # and "PayNow" is how some apps spell it anyway. A single word matches
+    # whole ("Pay", "Pay ₹499", not "Payload"). A pay word may over-match;
+    # it only ever refuses.
     squashed = text.replace(" ", "")
     for word in c["pay"]:
-        if word in text or word.replace(" ", "") in squashed:
+        if " " in word:
+            if word in text or word.replace(" ", "") in squashed:
+                return "pay"
+        elif _whole(word, text):
+            return "pay"
+    if any(_whole(word, text) or (" " in word and word in text) for word in c["forward"]):
+        if checkout_context(texts):
             return "pay"
     for word in c["commit"]:
         # Whole words: "Send" is a commit, "Sending…" is a status line.
-        if re.search(r"(^|\W)" + re.escape(word) + r"($|\W)", text):
+        if _whole(word, text):
             return "commit"
     return ""
 

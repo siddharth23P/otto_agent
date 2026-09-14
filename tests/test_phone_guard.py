@@ -9,9 +9,9 @@ from tests.phone_fakes import BLINKIT_CART, CHAT_WITH_OTP, PHONEPE, node, snapsh
 def test_the_rules_file_is_valid_json_with_the_expected_sections():
     data = json.loads(guard.rules_text())
     for key in ("denied_packages", "package_words", "sensitive_patterns", "pay_words",
-                "commit_words", "settings_pages"):
+                "forward_words", "checkout_signals", "commit_words", "settings_pages"):
         assert data[key], key
-    assert data["version"] == 1
+    assert data["version"] == 2
 
 
 def test_every_pattern_compiles_in_the_java_compatible_subset():
@@ -24,7 +24,8 @@ def test_denied_packages_and_money_words():
     assert "money-related" in guard.package_verdict("com.example.superbank", "SuperBank")
     assert guard.package_verdict("com.grofers.customerapp", "Blinkit") == ""
     assert guard.package_verdict("com.spotify.music", "Spotify") == ""
-    # Exceptions: 'player' and 'display' contain 'pay'/'play' letters but are not money.
+    # Neither "videoplayer" nor "MX Player" contains a money word; the
+    # substring match must not be fooled by the p-a-y of "player".
     assert guard.package_verdict("com.mxtech.videoplayer.ad", "MX Player") == ""
 
 
@@ -51,9 +52,64 @@ def test_pay_words_are_never_tappable_and_commit_words_need_phone_commit():
     assert guard.target_verdict("Send") == "commit"
     assert guard.target_verdict("Delete chat") == "commit"
     assert guard.target_verdict("Sending…") == ""
-    assert guard.target_verdict("Proceed to checkout") == ""  # reaching checkout is allowed
+    assert guard.target_verdict("Proceed to checkout") == "commit"  # reaching checkout: the person's call, once
     assert guard.target_verdict("ADD") == ""
     assert guard.target_verdict("") == ""
+
+
+def test_the_bare_words_are_pay_words_and_whole_words():
+    """The final button is often just "Pay" or "Buy"; a phrase list missed
+    every one of them (2026-09-14 review)."""
+    for label in ("Pay", "PAY", "Buy", "Purchase", "Subscribe", "Pay ₹499", "Buy · ₹1,299", "Order now"):
+        assert guard.target_verdict(label) == "pay", label
+    # Whole words: "Payload" and "Buyer's guide" are not buttons that charge.
+    assert guard.target_verdict("Payload") == ""
+    assert guard.target_verdict("Buyer's guide") == ""
+    assert guard.target_verdict("Player") == ""
+
+
+CHECKOUT_TEXTS = ["Order summary", "Amul Taaza Toned Milk 500 ml x1", "Total ₹28", "Continue"]
+
+
+def test_a_forward_word_is_a_pay_word_only_on_a_checkout_screen():
+    """"Continue" under an order total is the last button of a checkout;
+    "Continue" on an onboarding screen is not."""
+    assert guard.target_verdict("Continue", CHECKOUT_TEXTS) == "pay"
+    assert guard.target_verdict("Next", ["Payment method", "UPI", "Next"]) == "pay"
+    assert guard.target_verdict("Confirm", ["Grand total ₹1,299", "Confirm"]) == "pay"
+    assert guard.target_verdict("Continue", ["Welcome to Blinkit", "Pick your location", "Continue"]) == ""
+    assert guard.target_verdict("Next", ["Step 2 of 3", "Next"]) == ""
+    assert guard.target_verdict("Confirm", ["Delete this chat?", "Confirm"]) == "commit"
+    assert guard.target_verdict("Continue") == ""  # no screen at all: no context
+    assert guard.checkout_context(CHECKOUT_TEXTS) == "Order summary"
+    assert guard.checkout_context(["Step 2 of 3"]) == ""
+
+
+def test_look_alike_letters_from_other_scripts_do_not_hide_a_word():
+    """"Pаy now" with a Cyrillic а reads as "Pay now" to a person; NFKC does
+    not fold it, so the guard does (2026-09-14 review)."""
+    assert guard.target_verdict("P\u0430y now") == "pay"          # Cyrillic а
+    assert guard.target_verdict("\u0405end") == "commit"          # Cyrillic Ѕ
+    assert guard.target_verdict("\u0392uy") == "pay"              # Greek Β
+    assert guard.package_verdict("com.example.b\u0430nk", "") != ""
+    assert guard.sensitive_matches(["Enter \u041ETP"]) == ["Enter \u041ETP"]  # Cyrillic О
+    assert guard.normal("P\u0430y") == "pay"
+
+
+def test_a_broken_rules_file_is_a_named_error_not_a_guess(monkeypatch):
+    monkeypatch.setattr(guard, "rules_text", lambda: "{not json")
+    guard.rules.cache_clear(); guard._compiled.cache_clear()
+    try:
+        with __import__("pytest").raises(guard.GuardRulesError, match="unreadable"):
+            guard.target_verdict("Pay")
+        monkeypatch.setattr(guard, "rules_text", lambda: json.dumps({"version": 2, "pay_words": ["pay"]}))
+        guard.rules.cache_clear(); guard._compiled.cache_clear()
+        with __import__("pytest").raises(guard.GuardRulesError, match="lacks"):
+            guard.package_verdict("com.phonepe.app")
+    finally:
+        monkeypatch.undo()
+        guard.rules.cache_clear(); guard._compiled.cache_clear()
+    assert guard.target_verdict("Pay") == "pay"
 
 
 CANARIES = [

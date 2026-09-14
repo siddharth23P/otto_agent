@@ -86,10 +86,14 @@ class RegistryCatalogue:
         # one of them. `health_report` names the import failure; here it only
         # has to not take the other providers down with it.
         try:
-            return provider_class(provider).is_configured()
+            cls = provider_class(provider)
         except ImportError as exc:
+            # Only the adapter import is inside the try: is_configured()
+            # reads the environment and must not have a bug of its own
+            # read as "vendor not installed".
             _log.warning("provider %s is unavailable: %s", provider, exc)
             return False
+        return cls.is_configured()
     def models(self, provider: str) -> list[ModelInfo]:
         return get_provider(provider).list_models()
     def reset(self) -> None:

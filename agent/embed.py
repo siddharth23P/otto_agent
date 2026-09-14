@@ -77,13 +77,19 @@ KEY_VARS: tuple[str, ...] = (
 
 Events = Callable[[dict[str, Any]], None]
 
+#: The standing tools that start a subprocess. A subprocess inherits the
+#: whole environment, keys included, so a host that injected keys through
+#: `configure(environ=...)` gets these switched off unless it says otherwise
+#: (`SessionHandle.run`'s `disabled_tools`).
+SUBPROCESS_TOOLS: tuple[str, ...] = ("execute_bash", "execute_python")
+
 _configured: dict[str, Any] = {}
 _STATE_MODULES = ("agent.memory.store", "agent.memory.sessions", "agent.router.outcomes",
-                  "agent.config.envfile")
+                  "agent.config.envfile", "agent.cli.output")
 
 
 def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = None,
-              environ: dict[str, str] | None = None) -> Path:
+              environ: dict[str, str] | None = None, strict: bool = False) -> Path:
     """Say where Otto's state lives, and where its keys come from.
 
     `home` becomes OTTO_HOME (created if missing). `env_file` becomes
@@ -103,9 +109,15 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
 
     Idempotent for the same home, env file included: a repeat call that omits
     `env_file` keeps the one already configured. A second call with a
-    different home is a mistake and raises. Called after a state module was already imported it
-    still sets the variables but logs that the imported module resolved its
-    paths before this ran -- the contract in agent/config/home.py.
+    different home is a mistake and raises. Called after a state module was
+    already imported it still sets the variables but that module resolved
+    its paths before this ran (the contract in agent/config/home.py): with
+    `strict` that raises, otherwise it is logged and `late_imports()` names
+    the modules, so a host can assert on it.
+
+    OTTO_OUTPUT_DIR, where the export tools write files a person opens, is
+    set to `<home>/output` unless the host set it already: an embedded
+    process has no working directory worth writing into.
     """
     root = Path(home).expanduser().resolve()
     if _configured and _configured["home"] != root:
@@ -116,6 +128,7 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
         before = None
     root.mkdir(parents=True, exist_ok=True)
     os.environ[_home.HOME_ENV] = str(root)
+    os.environ.setdefault("OTTO_OUTPUT_DIR", str(root / "output"))
     env_path: Path | None = None
     if env_file is not None or environ:
         # The caller named where keys come from, so the keys are those and
@@ -134,18 +147,29 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
         for name, value in environ.items():
             if value:
                 os.environ[name] = value
+    late: list[str] = []
     if not _configured and before != root:
         late = [m for m in _STATE_MODULES if m in sys.modules]
+        if late and strict:
+            raise RuntimeError(f"configure() ran after {', '.join(late)} were imported; "
+                               "call it before importing agent.*")
         if late:
             logger.warning("configure() ran after %s were imported; their paths were "
                            "resolved from the environment at that time", ", ".join(late))
     if env_path is None:
         env_path = _configured.get("env_file")  # sticky: a repeat call without it keeps the file
-    _configured.update(home=root, env_file=env_path)
+    _configured.update(home=root, env_file=env_path, late=late,
+                       keys_from_host=bool(environ) or _configured.get("keys_from_host", False))
     from agent.router import overrides
 
     overrides.apply_at_startup()
     return root
+
+
+def late_imports() -> list[str]:
+    """The state modules that were imported before configure() ran, and so
+    resolved their paths without it. Empty is the healthy answer."""
+    return list(_configured.get("late") or [])
 
 
 def _require_configured() -> None:
@@ -316,7 +340,7 @@ class SessionHandle:
         return self._running
 
     def run(self, text: str, *, events: Events, tools: Sequence["ExtraTool"] = (),
-            guidance: str = "", disabled_tools: Collection[str] = (),
+            guidance: str = "", disabled_tools: Collection[str] | None = None,
             cancel: threading.Event | None = None) -> None:
         """One turn, to completion, on this thread.
 
@@ -324,7 +348,15 @@ class SessionHandle:
         the stream, because that is the only thread where a contextvar is
         visible to the graph. `tools` and `guidance` go to
         agent/pipeline/toolkit.py, `disabled_tools` to agent/pipeline/profile.py.
+
+        `disabled_tools` left as None means SUBPROCESS_TOOLS when the keys
+        came in through `configure(environ=...)` and nothing otherwise: a
+        subprocess inherits the environment, keys included, and a host that
+        kept its keys out of every file should not find them in a shell the
+        model runs. Pass an explicit collection (`()` included) to decide.
         """
+        if disabled_tools is None:
+            disabled_tools = SUBPROCESS_TOOLS if _configured.get("keys_from_host") else ()
         with self._lock:
             if self._running:
                 raise RuntimeError("a turn is already running in this session")

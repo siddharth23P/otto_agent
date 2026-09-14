@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "denied_packages": [
     "com.phonepe.app", "com.google.android.apps.nbu.paisa.user", "net.one97.paytm",
     "in.org.npci.upiapp", "com.dreamplug.androidapp", "com.mobikwik_new",
@@ -36,12 +36,22 @@
     "confirm order", "confirm and pay", "confirm payment", "complete payment", "make payment",
     "pay with", "pay using", "swipe to pay", "slide to pay", "tap to pay", "buy now",
     "pay ₹", "pay rs", "pay $", "subscribe now", "start free trial", "add money", "send money",
-    "transfer", "top up", "recharge now"
+    "transfer", "top up", "recharge now",
+    "pay", "buy", "purchase", "subscribe", "order now", "pay later"
+  ],
+  "forward_words": [
+    "continue", "proceed", "next", "confirm", "done", "review order", "go to checkout", "finish"
+  ],
+  "checkout_signals": [
+    "\\b(grand|sub|order|cart|bill|amount)?\\s*total\\b", "\\border summary\\b", "\\bpayment\\b",
+    "\\bpay(ing|able)?\\b", "\\bcheckout\\b", "\\bbilling\\b", "\\bto pay\\b",
+    "\\bcard\\s+(number|details)\\b", "\\bupi\\b"
   ],
   "commit_words": [
     "send", "delete", "confirm", "submit", "remove", "unsubscribe", "sign out", "log out",
     "uninstall", "factory reset", "erase", "block", "report", "post", "publish", "share",
-    "accept", "agree", "allow", "turn off", "disable", "cancel order", "return item"
+    "accept", "agree", "allow", "turn off", "disable", "cancel order", "return item",
+    "checkout", "check out"
   ],
   "settings_pages": [
     "display", "font", "wifi", "bluetooth", "apps", "sound", "battery", "notifications",
