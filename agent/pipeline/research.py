@@ -72,6 +72,7 @@ from agent.pipeline.progress import report as report_progress
 from agent.pipeline.state import AgentState
 from agent.pipeline.tools import execute_python, reachable_tools, write_file
 from agent.pipeline.toolkit import render_note
+from agent.pipeline.python_session import python_session_note
 from agent.pipeline.workspace import OutsideWorkspace, resolve_in_workspace, workspace_note
 from agent.router.llm_provider.base import ProviderError
 from agent.router.mapping import Task
@@ -602,7 +603,7 @@ def _spawn_worker(state: AgentState, instruction: str, *, mode: str = "find",
     the record; its conversation is discarded."""
     child: list = [SystemMessage(pn.compose_agent_prompt(reachable_tools(),
                                                          may_delegate=False))]
-    for extra in (workspace_note(), render_note()):
+    for extra in (workspace_note(), python_session_note(), render_note()):
         if extra:
             child.append(SystemMessage(extra))
     child.append(HumanMessage(instruction))

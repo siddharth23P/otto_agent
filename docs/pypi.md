@@ -3,7 +3,7 @@
 A terminal AI agent that works on a codebase, a container, a browser or a
 desktop, uses what it built, and judges its own work against criteria it
 wrote before it started. One agent loop with modes over four model vendors,
-a rubric-first evaluator, tiered memory, six benchmark harnesses, and 1,635
+a rubric-first evaluator, tiered memory, six benchmark harnesses, and 1,685
 tests that need no API key. It embeds: `agent.embed` is the surface an app
 with Otto's Python inside it depends on.
 
