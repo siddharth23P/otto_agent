@@ -93,6 +93,12 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
     written anywhere by Otto, and `set_key` then updates the environment
     only. Both may be given.
 
+    KEYS ARE PROCESS-WIDE. Either way they end up in `os.environ`, which is
+    where the router and the vendor SDKs read them, and the environment is
+    the process: a second Runtime or a second server connection in the same
+    process sees every configured key. One process is one person's Otto;
+    a host that serves several people runs several processes.
+
     Idempotent for the same home; a second call with a different one is a
     mistake and raises. Called after a state module was already imported it
     still sets the variables but logs that the imported module resolved its

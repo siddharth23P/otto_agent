@@ -238,7 +238,8 @@ session.run("make my font bigger", events=print,
 
 Events are plain dicts (`progress`, `board`, `ask`, `final`, `error`), a run
 pauses inside `run()` until `answer()` arrives, and `cancel()` stops it within
-one model call. `API_VERSION` says which contract you have. The phone tools,
+one model call. Keys live in the process environment, so one process is one
+person's Otto; a host serving several people runs several processes. `API_VERSION` says which contract you have. The phone tools,
 the screen digest and the money guard are [agent/phone](agent/phone/README.md);
 `otto serve` puts the same runtime behind a WebSocket for a client that has
 the hands ([agent/server](agent/server/README.md)).

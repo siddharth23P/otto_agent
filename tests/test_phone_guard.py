@@ -99,3 +99,26 @@ def test_matching_sees_through_invisible_characters_and_compatibility_forms():
     assert guard.package_verdict("com.example.ba​nk", "") != ""
     assert guard.sensitive_matches(["Enter U​PI PIN"]) == ["Enter U​PI PIN"]
     assert guard.normal("  Pay​  NOW ") == "pay now"
+
+
+def test_a_generic_field_under_a_short_sensitive_label_is_asking():
+    """The hint says "Enter code"; the caption above it says "Enter your
+    OTP". The field is asking, and the screen is refused. A chat whose line
+    before the message box mentions an OTP is a sentence, not a label."""
+    form = snapshot("g", "com.somestore.shop", "Store", [
+        node(1, "Enter your OTP", r="text"),
+        node(2, "", d="Enter code", r="edit-field", e=True),
+    ])
+    assert "payment or sign-in" in guard.snapshot_verdict(form)
+    chat = snapshot("h", "com.whatsapp", "WhatsApp", [
+        node(1, "Mom: the OTP for the parcel is 4471, use it before tonight", r="text"),
+        node(2, "Type a message", r="edit-field", e=True),
+    ])
+    assert guard.snapshot_verdict(chat) == ""
+    assert guard.snapshot_verdict(CHAT_WITH_OTP) == ""
+
+
+def test_every_package_word_exception_guards_a_real_word():
+    data = guard.rules()
+    for exc in data["package_word_exceptions"]:
+        assert any(word in exc for word in data["package_words"]), f"{exc!r} guards nothing"
