@@ -17,6 +17,24 @@ from agent.pipeline.toolkit import ExtraTool, dispatch_table, render_note
 from agent.pipeline.tools import ToolResult, reachable_tools
 
 
+@pytest.fixture(autouse=True)
+def _own_environment():
+    """configure() edits os.environ directly -- OTTO_HOME, OTTO_ENV_FILE, and
+    it scrubs the vendor keys when a source is named -- and monkeypatch only
+    restores what it set itself. Snapshot the whole environment so a test
+    here cannot leave a later module without conftest's placeholder keys."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+    # set_key re-snapshots every live router, run.py's module-level ROUTER
+    # included, against whatever the environment held at that moment; put
+    # them back on the restored environment too.
+    from agent.router.reload import reload_everything
+
+    reload_everything()
+
+
 @pytest.fixture
 def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "_configured", {})
