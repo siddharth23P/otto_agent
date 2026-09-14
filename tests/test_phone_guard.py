@@ -81,6 +81,8 @@ def test_a_forward_word_is_a_pay_word_only_on_a_checkout_screen():
     assert guard.target_verdict("Next", ["Step 2 of 3", "Next"]) == ""
     assert guard.target_verdict("Confirm", ["Delete this chat?", "Confirm"]) == "commit"
     assert guard.target_verdict("Continue") == ""  # no screen at all: no context
+    assert guard.target_verdict("ReviewOrder", CHECKOUT_TEXTS) == "pay"  # a phrase, squashed like a pay word
+    assert guard.target_verdict("Review\u200border", CHECKOUT_TEXTS) == "pay"
     assert guard.checkout_context(CHECKOUT_TEXTS) == "Order summary"
     assert guard.checkout_context(["Step 2 of 3"]) == ""
 
