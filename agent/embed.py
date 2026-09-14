@@ -91,7 +91,9 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
     alternative for a host that keeps keys somewhere safer than a file (an
     app's keystore): they are put into the process environment and never
     written anywhere by Otto, and `set_key` then updates the environment
-    only. Both may be given.
+    only. Both may be given. Naming either source also clears the vendor
+    keys the process already had, so the keys in play are the ones the
+    caller supplied; `configure(home)` alone leaves the environment as it is.
 
     KEYS ARE PROCESS-WIDE. Either way they end up in `os.environ`, which is
     where the router and the vendor SDKs read them, and the environment is
@@ -115,13 +117,19 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
     root.mkdir(parents=True, exist_ok=True)
     os.environ[_home.HOME_ENV] = str(root)
     env_path: Path | None = None
+    if env_file is not None or environ:
+        # The caller named where keys come from, so the keys are those and
+        # not whatever the shell happened to export: an ambient key that won
+        # over a host's keystore would be a key the host never provided.
+        for name in KEY_VARS:
+            os.environ.pop(name, None)
     if env_file is not None:
         env_path = Path(env_file).expanduser().resolve()
         os.environ[_home.ENV_FILE_ENV] = str(env_path)
         from dotenv import load_dotenv
 
         if env_path.is_file():
-            load_dotenv(env_path)
+            load_dotenv(env_path, override=True)
     if environ:
         for name, value in environ.items():
             if value:
