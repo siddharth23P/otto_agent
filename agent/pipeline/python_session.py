@@ -85,8 +85,8 @@ comparison the issue asks for needs both arms runnable from one checkout.
 """
 from __future__ import annotations
 
+import base64
 import contextvars
-import json
 import logging
 import os
 import queue
@@ -373,8 +373,10 @@ class LocalPythonSession:
     # -- the wire ----------------------------------------------------------
 
     def _send(self, request: dict) -> None:
-        assert self._proc is not None and self._proc.stdin is not None
-        self._proc.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
+        if self._proc is None or self._proc.stdin is None:
+            raise RuntimeError("no interpreter to send to")  # spawn first
+        code = base64.b64encode(request["code"].encode("utf-8", errors="replace"))
+        self._proc.stdin.write(request["id"].encode("ascii") + b" " + code + b"\n")
         self._proc.stdin.flush()
 
     def _await(self, request_id: str, timeout: float) -> SessionResult:
@@ -480,14 +482,33 @@ def _pump(stream, frames: queue.Queue) -> None:
     original handle) and are dropped."""
     try:
         for raw in stream:
-            try:
-                frames.put(json.loads(raw.decode("utf-8", errors="replace")))
-            except ValueError:
-                continue
+            frame = _parse_frame(raw)
+            if frame is not None:
+                frames.put(frame)
     except (OSError, ValueError):
         pass
     finally:
         frames.put(None)
+
+
+def _parse_frame(raw: bytes) -> dict | None:
+    """One line of the shim's protocol (its module docstring) as a dict, or
+    None for anything else."""
+    parts = raw.rstrip(b"\r\n").split(b" ")
+    if parts == [b"READY"]:
+        return {"ready": True}
+    if len(parts) != 6 or parts[0] != b"R":
+        return None
+    try:
+        return {
+            "id": parts[1].decode("ascii"),
+            "returncode": int(parts[2]),
+            "timed_out": parts[3] == b"1",
+            "stdout": base64.b64decode(parts[4], validate=True).decode("utf-8", errors="replace"),
+            "stderr": base64.b64decode(parts[5], validate=True).decode("utf-8", errors="replace"),
+        }
+    except ValueError:  # binascii.Error is one
+        return None
 
 
 def _kill(proc: subprocess.Popen) -> None:

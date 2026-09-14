@@ -6,8 +6,10 @@ Run as a script, never imported:
     python _python_session_shim.py <private dir> <memory limit bytes>
 
 The parent talks to it over two channels that a snippet cannot reach by
-accident. Requests arrive as JSON lines on a private copy of the original
-stdin; results leave as JSON lines on a private copy of the original stdout.
+accident. Requests arrive as lines `<id> <base64 code>` on a private copy of
+the original stdin; results leave as lines `R <id> <returncode> <0|1 timed
+out> <base64 stdout> <base64 stderr>` on a private copy of the original
+stdout, after one `READY` line at startup.
 Both are made by `os.dup()` at startup and the real descriptors 0, 1 and 2
 are then pointed at /dev/null, so a snippet's `print()`, a `os.write(1, ..)`,
 or a subprocess it starts can never land on the result channel -- during a
@@ -31,15 +33,27 @@ because a snippet may replace it -- that is the one thing it cannot make
 permanent.
 
 The builtins are restored after every call. A snippet that rebinds
-`builtins.len` has broken `json.loads`, which this file needs to read the
-NEXT request -- found when exactly that turned one poisoned call into a
+`builtins.len` had broken `json.loads`, which this file then needed to read
+the NEXT request -- found when exactly that turned one poisoned call into a
 silent timeout on every call after it. So the builtins module is
-snapshotted at startup and put back in `finally`, before anything here
-runs again: a poisoned builtin lasts the call that poisoned it, never the
-run. The same cannot be done for every module a snippet could patch, so the
-handful of os/io functions the result path depends on are bound to local
-names at import and used through those. Neither is a sandbox; both are
-what keeps the plumbing answering.
+snapshotted at startup and put back the moment the snippet returns, before
+anything here runs again: a poisoned builtin lasts the call that poisoned
+it, never the run.
+
+The same cannot be done for every module a snippet could patch, so the rule
+for the wire path is: no pure-Python module at call time. The protocol above
+is base64 through `binascii` rather than JSON, because `json.dumps` reads
+the json module's own globals when called and a snippet that patched them
+(review finding on the first cut) would have made every later result
+unparseable -- self-healing through the parent's timeout-and-restart path,
+but a whole session's state lost to one line. Every os/io/binascii/signal/
+traceback function the plumbing uses is bound to a local name at import and
+used through that, so rebinding the module attribute changes nothing here.
+What remains patchable -- `sys.modules`, the methods of `bytes` and `str`
+through something like forbiddenfruit, or `os.dup2` at the C level -- is
+inside the "not a sandbox" line this module and tools.py both draw: the aim
+is that the plumbing survives what a snippet does by accident or by habit,
+not that it survives a snippet written to break it.
 
 A memory ceiling, when the parent asks for one, is `RLIMIT_AS` on this
 process: past it an allocation raises MemoryError inside the snippet, which
@@ -49,15 +63,16 @@ parent says so in its docs rather than pretending otherwise.
 """
 from __future__ import annotations
 
+import binascii
 import builtins
 import io
-import json
 import os
 import signal
 import sys
 import traceback
 
-#: The result path through these names only -- see the module docstring.
+#: The wire and result path through these names only -- see the module
+#: docstring. Bound at import, before any snippet runs.
 _BUILTINS = dict(builtins.__dict__)
 _open = builtins.open
 _os_open = os.open
@@ -65,9 +80,17 @@ _os_close = os.close
 _os_dup2 = os.dup2
 _os_remove = os.remove
 _os_getsize = os.path.getsize
+_os_path_join = os.path.join
+_O_CAPTURE = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
 _FileIO = io.FileIO
 _BytesIO = io.BytesIO
 _TextIOWrapper = io.TextIOWrapper
+_b2a = binascii.b2a_base64
+_a2b = binascii.a2b_base64
+_signal_signal = signal.signal
+_SIGINT = signal.SIGINT
+_SIGBREAK = getattr(signal, "SIGBREAK", None)
+_print_exception = traceback.print_exception
 
 
 def _restore_builtins() -> None:
@@ -90,9 +113,9 @@ def _on_interrupt(signum, frame):
 
 
 def _arm_interrupt() -> None:
-    signal.signal(signal.SIGINT, _on_interrupt)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, _on_interrupt)
+    _signal_signal(_SIGINT, _on_interrupt)
+    if _SIGBREAK is not None:
+        _signal_signal(_SIGBREAK, _on_interrupt)
 
 
 def _set_std_handles() -> None:
@@ -175,13 +198,12 @@ def _exit_code(exc: SystemExit) -> int:
     return 1
 
 
-def _run_one(code: str, namespace: dict, private: str, devnull: int) -> dict:
+def _run_one(code: str, namespace: dict, out_path: str, err_path: str,
+             devnull: int) -> tuple[int, bool, str, str]:
+    """Run one snippet; (returncode, timed_out, stdout, stderr)."""
     global _executing
-    out_path = os.path.join(private, "stdout")
-    err_path = os.path.join(private, "stderr")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    out_fd = _os_open(out_path, flags, 0o600)
-    err_fd = _os_open(err_path, flags, 0o600)
+    out_fd = _os_open(out_path, _O_CAPTURE, 0o600)
+    err_fd = _os_open(err_path, _O_CAPTURE, 0o600)
     _quiet_flush()
     _os_dup2(out_fd, 1)
     _os_dup2(err_fd, 2)
@@ -198,7 +220,9 @@ def _run_one(code: str, namespace: dict, private: str, devnull: int) -> dict:
             _executing = True
             exec(compile(code, "<session>", "exec"), namespace)
         finally:
+            # First, before any handler below runs: they use builtins.
             _executing = False
+            _restore_builtins()
     except SystemExit as exc:
         returncode = _exit_code(exc)
     except KeyboardInterrupt:
@@ -209,21 +233,19 @@ def _run_one(code: str, namespace: dict, private: str, devnull: int) -> dict:
         # left starts at `<session>`, which is the snippet.
         tb = exc.__traceback__.tb_next if exc.__traceback__ else None
         try:
-            traceback.print_exception(type(exc), exc, tb, file=sys.stderr)
+            _print_exception(type(exc), exc, tb, file=sys.stderr)
         except Exception:
             pass
         returncode = 1
     finally:
-        _restore_builtins()
         _arm_interrupt()
         _point_std_streams(devnull)
 
-    return {
-        "stdout": _read_capture(out_path),
-        "stderr": _read_capture(err_path),
-        "returncode": returncode,
-        "timed_out": timed_out,
-    }
+    return returncode, timed_out, _read_capture(out_path), _read_capture(err_path)
+
+
+def _field(text: str) -> bytes:
+    return _b2a(text.encode("utf-8", errors="replace"), newline=False)
 
 
 def main() -> None:
@@ -244,24 +266,31 @@ def main() -> None:
             pass
 
     requests = os.fdopen(os.dup(0), "rb")
-    results = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
+    results = os.fdopen(os.dup(1), "wb")
     devnull = os.open(os.devnull, os.O_RDWR)
     os.dup2(devnull, 0)      # input() gets EOF, never a hang on the pipe
     _point_std_streams(devnull)
     _arm_interrupt()
+    out_path = _os_path_join(private, "stdout")
+    err_path = _os_path_join(private, "stderr")
 
     namespace: dict = {"__name__": "__main__"}
-    results.write(json.dumps({"ready": True}) + "\n")
+    results.write(b"READY\n")
     results.flush()
 
     for line in requests:
-        try:
-            request = json.loads(line)
-        except ValueError:
+        request_id, _, payload = line.rstrip(b"\r\n").partition(b" ")
+        if not request_id:
             continue
-        outcome = _run_one(str(request.get("code", "")), namespace, private, devnull)
-        outcome["id"] = request.get("id")
-        results.write(json.dumps(outcome) + "\n")
+        try:
+            code = _a2b(payload).decode("utf-8", errors="replace")
+        except ValueError:  # binascii.Error is one, and named without the module
+            continue
+        returncode, timed_out, out, err = _run_one(code, namespace, out_path, err_path, devnull)
+        results.write(b" ".join((
+            b"R", request_id, str(returncode).encode("ascii"),
+            b"1" if timed_out else b"0", _field(out), _field(err),
+        )) + b"\n")
         results.flush()
 
 
