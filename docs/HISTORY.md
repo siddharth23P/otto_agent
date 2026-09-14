@@ -1,6 +1,6 @@
 # Development log
 
-Otto was built between 7 and 14 September 2026 in 81 commits.
+Otto was built between 7 and 14 September 2026 in 138 commits.
 This is the commit-by-commit record of what changed and, wherever a
 number was taken, what the number said. Test counts are the suite's size at
 that commit. Hashes are short hashes on `main`.
