@@ -305,3 +305,53 @@ def test_a_canary_on_screen_does_not_get_the_pay_button_tapped():
     with bind_extra_tools(tools):
         pn._tool_loop(llm, [SystemMessage("role"), HumanMessage("buy it")])
     assert not any(c[0] == "tap_node" for c in phone.calls)
+
+
+# --------------------------------------------------------------------------
+# From the review of the first PR
+# --------------------------------------------------------------------------
+
+def test_phone_look_refuses_a_sensitive_screen_and_a_secure_window():
+    """The capture goes to a vision vendor, so the screen is read first: an
+    OTP form in an app nobody listed is refused by the two-signal check, and
+    a secure window is refused on its own -- a payment WebView has no nodes
+    for any text check to see."""
+    calls = []
+    vision = lambda q, d, m: (calls.append(q), "words")[1]
+    otp_form = snapshot("f", "com.somestore.shop", "Store", [
+        node(1, "Verify your card", r="text"), node(2, "", d="Enter OTP", r="edit-field", e=True)])
+    by_name, _ = _tools(FakePhone([otp_form]), vision=vision)
+    result = by_name["phone_look"]('{"question": "what is this?"}')
+    assert result.stderr.startswith("GUARD:") and "sign-in" in result.stderr
+    webview = snapshot("w", "com.somestore.shop", "Store", [], secure=True)
+    by_name, _ = _tools(FakePhone([webview]), vision=vision)
+    result = by_name["phone_look"]('{"question": "what is this?"}')
+    assert result.stderr.startswith("GUARD:") and "protected" in result.stderr
+    assert calls == []
+    by_name, _ = _tools(FakePhone([BLINKIT_SEARCH]), vision=vision)
+    assert by_name["phone_look"]('{"question": "ok?"}').ok and calls == ["ok?"]
+
+
+def test_phone_commit_is_gated_per_element_not_per_label():
+    """Two Send buttons on two screens are two holds. The gate keys on
+    `_action_target`, which asks the tool what it acts on."""
+    first = snapshot("c1", "com.whatsapp", "WhatsApp", [node(1, "Alice", r="text"), node(2, "Send", r="button", c=True)])
+    second = snapshot("c2", "com.whatsapp", "WhatsApp", [node(1, "Bob", r="text"), node(2, "Send", r="button", c=True)])
+    phone = FakePhone([first, first, second, second])
+    by_name, tools = _tools(phone)
+    with bind_extra_tools(tools):
+        by_name["phone_screen"]("{}")
+        on_first = pn._action_target("phone_commit", '{"target": "Send"}')
+        assert on_first == pn._action_target("phone_commit", '{"target": "Send"}')  # the hold, then the same call
+        assert on_first.startswith("phone_commit:c1:[2]")
+        by_name["phone_commit"]('{"target": "Send"}')  # advances to the second screen
+        by_name["phone_screen"]("{}")
+        on_second = pn._action_target("phone_commit", '{"target": "Send"}')
+        assert on_second != on_first and on_second.startswith("phone_commit:c2:[2]")
+        assert pn._action_target("phone_commit", '{"target": "Nothing here"}').endswith("Nothing here")
+
+
+def test_phone_open_survives_a_malformed_package():
+    by_name, _ = _tools(FakePhone([BLINKIT_SEARCH], apps=[{"label": "Odd", "package": 42}]))
+    result = by_name["phone_open"]('{"app": "Odd"}')
+    assert isinstance(result, ToolResult)

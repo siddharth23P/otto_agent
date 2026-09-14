@@ -19,7 +19,9 @@ uv run otto serve --host 0.0.0.0  # reachable on the network you are on
 uv run otto serve --qr            # a pairing code, with `pip install qrcode`
 ```
 
-The pairing string is `ws://host:port/#token`. A client says
+A connection may hold at most eight sessions and runs one turn per session
+at a time, which bounds what a client holding the token can spend. The
+pairing string is `ws://host:port/#token`. A client says
 `hello{protocol_version, token, capabilities: ["phone"]}`; with the `phone`
 capability its turns get the phone tools (agent/phone/), and every tool call
 becomes a `device_call` the client answers with the same JSON envelope the

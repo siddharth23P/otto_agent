@@ -34,9 +34,23 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from functools import lru_cache
 from importlib import resources
 from typing import Iterable
+
+#: Characters a screen can hide inside a word: zero-width joiners and
+#: spaces, soft hyphens, bidi marks, word joiners. Stripped before any
+#: match, so "Pay\u200bnow" is "pay now".
+_INVISIBLE = re.compile("[\u200b-\u200f\u2060-\u2064\u00ad\ufeff\u202a-\u202e\u2066-\u2069]")
+
+
+def normal(text: str) -> str:
+    """NFKC-folded, invisible characters removed, lower-cased, one space
+    between words: the form every verdict matches against. The Kotlin side
+    applies the same steps."""
+    folded = unicodedata.normalize("NFKC", str(text or ""))
+    return " ".join(_INVISIBLE.sub("", folded).lower().split())
 
 RULES_RESOURCE = ("agent.phone", "assets/guard_rules.json")
 
@@ -70,7 +84,7 @@ def settings_pages() -> tuple[str, ...]:
 
 
 def _has_word(haystack: str, words: Iterable[str], exceptions: Iterable[str] = ()) -> str:
-    text = haystack.lower()
+    text = normal(haystack)
     for exc in exceptions:
         text = text.replace(exc, " ")
     for word in words:
@@ -82,7 +96,7 @@ def _has_word(haystack: str, words: Iterable[str], exceptions: Iterable[str] = (
 def package_verdict(package: str, label: str = "") -> str:
     """Why the model may not act in this app, or ""."""
     c = _compiled()
-    pkg = (package or "").strip().lower()
+    pkg = normal(package)
     if pkg in c["denied"]:
         return f"{package} is a payment or banking app"
     hit = _has_word(f"{pkg} {label or ''}", c["words"], c["exceptions"])
@@ -95,9 +109,9 @@ def sensitive_matches(texts: Iterable[str]) -> list[str]:
     """Which screen strings match a sensitive pattern."""
     found = []
     for text in texts:
-        s = str(text or "")
+        s = normal(text)
         if any(p.search(s) for p in _compiled()["sensitive"]):
-            found.append(s[:60])
+            found.append(str(text or "")[:60])
     return found
 
 
@@ -127,11 +141,15 @@ def target_verdict(label: str) -> str:
     """'pay' for a button the model may never tap, 'commit' for one only
     phone_commit may tap, '' for anything else."""
     c = _compiled()
-    text = " ".join((label or "").lower().split())
+    text = normal(label)
     if not text:
         return ""
+    # Also with every space removed: a zero-width character hidden inside
+    # "Pay now" normalises to "paynow", and "PayNow" is how some apps spell
+    # it anyway. A pay word may over-match; it only ever refuses.
+    squashed = text.replace(" ", "")
     for word in c["pay"]:
-        if word in text:
+        if word in text or word.replace(" ", "") in squashed:
             return "pay"
     for word in c["commit"]:
         # Whole words: "Send" is a commit, "Sending…" is a status line.

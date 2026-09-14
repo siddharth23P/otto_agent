@@ -88,3 +88,14 @@ def test_an_input_field_counts_only_when_it_asks_for_the_secret():
     ])
     assert "payment or sign-in" in guard.snapshot_verdict(otp_form)
     assert guard.snapshot_verdict(CHAT_WITH_OTP) == ""
+
+
+def test_matching_sees_through_invisible_characters_and_compatibility_forms():
+    """A screen can hide a zero-width space inside "Pay now" or spell it in
+    full-width letters; the verdict must not care."""
+    assert guard.target_verdict("Pay​now") == "pay"
+    assert guard.target_verdict("Ｐａｙ now") == "pay"       # full-width P a y
+    assert guard.target_verdict("Se­nd") == "commit"               # soft hyphen
+    assert guard.package_verdict("com.example.ba​nk", "") != ""
+    assert guard.sensitive_matches(["Enter U​PI PIN"]) == ["Enter U​PI PIN"]
+    assert guard.normal("  Pay​  NOW ") == "pay now"

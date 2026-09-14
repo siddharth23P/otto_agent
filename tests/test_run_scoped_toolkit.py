@@ -505,3 +505,17 @@ def test_the_tool_loop_shows_the_guidance_to_the_model():
     with bind_extra_tools([tool], guidance="Stop at the payment page."):
         pn._tool_loop(llm, [SystemMessage("role"), HumanMessage("go")])
     assert any("Stop at the payment page." in m for m in llm.calls[0])
+
+
+def test_a_tool_may_name_what_a_call_acts_on():
+    """`ExtraTool.target` feeds nodes.py's `_action_target`, so the gate and
+    the repeat detector key on the thing rather than the body's text; a
+    target that raises or says nothing falls back to the first line."""
+    named = ExtraTool(name="send_mail", description="Send.", call=lambda b: ToolResult("", "", 0),
+                      target=lambda body: "thread-42")
+    broken = ExtraTool(name="flaky", description="x", call=lambda b: ToolResult("", "", 0),
+                       target=lambda body: (_ for _ in ()).throw(RuntimeError("no")))
+    with bind_extra_tools([named, broken]):
+        assert pn._action_target("send_mail", '{"to": "a"}') == "send_mail:thread-42"
+        assert pn._action_target("flaky", '{"x": 1}') == 'flaky:{"x": 1}'
+    assert pn._action_target("send_mail", '{"to": "a"}') == 'send_mail:{"to": "a"}'
