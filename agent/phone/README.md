@@ -53,8 +53,10 @@ Code, on both sides, and the phone's verdict wins:
 - A tap by coordinates is judged by the element under the point. A point
   with no element under it is refused on a screen that has clickable
   elements (a checkout drawn on a canvas inside an ordinary page is exactly
-  the case), and allowed on a screen with none (a game) unless the last
-  `phone_look` described a checkout.
+  the case). On a screen with none (a game, a canvas app) it needs a
+  `phone_look` taken on the current capture (every action installs a new
+  one, so: look, then tap) that described nothing payment-like. The phone
+  enforces the same capture-id rule.
 - Matching folds NFKC, strips invisible characters, and maps Cyrillic and
   Greek look-alike letters to Latin, so "Pаy now" spelled with a Cyrillic а
   is still "pay now". A label in a script the lists do not carry is the

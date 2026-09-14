@@ -380,15 +380,41 @@ def test_a_tap_by_coordinates_is_judged_by_what_is_under_the_point():
     assert not any(c[0] == "tap" and c[1] == 540 for c in phone.calls)
 
 
-def test_a_blind_tap_is_allowed_only_on_an_elementless_screen_that_no_look_called_a_checkout():
-    canvas = snapshot("g", "com.example.game", "Blocks", [])
-    phone = FakePhone([canvas] * 6)
+def test_a_blind_tap_needs_a_look_on_this_very_capture():
+    """On a screen with no elements the only content-level check is a look,
+    and a look is good for one capture: every action installs a new one, and
+    in-app navigation must not carry a benign look onto a canvas-drawn
+    payment screen (2026-09-14 review of #13)."""
+    screens = [snapshot(f"g{i}", "com.example.game", "Blocks", []) for i in range(1, 6)]
+    phone = FakePhone(list(screens))
     by_name, _ = _tools(phone, vision=lambda q, data, media: "a game board with falling blocks")
-    by_name["phone_screen"]("{}")
-    assert by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}').ok
-    assert by_name["phone_look"]('{"question": "what is this"}').ok
-    assert by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}').ok
-    by_name, _ = _tools(FakePhone([canvas] * 6),
+    by_name["phone_screen"]("{}")                                           # g1
+    no_look = by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}')
+    assert not no_look.ok and "phone_look" in no_look.stderr
+    assert not any(c[0] == "tap" for c in phone.calls)
+    assert by_name["phone_look"]('{"question": "what is this"}').ok         # looks at g2
+    assert by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}').ok     # on g2; its after installs g3
+    again = by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}')      # g3: the look is spent
+    assert not again.ok and "phone_look" in again.stderr
+    assert [c for c in phone.calls if c[0] == "tap"] == [("tap", 300, 900)]
+
+
+def test_a_look_on_one_screen_does_not_cover_the_next_screen_of_the_same_app():
+    promo = snapshot("a1", "com.example.shop", "Shop", [])
+    canvas_checkout = snapshot("b1", "com.example.shop", "Shop", [])
+    phone = FakePhone([promo, promo, canvas_checkout, canvas_checkout])
+    by_name, _ = _tools(phone, vision=lambda q, data, media: "a promotional banner, nothing here")
+    by_name["phone_screen"]("{}")                                           # a1
+    assert by_name["phone_look"]('{"question": "what is this"}').ok         # a1 again
+    assert by_name["phone_act"]('{"op": "swipe", "direction": "up"}').ok    # after: b1
+    refused = by_name["phone_act"]('{"op": "tap", "x": 300, "y": 900}')
+    assert not refused.ok and "phone_look" in refused.stderr
+    assert not any(c[0] == "tap" for c in phone.calls)
+
+
+def test_a_look_that_saw_a_checkout_refuses_the_blind_tap():
+    canvas = [snapshot("c1", "com.example.shop", "Shop", []), snapshot("c2", "com.example.shop", "Shop", [])]
+    by_name, _ = _tools(FakePhone(canvas + [canvas[-1]]),
                         vision=lambda q, data, media: "a checkout page: order total ₹499 and a Pay button")
     by_name["phone_screen"]("{}")
     by_name["phone_look"]('{"question": "what is this"}')

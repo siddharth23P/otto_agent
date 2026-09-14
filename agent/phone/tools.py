@@ -117,11 +117,9 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
     # -- helpers ----------------------------------------------------------
 
     def keep(snapshot: dict | None) -> None:
-        """The current screen. A look taken in another app says nothing
-        about this one, so it goes when the app changes."""
-        previous = state.get("snapshot") or {}
-        if (snapshot or {}).get("app", {}).get("package") != previous.get("app", {}).get("package"):
-            state.pop("last_look", None)
+        """The current screen. Every capture has its own id, and a look
+        (phone_look) is keyed to the capture it was taken on, so a new
+        capture is what expires it: nothing to clear here."""
         state["snapshot"] = snapshot
 
     def remember(snapshot: dict | None) -> str:
@@ -215,15 +213,21 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         has clickable elements it is refused: the guard cannot judge what is
         drawn there, and a checkout button drawn on a canvas inside an
         ordinary page is exactly the case. On a screen with no elements at
-        all (a game, a canvas app) it is allowed, unless the last look at
-        the screen described a checkout."""
+        all (a game, a canvas app) the only content-level check there is
+        is a look: the tap is allowed only when phone_look was taken on
+        this very capture (every action installs a new one) and described
+        nothing payment-like."""
         snap = state.get("snapshot") or {}
         nodes = [n for n in snap.get("nodes") or [] if isinstance(n, dict)]
         if any(n.get("c") for n in nodes):
             return _bad(name, "nothing in the tree is under that point; tap an element by its text, "
                               "or use phone_look and name what you see")
-        seen = state.get("last_look") or ""
-        if seen and (guard.checkout_context([seen]) or guard.sensitive_matches([seen])):
+        look = state.get("last_look") or {}
+        if not look or look.get("snapshot_id") != snap.get("snapshot_id"):
+            return _bad(name, "nothing in the tree is under that point; phone_look at this screen first "
+                              "(a look is good for one capture), then tap")
+        seen = str(look.get("text") or "")
+        if guard.checkout_context([seen]) or guard.sensitive_matches([seen]):
             return _refuse(name, "the last look at this screen described a payment step -- the person does that")
         return None
 
@@ -469,7 +473,9 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
             answer = look_with(question, data, media_type)
         except Exception as exc:
             return _bad(name, f"could not look at the screen: {exc}")
-        state["last_look"] = answer.strip()  # what a blind tap is judged against
+        # What a blind tap on this capture is judged against; a new capture
+        # (every action installs one) expires it.
+        state["last_look"] = {"snapshot_id": snapshot.get("snapshot_id"), "text": answer.strip()}
         return ToolResult(stdout=answer.strip(), stderr="", returncode=0)
 
     def phone_settings(body: str) -> ToolResult:
