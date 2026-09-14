@@ -22,7 +22,10 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "_configured", {})
     for name in embed.KEY_VARS:
         monkeypatch.setenv(name, "test-placeholder-not-a-real-key")
-    embed.configure(tmp_path / "home", env_file=tmp_path / "keys.env")
+    # Naming a source scrubs ambient keys, so the placeholders are supplied
+    # through it, as a host's keystore would.
+    embed.configure(tmp_path / "home", env_file=tmp_path / "keys.env",
+                    environ={name: "test-placeholder-not-a-real-key" for name in embed.KEY_VARS})
     return tmp_path
 
 
@@ -272,3 +275,23 @@ def test_configure_keeps_its_env_file_on_a_repeat_call(tmp_path, monkeypatch):
     embed.configure(tmp_path / "home")  # the docstring's safe repeat
     embed.set_key("OPENAI_API_KEY", "sk-persisted1234")
     assert "OPENAI_API_KEY=" in (tmp_path / "keys.env").read_text()
+
+
+def test_a_named_key_source_wins_over_the_ambient_environment(tmp_path, monkeypatch):
+    """A key the shell exported must not stand in for one the host did not
+    provide, and the env file's value beats the shell's for the same name."""
+    monkeypatch.setattr(embed, "_configured", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ambient-0000")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-ambient-1111")
+    (tmp_path / "keys.env").write_text("OPENAI_API_KEY=sk-fromfile-2222\n")
+    embed.configure(tmp_path / "home", env_file=tmp_path / "keys.env")
+    assert "ANTHROPIC_API_KEY" not in os.environ
+    assert os.environ["OPENAI_API_KEY"] == "sk-fromfile-2222"
+    assert embed.key_status()["ANTHROPIC_API_KEY"] == "not set"
+
+
+def test_configure_without_a_source_keeps_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setattr(embed, "_configured", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ambient-0000")
+    embed.configure(tmp_path / "home")
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ambient-0000"
