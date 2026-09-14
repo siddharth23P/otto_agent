@@ -174,23 +174,25 @@ class Connection:
             await self.send_error("no_session", str(exc))
 
     async def close(self) -> None:
+        """Best-effort teardown: nothing here may raise, but everything that
+        goes wrong is logged at debug level so a field problem can be read."""
         if self.phone is not None:
             self.phone.fail_all("the client disconnected")
         for handle in self.handles.values():
             try:
                 handle.cancel()
             except Exception:
-                pass
-        for future in list(self.turns.values()):
+                logger.debug("serve: cancel on close failed for %s", handle.id, exc_info=True)
+        for session_id, future in list(self.turns.items()):
             try:
                 await asyncio.wait_for(asyncio.shield(future), timeout=10)
             except Exception:
-                pass
+                logger.debug("serve: turn %s did not finish within the close window", session_id, exc_info=True)
         for handle in self.handles.values():
             try:
                 handle.close()
             except Exception:
-                pass
+                logger.debug("serve: close failed for %s", handle.id, exc_info=True)
 
 
 class OttoServer:
@@ -207,7 +209,11 @@ class OttoServer:
             except ProtocolError as exc:
                 await connection.send_error("hello", str(exc))
                 return
-            except (asyncio.TimeoutError, Exception):
+            except asyncio.TimeoutError:
+                logger.debug("serve: a client connected and sent no hello within 15s")
+                return
+            except Exception:
+                logger.debug("serve: the hello exchange failed", exc_info=True)
                 return
             async for raw in websocket:
                 try:
