@@ -116,7 +116,8 @@ from agent.pipeline import screen as screening
 from agent.pipeline import walkthrough
 from agent.pipeline.execution import current_command_runner
 from agent.pipeline.python_session import (
-    NO_PERSISTENCE_NOTE, RESET_NOTE, SessionUnavailable, current_python_session,
+    NO_PERSISTENCE_NOTE, RESET_NOTE, UNAVAILABLE_NOTE, SessionUnavailable,
+    current_python_session,
 )
 from agent.pipeline.vision import describe_image, sniff_media_type
 from langchain_core.messages import HumanMessage
@@ -255,7 +256,7 @@ def execute_python(code: str, *, timeout: float | None = None) -> ToolResult:
             fallback = _execute_python_fresh(code, timeout)
             return ToolResult(
                 stdout=fallback.stdout,
-                stderr=f"{fallback.stderr}\n{NO_PERSISTENCE_NOTE}".strip(),
+                stderr=f"{fallback.stderr}\n{UNAVAILABLE_NOTE}".strip(),
                 returncode=fallback.returncode, timed_out=fallback.timed_out,
             )
         stderr = outcome.stderr

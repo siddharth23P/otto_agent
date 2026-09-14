@@ -137,6 +137,14 @@ NO_PERSISTENCE_NOTE = (
     "each call is a fresh script]"
 )
 
+#: What a tool result says when the interpreter could not be started and the
+#: call ran in a fresh process instead. Distinct from the container note:
+#: nothing here is about where the code ran, only that it did not persist.
+UNAVAILABLE_NOTE = (
+    "[the persistent interpreter could not start; this call ran in a fresh "
+    "process and nothing from it persists]"
+)
+
 _SHIM = Path(__file__).with_name("_python_session_shim.py")
 
 
@@ -237,11 +245,20 @@ class LocalPythonSession:
             try:
                 self._send({"id": request_id, "code": code})
             except (OSError, ValueError):
-                # The pipe is gone: the child died between calls.
+                # The pipe is gone: the child died between calls. One
+                # respawn; a child that cannot take its first request either
+                # is an interpreter that does not work here, which is what
+                # SessionUnavailable means and what tools.py falls back on.
                 lost = True
                 self._discard()
                 self._spawn()
-                self._send({"id": request_id, "code": code})
+                try:
+                    self._send({"id": request_id, "code": code})
+                except (OSError, ValueError) as exc:
+                    self._discard()
+                    raise SessionUnavailable(
+                        f"the interpreter started but would not take a request: {exc}"
+                    ) from exc
             self._calls_in_process += 1
             result = self._await(request_id, timeout)
             self._last_used = time.monotonic()

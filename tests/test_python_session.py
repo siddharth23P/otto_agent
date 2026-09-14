@@ -36,6 +36,8 @@ from agent.pipeline.python_session import (
     PYTHON_SESSION_ENV,
     RESET_NOTE,
     SessionResult,
+    SessionUnavailable,
+    UNAVAILABLE_NOTE,
     bind_python_session,
     current_python_session,
     default_python_session,
@@ -663,6 +665,63 @@ def test_the_note_reaches_the_agents_conversation(monkeypatch):
     with python_session():
         pn.agent(state)
     assert any(python_session_note() in str(m.content) for m in fake.seen[0])
+
+
+# --------------------------------------------------------------------------
+# An interpreter that will not start
+# --------------------------------------------------------------------------
+
+class _Unstartable:
+    """A session whose interpreter never comes up."""
+
+    def run(self, code, timeout):
+        raise SessionUnavailable("no interpreter here")
+
+    def close(self):
+        pass
+
+    def fresh(self):
+        return _Unstartable()
+
+
+def test_an_interpreter_that_cannot_start_falls_back_to_a_fresh_process():
+    """Review nit on the first cut: the fallback reused the container note,
+    which told the model something about a container that did not exist.
+    The note names what actually happened."""
+    with python_session(_Unstartable()):
+        result = pt.execute_python("print('ran anyway')")
+    assert result.ok, result.stderr
+    assert result.stdout.strip() == "ran anyway"
+    assert UNAVAILABLE_NOTE in result.stderr
+    assert "container" not in result.stderr
+
+
+def test_a_child_that_dies_before_its_first_request_is_unavailable_not_a_crash(monkeypatch):
+    """The retry after a broken pipe is guarded too: a second failure is
+    SessionUnavailable, the one exception execute_python falls back on,
+    never a bare OSError out of the tool loop."""
+    live = LocalPythonSession()
+    calls = {"n": 0}
+    real_send = live._send
+
+    def broken_send(request):
+        calls["n"] += 1
+        raise BrokenPipeError("stdin closed")
+
+    monkeypatch.setattr(live, "_send", broken_send)
+    try:
+        with pytest.raises(SessionUnavailable):
+            live.run("print(1)", timeout=FAST_S)
+        assert calls["n"] == 2
+        assert not live.alive
+        # And through the tool: a fresh process, with the note.
+        with bind_python_session(live):
+            result = pt.execute_python("print('fresh')")
+        assert result.stdout.strip() == "fresh"
+        assert UNAVAILABLE_NOTE in result.stderr
+    finally:
+        monkeypatch.setattr(live, "_send", real_send)
+        live.close()
 
 
 # --------------------------------------------------------------------------
