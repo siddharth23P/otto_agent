@@ -207,3 +207,51 @@ def test_a_connection_may_not_hold_more_than_the_session_cap(server, monkeypatch
     reply = json.loads(ws.recv(timeout=5))
     assert reply["type"] == "error" and reply["code"] == "no_session" and "sessions" in reply["message"]
     ws.close()
+
+
+def test_a_browser_page_is_refused_before_the_token_is_tried(server):
+    """A native client sends no Origin header; a page always does, and a
+    page has no business on this port unless the server was told its
+    origin (2026-09-14 review)."""
+    from websockets.exceptions import InvalidStatus
+
+    with pytest.raises(InvalidStatus) as caught:
+        connect(server, open_timeout=5, additional_headers={"Origin": "http://evil.example"})
+    assert caught.value.response.status_code == 403
+    ws, reply = _hello(server)  # no Origin: as before
+    assert reply["type"] == "hello_ok"
+    ws.close()
+
+
+def test_an_allowed_origin_connects(configured):
+    srv = OttoServer(TOKEN, allowed_origins=("http://localhost:3000/",))
+    assert srv.check_origin(None, _Request({"Origin": "http://localhost:3000"})) is None
+    assert srv.check_origin(None, _Request({})) is None
+    assert srv.check_origin(_Conn(), _Request({"Origin": "http://evil.example"})) == (403, "origin not allowed\n")
+
+
+class _Request:
+    def __init__(self, headers):
+        self.headers = headers
+
+
+class _Conn:
+    def respond(self, status, text):
+        return (int(status), text)
+
+
+def test_turns_run_on_the_servers_own_bounded_pool(server, monkeypatch):
+    import threading
+
+    names = []
+
+    def fake_run(text, **kwargs):
+        names.append(threading.current_thread().name)
+        yield {"__final__": {"text": "done"}}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    ws, _ = _hello(server, capabilities=())
+    ws.send(protocol.encode("turn", text="hi"))
+    _recv_until(ws, "event")
+    ws.close()
+    assert names and names[0].startswith("otto-turn")

@@ -89,6 +89,48 @@ def test_environ_mode_never_writes_a_file(tmp_path, monkeypatch):
     assert not list((tmp_path / "home").glob("*.env"))
 
 
+def test_keys_from_the_host_switch_the_subprocess_tools_off_by_default(tmp_path, monkeypatch):
+    """A subprocess inherits the environment, keys included: a host that
+    injected keys through environ= must not find them in a shell the model
+    runs (2026-09-14 review). An explicit collection is the host's call."""
+    monkeypatch.setattr(embed, "_configured", {})
+    embed.configure(tmp_path / "home", environ={"INCEPTION_API_KEY": "test-placeholder-not-a-real-key"})
+    seen = []
+
+    def fake_run(text, **kwargs):
+        from agent.pipeline.profile import disabled_tools
+        seen.append(tuple(sorted(disabled_tools())))
+        yield {"__final__": {"text": "ok"}}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    handle = embed.Runtime().open_session()
+    handle.run("hi", events=lambda e: None)
+    handle.run("hi", events=lambda e: None, disabled_tools=())
+    handle.run("hi", events=lambda e: None, disabled_tools=("browse",))
+    assert seen == [tuple(sorted(embed.SUBPROCESS_TOOLS)), (), ("browse",)]
+    # Keys from a file: the defaults leave every standing tool on.
+    monkeypatch.setattr(embed, "_configured", {})
+    embed.configure(tmp_path / "other", env_file=tmp_path / "k.env")
+    seen.clear()
+    embed.Runtime().open_session().run("hi", events=lambda e: None)
+    assert seen == [()]
+
+
+def test_configure_sets_the_output_dir_and_reports_late_imports(tmp_path, monkeypatch):
+    monkeypatch.setattr(embed, "_configured", {})
+    monkeypatch.delenv("OTTO_OUTPUT_DIR", raising=False)
+    root = embed.configure(tmp_path / "home")
+    assert os.environ["OTTO_OUTPUT_DIR"] == str(root / "output")
+    # This module imported the pipeline (and so the state modules) before
+    # configure() ran: that is reported, and raises when asked to.
+    assert "agent.memory.store" in embed.late_imports()
+    embed.configure(tmp_path / "home")  # a repeat call keeps the diagnostic
+    assert "agent.memory.store" in embed.late_imports()
+    monkeypatch.setattr(embed, "_configured", {})
+    with pytest.raises(RuntimeError, match="before importing"):
+        embed.configure(tmp_path / "strict", strict=True)
+
+
 def test_set_key_rejects_a_bad_name(configured):
     with pytest.raises(ValueError):
         embed.set_key("not a name", "x")

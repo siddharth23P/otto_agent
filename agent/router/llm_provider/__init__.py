@@ -185,7 +185,12 @@ def all_models(capability: Capability | None = None) -> list[ModelInfo]:
     """Every model across every configured provider, skipping unusable ones."""
     models: list[ModelInfo] = []
     for name in provider_names():
-        cls = provider_class(name)
+        try:
+            cls = provider_class(name)
+        except ImportError:
+            # The adapter's SDK is not installed (an embedded Otto may ship
+            # without one); health_report names it, the picker skips it.
+            continue
         if not cls.is_configured():
             continue
         try:
