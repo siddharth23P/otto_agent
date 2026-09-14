@@ -4,7 +4,7 @@
 ![python](https://img.shields.io/badge/python-3.12-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 [![PyPI](https://img.shields.io/pypi/v/otto-cli-agent?label=pypi)](https://pypi.org/project/otto-cli-agent/)
-![tests](https://img.shields.io/badge/tests-1593%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-1685%20passed-brightgreen)
 
 Otto is a terminal AI agent that works on a codebase, a container, a browser
 or a desktop, uses what it built, and judges its own work against criteria it
@@ -88,10 +88,12 @@ transcript without spending a turn.
 ## Install
 
 ```bash
-pip install otto-cli-agent
+pip install "otto-cli-agent[local-embeddings]"
 ```
 
-Python 3.12 or newer. The wheel and sdist are also attached to every [release](https://github.com/siddharth23P/otto_agent/releases).
+Python 3.12 or newer. The `local-embeddings` extra is the on-device
+embedding model (fastembed); without it, memory recall uses a Gemini key when
+there is one and plain recency otherwise. `[serve]` adds `otto serve`. The wheel and sdist are also attached to every [release](https://github.com/siddharth23P/otto_agent/releases).
 
 ## Quick start
 
@@ -117,6 +119,7 @@ uv run otto chat        # the same pipeline at a prompt
 | --- | --- |
 | `otto tui` / `otto chat` | interactive sessions; `--workspace PATH`, `--no-workspace`, `--resume <id\|prefix\|last>` |
 | `otto sessions` | list, `--delete`, `--rename`, `--export`, `--import`, `--prune` |
+| `otto serve` | the agent behind a WebSocket for the phone app; `--host`, `--port`, `--token`, `--qr` |
 | `otto doctor` | provider and route health, exit 2 on a missing required key |
 | `otto models` | every model each configured vendor lists, with detected capabilities |
 | `otto route <task>` | the fallback chain for a seat, pins starred, observed outcomes shown |
@@ -137,7 +140,10 @@ address-space ceiling on Linux, default 8192, 0 for none),
 `OTTO_MODEL_PRICES` (a JSON file that overrides the price table),
 `OTTO_IGNORE_ROUTES=1` (use the shipped routing table untouched; evals do),
 `OTTO_BROWSER_PYTHON` (an interpreter with Playwright and `pyte`, which
-enables the browser and terminal tools), `OTTO_NO_ANIMATION=1`, `OTTO_THEME`.
+enables the browser and terminal tools), `OTTO_HOME` (where state lives,
+default `~/.otto`), `OTTO_ENV_FILE` (the `.env` to load and write),
+`OTTO_OUTPUT_DIR`, `OTTO_SERVE_TOKEN` (the `otto serve` pairing secret),
+`OTTO_NO_ANIMATION=1`, `OTTO_THEME`.
 
 Otto ships no browser. To let it load the pages and terminal programs it
 writes, install Playwright and `pyte` into any Python once and point
@@ -205,10 +211,38 @@ The pieces, each documented in its own folder:
 | [agent/router](agent/router/README.md) | task seats, the routing table, provider adapters, learned ordering, health, pins, temperature policy |
 | [agent/cli](agent/cli/README.md) | the TUI, the REPL, sessions, setup, and every `otto` command |
 | [agent/eval](agent/eval/README.md) | the six benchmark harnesses, the failure taxonomy, the single-agent control |
-| [agent/config](agent/config/README.md) | the one `.env` file Otto reads and writes |
+| [agent/config](agent/config/README.md) | the one `.env` file Otto reads and writes, and `OTTO_HOME` |
+| [agent/phone](agent/phone/README.md) | the phone tools, the screen digest and the money guard behind the Android app |
+| [agent/server](agent/server/README.md) | `otto serve`, the agent over a WebSocket |
 | [containers](containers/README.md) | the throwaway desktop image the screen tools drive |
-| [tests](tests/README.md) | 1,593 tests that need no key and no network |
+| [tests](tests/README.md) | 1,685 tests that need no key and no network |
 | [docs](docs/README.md) | the development log, the research sources, the memory design |
+
+## Embedding Otto
+
+Otto is also a library. `agent/embed.py` is the surface a host depends on --
+an Android app with Otto's Python inside it is the case it was built for --
+and it is deliberately small:
+
+```python
+from agent import embed
+
+embed.configure("/data/data/dev.otto.phone/files/otto")   # before anything else is imported
+embed.set_key("INCEPTION_API_KEY", "...")                   # written masked; or pass environ={...}
+runtime = embed.Runtime()                                   # imports the pipeline, once
+session = runtime.open_session()
+session.run("make my font bigger", events=print,
+            tools=phone_tools(backend), guidance=PHONE_GUIDANCE,
+            disabled_tools=PHONE_DISABLED_STANDING_TOOLS)   # blocks; ask/answer from another thread
+```
+
+Events are plain dicts (`progress`, `board`, `ask`, `final`, `error`), a run
+pauses inside `run()` until `answer()` arrives, and `cancel()` stops it within
+one model call. Keys live in the process environment, so one process is one
+person's Otto; a host serving several people runs several processes. `API_VERSION` says which contract you have. The phone tools,
+the screen digest and the money guard are [agent/phone](agent/phone/README.md);
+`otto serve` puts the same runtime behind a WebSocket for a client that has
+the hands ([agent/server](agent/server/README.md)).
 
 ## Evaluation
 
@@ -222,7 +256,7 @@ enforce: [agent/eval/README.md](agent/eval/README.md).
 
 ## Testing
 
-1,593 tests pass and 12 skip on macOS, Linux and Windows in under two minutes,
+1,685 tests pass and 12 skip on macOS, Linux and Windows in a few minutes,
 with no API keys and no network. Tests assert on the messages handed to the
 model, on the exact inputs that broke real runs, on call counts against the
 real compiled graph, and directly on the library behaviours the code relies

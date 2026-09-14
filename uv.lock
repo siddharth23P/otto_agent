@@ -1842,11 +1842,10 @@ wheels = [
 
 [[package]]
 name = "otto-cli-agent"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "emoji" },
-    { name = "fastembed" },
     { name = "inceptionai" },
     { name = "langchain" },
     { name = "langchain-anthropic" },
@@ -1854,27 +1853,40 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langfuse" },
     { name = "langgraph" },
-    { name = "langgraph-cli", extra = ["inmem"] },
     { name = "numpy" },
-    { name = "openpyxl" },
+    { name = "openpyxl", marker = "sys_platform != 'android'" },
     { name = "prompt-toolkit" },
-    { name = "python-docx" },
+    { name = "python-docx", marker = "sys_platform != 'android'" },
     { name = "python-dotenv" },
-    { name = "reportlab" },
+    { name = "reportlab", marker = "sys_platform != 'android'" },
     { name = "textual" },
     { name = "tiktoken" },
     { name = "typer" },
 ]
 
+[package.optional-dependencies]
+dev-server = [
+    { name = "langgraph-cli", extra = ["inmem"] },
+]
+local-embeddings = [
+    { name = "fastembed" },
+]
+serve = [
+    { name = "websockets" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "fastembed" },
+    { name = "langgraph-cli", extra = ["inmem"] },
     { name = "pytest" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "emoji", specifier = ">=2.15.0" },
-    { name = "fastembed", specifier = ">=0.8.0" },
+    { name = "fastembed", marker = "extra == 'local-embeddings'", specifier = ">=0.8.0" },
     { name = "inceptionai", specifier = ">=0.1.3" },
     { name = "langchain", specifier = ">=1.4.0" },
     { name = "langchain-anthropic", specifier = ">=1.7.1" },
@@ -1882,20 +1894,27 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=1.6.0" },
     { name = "langfuse", specifier = ">=4.15.1" },
     { name = "langgraph", specifier = ">=1.2.11" },
-    { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.4.31" },
+    { name = "langgraph-cli", extras = ["inmem"], marker = "extra == 'dev-server'", specifier = ">=0.4.31" },
     { name = "numpy", specifier = ">=2.5.3" },
-    { name = "openpyxl", specifier = ">=3.1.5" },
+    { name = "openpyxl", marker = "sys_platform != 'android'", specifier = ">=3.1.5" },
     { name = "prompt-toolkit", specifier = ">=3.0.53" },
-    { name = "python-docx", specifier = ">=1.1.2" },
+    { name = "python-docx", marker = "sys_platform != 'android'", specifier = ">=1.1.2" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
-    { name = "reportlab", specifier = ">=4.2" },
+    { name = "reportlab", marker = "sys_platform != 'android'", specifier = ">=4.2" },
     { name = "textual", specifier = ">=8.2.8" },
     { name = "tiktoken", specifier = ">=0.14.0" },
     { name = "typer", specifier = ">=0.27.2" },
+    { name = "websockets", marker = "extra == 'serve'", specifier = ">=13" },
 ]
+provides-extras = ["local-embeddings", "serve", "dev-server"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0" }]
+dev = [
+    { name = "fastembed", specifier = ">=0.8.0" },
+    { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.4.31" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "websockets", specifier = ">=13" },
+]
 
 [[package]]
 name = "packaging"

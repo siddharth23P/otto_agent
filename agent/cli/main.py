@@ -34,6 +34,7 @@ from agent.cli import lessons as lessons_cmd
 from agent.cli import models as model_cmd
 from agent.cli import route as route_cmd
 from agent.cli import sessions as sessions_cmd
+from agent.cli import serve as serve_cmd
 from agent.cli import chat as chat_cmd
 from agent.cli import tui as tui_cmd
 
@@ -60,6 +61,7 @@ for _name, _fn in (
     ("eval-swe", eval_swe_cmd.eval_swe_cmd),
     ("lessons", lessons_cmd.lessons_cmd),
     ("sessions", sessions_cmd.sessions_cmd),
+    ("serve", serve_cmd.serve),
 ):
     app.command(_name)(friendly(_fn))
 

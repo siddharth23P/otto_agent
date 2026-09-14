@@ -10,13 +10,15 @@ CodeTask, right after rendering the panel.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 #: Relative to wherever `otto chat`/`otto tui` is launched from -- next to
 #: the project it's working on, not buried in ~/.otto with the ledger/profile
 #: (10.1/10.2), since this is meant to be opened by a person, not read back
-#: by Otto itself.
-OUTPUT_DIR = Path.cwd() / "otto_output"
+#: by Otto itself. OTTO_OUTPUT_DIR overrides it for a host with no useful
+#: working directory (an embedded run; agent/config/home.py).
+OUTPUT_DIR = Path(os.environ.get("OTTO_OUTPUT_DIR", "").strip() or Path.cwd() / "otto_output")
 
 #: classify()'s LANGUAGE line is free text in plain English ("python",
 #: "javascript"), not an enum -- mapped here to the extension a person would

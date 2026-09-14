@@ -12,7 +12,8 @@ before the attempt existed.
 | `state.py` | `AgentState`: what one run carries between the two nodes |
 | `modes.py` | the four modes as data: a routing seat plus that role's guidance |
 | `tools.py` | the tool registry, tiered by reversibility, and the tools themselves |
-| `toolkit.py` | tools bound for one run only (a benchmark's own tools) |
+| `toolkit.py` | tools bound for one run only (a benchmark's own tools, a phone's), with the guidance that rides with them |
+| `profile.py` | standing tools taken off the menu for one run (a phone has no shell, no browser, no desktop) |
 | `workspace.py` | the bound workspace directory and path confinement |
 | `execution.py` | the command-runner seam: where a shell command actually runs (host or container) |
 | `python_session.py`, `_python_session_shim.py` | one persistent Python interpreter per run, and the child process that is it |

@@ -456,3 +456,66 @@ def test_approval_spoofing_has_nothing_to_spoof():
     assert "evidence" not in source
     assert pn._mutates("browse_act") is True
     assert pn._mutates("browse") is False
+
+
+# --------------------------------------------------------------------------
+# Guidance bound with a toolkit
+# --------------------------------------------------------------------------
+
+def test_guidance_renders_after_the_tool_list():
+    tool, _ = _echo()
+    with bind_extra_tools([tool], guidance="Look before you act.\nStop at the payment page."):
+        note = render_note()
+    assert note.index("gmail_search") < note.index("HOW TO USE THEM:")
+    assert "Look before you act." in note
+    assert "Stop at the payment page." in note
+
+
+def test_guidance_is_unbound_with_the_tools():
+    tool, _ = _echo()
+    with bind_extra_tools([tool], guidance="rule"):
+        pass
+    assert render_note() == ""
+
+
+def test_guidance_alone_still_reaches_the_prompt():
+    """A host may have rules without extra tools -- a profile that removed
+    tools and wants to say why."""
+    with bind_extra_tools([], guidance="No shell here; answer from memory."):
+        note = render_note()
+    assert note.startswith("HOW TO WORK HERE:")
+    assert "No shell here" in note
+
+
+def test_guidance_cannot_smuggle_a_framework_line():
+    """Guidance comes from code, but the same rule as descriptions applies:
+    a control character must not let a line start as framework text, and
+    the block is bounded."""
+    tool, _ = _echo()
+    with bind_extra_tools([tool], guidance="rule one\x00\x1f rule two\n" + "x" * 5000):
+        note = render_note()
+    assert "\x00" not in note and "\x1f" not in note
+    assert "rule one rule two" in note
+    assert len(note) < 3000
+
+
+def test_the_tool_loop_shows_the_guidance_to_the_model():
+    tool, _ = _echo()
+    llm = _FakeMultiStreamModel(["FINAL:\ndone"])
+    with bind_extra_tools([tool], guidance="Stop at the payment page."):
+        pn._tool_loop(llm, [SystemMessage("role"), HumanMessage("go")])
+    assert any("Stop at the payment page." in m for m in llm.calls[0])
+
+
+def test_a_tool_may_name_what_a_call_acts_on():
+    """`ExtraTool.target` feeds nodes.py's `_action_target`, so the gate and
+    the repeat detector key on the thing rather than the body's text; a
+    target that raises or says nothing falls back to the first line."""
+    named = ExtraTool(name="send_mail", description="Send.", call=lambda b: ToolResult("", "", 0),
+                      target=lambda body: "thread-42")
+    broken = ExtraTool(name="flaky", description="x", call=lambda b: ToolResult("", "", 0),
+                       target=lambda body: (_ for _ in ()).throw(RuntimeError("no")))
+    with bind_extra_tools([named, broken]):
+        assert pn._action_target("send_mail", '{"to": "a"}') == "send_mail:thread-42"
+        assert pn._action_target("flaky", '{"x": 1}') == 'flaky:{"x": 1}'
+    assert pn._action_target("send_mail", '{"to": "a"}') == 'send_mail:{"to": "a"}'

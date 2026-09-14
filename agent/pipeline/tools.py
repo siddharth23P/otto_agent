@@ -115,6 +115,7 @@ from agent.pipeline import browsing
 from agent.pipeline import screen as screening
 from agent.pipeline import walkthrough
 from agent.pipeline.execution import current_command_runner
+from agent.pipeline.profile import disabled_tools
 from agent.pipeline.python_session import (
     MEMORY_CEILING_NOTE, NO_PERSISTENCE_NOTE, RESET_NOTE, UNAVAILABLE_NOTE,
     SessionUnavailable, current_python_session,
@@ -1936,8 +1937,14 @@ def reachable_tools() -> dict[str, str]:
     """
     has_workspace = current_workspace() is not None
     has_container = current_command_runner() is not None
+    disabled = disabled_tools()
     live = {}
     for name, tier in TOOL_TIERS.items():
+        if name in disabled:
+            # Taken off the menu by the host for this run
+            # (agent/pipeline/profile.py): not reachable here, whatever is
+            # bound.
+            continue
         need = TOOL_NEEDS.get(name, ANYWHERE)
         if need == ANYWHERE:
             live[name] = tier
