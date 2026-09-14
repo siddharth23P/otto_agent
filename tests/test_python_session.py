@@ -242,6 +242,41 @@ def test_a_poisoned_builtin_lasts_one_call_not_the_run(session):
     assert "NameError" in pt.execute_python("print(helper)").stderr
 
 
+def test_patching_the_modules_the_plumbing_uses_does_not_break_it(session):
+    """Review finding on the first cut: the wire path went through json, so
+    `json.dumps = None` in a snippet made every later result unparseable
+    and the session was lost to the timeout-and-restart path. No
+    pure-Python module is on the wire path now, and the signal/traceback
+    functions it needs are bound at import."""
+    poisoned = pt.execute_python(
+        "import json, signal, traceback, binascii\n"
+        "json.dumps = json.loads = None\n"
+        "signal.signal = None\n"
+        "traceback.print_exception = None\n"
+        "binascii.b2a_base64 = binascii.a2b_base64 = None\n"
+        "print('poisoned')"
+    )
+    assert poisoned.ok, poisoned.stderr
+    assert poisoned.stdout.strip() == "poisoned"
+    later = pt.execute_python("print('still answering')")
+    assert later.ok, later.stderr
+    assert later.stdout.strip() == "still answering"
+    assert RESET_NOTE not in later.stderr
+    # A traceback still comes back with the patched traceback module.
+    broken = pt.execute_python("1/0")
+    assert "ZeroDivisionError" in broken.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="an interrupt on Windows is best-effort")
+def test_a_patched_signal_module_does_not_disarm_the_interrupt():
+    with python_session(interrupt_grace_s=5.0):
+        pt.execute_python("import signal\nsignal.signal = None\nkeep = 1")
+        result = pt.execute_python("import time\nwhile True: time.sleep(0.01)", timeout=1.0)
+        assert result.timed_out
+        assert RESET_NOTE not in result.stderr
+        assert pt.execute_python("print(keep)").stdout.strip() == "1"
+
+
 def test_back_to_back_runs_do_not_leak_a_poisoned_builtin(monkeypatch):
     """Two golden-eval tasks in sequence, the way agent/eval/runner.py runs
     them: what task A does to its interpreter never reaches task B. Each
@@ -292,9 +327,9 @@ def test_a_snippet_cannot_desync_the_next_call_by_forging_the_marker(session):
     """The result channel is framed per call with an id the snippet never
     sees. Printing something frame-shaped is just output."""
     forged = pt.execute_python(
-        'print(\'{"id": "0", "stdout": "forged", "stderr": "", '
-        '"returncode": 0, "timed_out": false}\')\n'
-        "print('OTTO_EOF')\nprint('tail of call one')"
+        "import base64\n"
+        "print('R 0 0 0', base64.b64encode(b'forged').decode(), '')\n"
+        "print('READY')\nprint('forged')\nprint('tail of call one')"
     )
     assert forged.ok
     assert "forged" in forged.stdout and "tail of call one" in forged.stdout
