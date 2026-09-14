@@ -34,12 +34,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from agent.config.home import otto_home
 from agent.memory import store as store_module
 from agent.memory.store import MemoryStore, session_db_path
 
 #: Sibling of agent/router/outcomes.py's outcomes.db: per-installation state
-#: about the person's own sessions, not one session's memory.
-DEFAULT_INDEX_PATH = Path.home() / ".otto" / "sessions.db"
+#: about the person's own sessions, not one session's memory. Under
+#: OTTO_HOME when that is set (agent/config/home.py).
+DEFAULT_INDEX_PATH = otto_home() / "sessions.db"
 
 #: Where the index is right now, or None for the default. A module global,
 #: NOT a contextvar like agent/router/outcomes.py's log binding: the TUI

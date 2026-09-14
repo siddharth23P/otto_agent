@@ -3,18 +3,23 @@
 A terminal AI agent that works on a codebase, a container, a browser or a
 desktop, uses what it built, and judges its own work against criteria it
 wrote before it started. One agent loop with modes over four model vendors,
-a rubric-first evaluator, tiered memory, six benchmark harnesses, and 1,593
-tests that need no API key.
+a rubric-first evaluator, tiered memory, six benchmark harnesses, and 1,685
+tests that need no API key. It embeds: `agent.embed` is the surface an app
+with Otto's Python inside it depends on.
 
 ![One minute of otto tui](https://raw.githubusercontent.com/siddharth23P/otto_agent/main/docs/media/otto-demo.gif)
 
 ## Install
 
 ```bash
-pip install otto-cli-agent
+pip install "otto-cli-agent[local-embeddings]"
 otto doctor
 otto tui
 ```
+
+The `local-embeddings` extra is the on-device embedding model; without it
+recall uses a Gemini key when there is one, and recency otherwise. `[serve]`
+adds `otto serve`, the agent behind a WebSocket for the phone app.
 
 Put keys in a `.env` in the directory you run it from. `INCEPTION_API_KEY`
 is required (it alone serves the fill-in-the-middle and edit endpoints);

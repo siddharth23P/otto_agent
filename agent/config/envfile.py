@@ -20,10 +20,13 @@ from pathlib import Path
 
 from dotenv import set_key, unset_key
 
-#: The file agent/cli/main.py loads at import: the repository root's `.env`.
-#: One definition, imported by main.py, so the writer and the loader cannot
-#: drift apart.
-ENV_PATH: Path = Path(__file__).resolve().parents[2] / ".env"
+from agent.config.home import env_file
+
+#: The file agent/cli/main.py loads at import: the repository root's `.env`
+#: from a checkout, `$OTTO_ENV_FILE` when set, `<OTTO_HOME>/.env` for an
+#: installed wheel (agent/config/home.py). One definition, imported by
+#: main.py, so the writer and the loader cannot drift apart.
+ENV_PATH: Path = env_file()
 
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -42,7 +45,7 @@ def present(key: str) -> bool:
     return bool(os.environ.get(key))
 
 
-def set_value(key: str, value: str, *, path: Path = ENV_PATH) -> str:
+def set_value(key: str, value: str, *, path: Path | None = None) -> str:
     """Write `KEY=value` to `path` and into `os.environ`. Returns the masked
     value, which is all a caller should ever display.
 
@@ -55,7 +58,10 @@ def set_value(key: str, value: str, *, path: Path = ENV_PATH) -> str:
     if not value:
         unset_value(key, path=path)
         return masked(None)
-    path = Path(path)
+    # Resolved at call time, not bound as a default: a default would freeze
+    # the path at import, and both the tests and an embedding host that
+    # reassigns ENV_PATH would silently write somewhere else.
+    path = Path(ENV_PATH if path is None else path)
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(mode=0o600)
@@ -64,11 +70,11 @@ def set_value(key: str, value: str, *, path: Path = ENV_PATH) -> str:
     return masked(value)
 
 
-def unset_value(key: str, *, path: Path = ENV_PATH) -> None:
+def unset_value(key: str, *, path: Path | None = None) -> None:
     """Remove `key` from `path` (if present) and from `os.environ`."""
     if not KEY_RE.match(key or ""):
         raise ValueError(f"{key!r} is not a valid environment variable name")
-    path = Path(path)
+    path = Path(ENV_PATH if path is None else path)
     if path.exists():
         # unset_key logs a warning and returns (None, key) when the key is
         # absent; neither is an error for a caller that wants it gone.

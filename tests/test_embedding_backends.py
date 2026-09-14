@@ -12,6 +12,7 @@ below, and it is the reason this file exists.
 
 Offline throughout: backends are faked, no keys, no network.
 """
+import sys
 import numpy as np
 import pytest
 
@@ -312,3 +313,20 @@ def test_an_explicit_setting_beats_the_default(monkeypatch):
     emb.reset_backend()
 
     assert isinstance(emb.current_backend(), emb.LocalBGEBackend)
+
+
+def test_a_missing_fastembed_is_an_embedding_unavailable_that_names_the_extra(monkeypatch):
+    """fastembed is an optional extra (0.2.0): on a phone it cannot be
+    installed at all. Every caller already degrades on EmbeddingUnavailable
+    (queue: None vectors; retrieval: recent, unranked), so the only thing left
+    to get right is that the message says what to do."""
+    monkeypatch.setitem(sys.modules, "fastembed", None)  # makes the import raise
+    monkeypatch.setattr(emb, "_model", None)
+    monkeypatch.setattr(emb, "_model_load_failed", False)
+    with pytest.raises(emb.EmbeddingUnavailable) as caught:
+        emb.LocalBGEBackend().embed_documents(["hello"])
+    assert "local-embeddings" in str(caught.value)
+    assert "GEMINI_API_KEY" in str(caught.value)
+    # And it is remembered, so the next call does not re-import.
+    with pytest.raises(emb.EmbeddingUnavailable):
+        emb.LocalBGEBackend().embed_documents(["again"])

@@ -33,9 +33,12 @@ from pathlib import Path
 
 import numpy as np
 
+from agent.config.home import otto_home
+
 #: Sibling to the ledger/profile convention agent/cli/output.py's own
 #: docstring documents for `~/.otto` -- internal state, not a deliverable.
-DB_DIR = Path.home() / ".otto" / "memory"
+#: `~/.otto` unless OTTO_HOME says otherwise (agent/config/home.py).
+DB_DIR = otto_home() / "memory"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (

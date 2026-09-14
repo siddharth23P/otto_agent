@@ -259,8 +259,20 @@ def _get_model():
             raise EmbeddingUnavailable("embedding model previously failed to load")
         try:
             from fastembed import TextEmbedding
+        except ImportError as exc:
+            # An optional extra since 0.2.0: fastembed pulls onnxruntime,
+            # which has no Android wheel, so an embedded Otto runs without
+            # it. Name both ways forward, because a bare ImportError reads
+            # as a broken install rather than a choice.
+            _model_load_failed = True
+            raise EmbeddingUnavailable(
+                "local embeddings need fastembed: install "
+                "`otto-cli-agent[local-embeddings]`, or set GEMINI_API_KEY "
+                "(hosted embeddings) or OTTO_EMBEDDING_MODEL"
+            ) from exc
+        try:
             _model = TextEmbedding(model_name=MODEL_NAME)
-        except Exception as exc:  # network, disk, corrupt cache, missing dep, ...
+        except Exception as exc:  # network, disk, corrupt cache, ...
             _model_load_failed = True
             raise EmbeddingUnavailable(str(exc)) from exc
         return _model
