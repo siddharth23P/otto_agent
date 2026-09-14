@@ -72,6 +72,13 @@ class ExtraTool:
     #: JSON Schema for the body, when the body is a JSON object. Empty means
     #: the body is free text and the description says what it should contain.
     schema: dict[str, Any] = field(default_factory=dict)
+    #: What a call acts ON, for the mutation gate and the repeat detector
+    #: (agent/pipeline/nodes.py `_action_target`), when the body's first line
+    #: does not identify it. A phone's `phone_commit` body is `{"target":
+    #: "Send"}`, and two different Send buttons on two different screens
+    #: would share one gate key; the tool resolves the label to the element
+    #: it would tap and names that instead. None means the first line.
+    target: Callable[[str], str] | None = None
 
 
 _current: contextvars.ContextVar[Mapping[str, ExtraTool]] = contextvars.ContextVar(

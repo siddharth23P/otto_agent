@@ -28,6 +28,12 @@ class ProtocolError(Exception):
     pass
 
 
+#: How many sessions one connection may hold open. A phone uses one or two;
+#: the cap bounds what a client holding the token can spend, which is the
+#: one thing the shared-token trust model does not otherwise limit.
+MAX_SESSIONS_PER_CONNECTION = 8
+
+
 class Connection:
     """State for one client socket."""
 
@@ -59,6 +65,9 @@ class Connection:
     def handle_for(self, session_id: str | None, ref: str | None = None):
         if session_id and session_id in self.handles:
             return self.handles[session_id]
+        if len(self.handles) >= MAX_SESSIONS_PER_CONNECTION:
+            raise LookupError(f"this connection already holds {MAX_SESSIONS_PER_CONNECTION} sessions; "
+                              "delete one first")
         handle = self.runtime().open_session(ref or session_id)
         self.handles[handle.id] = handle
         return handle

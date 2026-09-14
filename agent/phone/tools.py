@@ -271,6 +271,22 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         except PhoneError as exc:
             return _failed(name, exc)
 
+    def commit_target(body: str) -> str:
+        """What a phone_commit call acts on, for the mutation gate: the
+        element the label resolves to on the screen last read, so a Send on
+        this screen and a Send on the next are two holds, not one."""
+        parsed = json_body("phone_commit", body)
+        if isinstance(parsed, ToolResult):
+            return ""
+        label = str(parsed.get("target") or "")
+        snapshot = state.get("snapshot")
+        if not snapshot or not label:
+            return label
+        index, _ = _digest.find_node(snapshot, label)
+        if index is None:
+            return label
+        return f"{snapshot.get('snapshot_id')}:[{index}] {label}"
+
     def phone_commit(body: str) -> ToolResult:
         name = "phone_commit"
         parsed = json_body(name, body)
@@ -315,7 +331,7 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                 if len(hits) > 1:
                     return _bad(name, f"{want!r} matches several apps: " +
                                 ", ".join(f"{a['label']} ({a['package']})" for a in hits[:MAX_CANDIDATES]))
-                package, label = hits[0]["package"], str(hits[0].get("label") or want)
+                package, label = str(hits[0]["package"]), str(hits[0].get("label") or want)
             if why := guard.package_verdict(package, label):
                 return _refuse(name, why + " -- not opened")
             result = backend.launch(package)
@@ -355,10 +371,17 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         question = parsed["question"].strip()
         if not question:
             return _bad(name, "say what you want to know about the screen")
+        # The screen is read before it is captured, whatever the digest
+        # shows: a capture goes to a vision vendor, and a payment form in a
+        # WebView has no nodes for the two-signal check to see, so a secure
+        # window (what banking and payment apps set) is refused on its own.
+        snapshot, failure = screen_now()
+        if failure:
+            return failure
+        if snapshot.get("secure"):
+            return _refuse(name, "this window is protected (secure content) -- it is not captured "
+                                 "and the person takes over")
         try:
-            current = backend.foreground()
-            if why := guard.package_verdict(str(current.get("package") or ""), str(current.get("label") or "")):
-                return _refuse(name, why + " -- not captured")
             data = backend.screenshot()
         except PhoneError as exc:
             return _failed(name, exc)
@@ -415,7 +438,8 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                   "| swipe|scroll (direction: up|down|left|right).", phone_act, mutates=False, schema=act_schema),
         ExtraTool("phone_commit", "Tap a button that cannot be taken back (Send, Delete, Confirm, Submit) by its "
                   "text. Never a payment step.", phone_commit, mutates=True,
-                  schema={"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]}),
+                  schema={"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
+                  target=commit_target),
         ExtraTool("phone_open", "Launch an installed app by its name or package, then show its screen.",
                   phone_open, mutates=False,
                   schema={"type": "object", "properties": {"app": {"type": "string"}}, "required": ["app"]}),

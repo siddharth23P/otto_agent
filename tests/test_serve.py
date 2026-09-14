@@ -193,3 +193,17 @@ def test_the_cli_command_is_registered_and_the_token_persists(monkeypatch, tmp_p
     assert serve_cmd.ensure_token(None) == first
     assert serve_cmd.ensure_token("given") == "given"
     assert serve_cmd.pairing_url("0.0.0.0", 8765) == "ws://127.0.0.1:8765/"
+
+
+def test_a_connection_may_not_hold_more_than_the_session_cap(server, monkeypatch):
+    from agent.server import app as server_app
+
+    monkeypatch.setattr(server_app, "MAX_SESSIONS_PER_CONNECTION", 2)
+    ws, _ = _hello(server)
+    for _ in range(2):
+        ws.send(protocol.encode("sessions", op="open"))
+        assert json.loads(ws.recv(timeout=5))["type"] == "sessions_result"
+    ws.send(protocol.encode("sessions", op="open"))
+    reply = json.loads(ws.recv(timeout=5))
+    assert reply["type"] == "error" and reply["code"] == "no_session" and "sessions" in reply["message"]
+    ws.close()

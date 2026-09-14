@@ -200,6 +200,16 @@ def _action_target(tool_name: str, body: str) -> str:
     36, 37 and 35 lines, without the compiler ever being run once.
     """
     first_line = next((line for line in body.splitlines() if line.strip()), "")
+    extra = current_extra_tools().get(tool_name)
+    if extra is not None and extra.target is not None:
+        # The tool knows what it acts on better than its body's text does
+        # (agent/pipeline/toolkit.py `ExtraTool.target`). A tool that cannot
+        # say falls back to the line, never to nothing.
+        try:
+            named = extra.target(body)
+        except Exception:
+            named = ""
+        return f"{tool_name}:{(named or first_line).strip()[:120]}"
     if tool_name == "view_image":
         # The path alone is the wrong target here. Asking a second, narrower
         # question about one image is exactly how this tool is meant to be
