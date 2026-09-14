@@ -111,9 +111,11 @@ def rules() -> dict:
         data = json.loads(rules_text())
     except (OSError, ValueError) as exc:
         raise GuardRulesError(f"guard_rules.json is unreadable ({exc}); reinstall otto-cli-agent") from exc
+    if not isinstance(data, dict):
+        raise GuardRulesError("guard_rules.json is not an object; reinstall otto-cli-agent")
     missing = [k for k in _REQUIRED_SECTIONS if not isinstance(data.get(k), list)]
-    if not isinstance(data, dict) or missing:
-        raise GuardRulesError(f"guard_rules.json lacks {', '.join(missing) or 'its sections'}; reinstall otto-cli-agent")
+    if missing:
+        raise GuardRulesError(f"guard_rules.json lacks {', '.join(missing)}; reinstall otto-cli-agent")
     return data
 
 
@@ -215,6 +217,21 @@ def checkout_context(texts: Iterable[str]) -> str:
         s = normal(text)
         if s and any(p.search(s) for p in c["checkout"]):
             return str(text or "")[:60]
+    return ""
+
+
+def submit_verdict(texts: Iterable[str]) -> str:
+    """Why the keyboard's Enter may not be pressed on this screen, or "".
+    Enter submits whatever the focused field's form does, and there is no
+    label to judge, so the screen is judged instead: a checkout signal, or
+    any control on it that is a pay word, means Enter is that button."""
+    texts = list(texts)
+    seen = checkout_context(texts)
+    if seen:
+        return f"this screen is a checkout ({seen!r}); Enter would submit it -- the person does that"
+    for text in texts:
+        if target_verdict(text) == "pay":
+            return f"this screen has a payment step ({text[:60]!r}); Enter would submit it -- the person does that"
     return ""
 
 

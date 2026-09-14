@@ -87,6 +87,15 @@ def test_a_forward_word_is_a_pay_word_only_on_a_checkout_screen():
     assert guard.checkout_context(["Step 2 of 3"]) == ""
 
 
+def test_enter_is_judged_by_the_screen_it_would_submit():
+    """Enter has no label: a checkout signal, or a pay button anywhere on
+    the screen, is what it would submit (2026-09-14 review of #13)."""
+    assert "checkout" in guard.submit_verdict(["Qty", "2", "Total ₹56", "Pay"])
+    assert "payment step" in guard.submit_verdict(["Qty", "2", "Buy now"])
+    assert guard.submit_verdict(["Search for milk", "Amul Taaza 500 ml", "ADD"]) == ""
+    assert guard.submit_verdict(["Type a message", "Send"]) == ""
+
+
 def test_look_alike_letters_from_other_scripts_do_not_hide_a_word():
     """"Pаy now" with a Cyrillic а reads as "Pay now" to a person; NFKC does
     not fold it, so the guard does (2026-09-14 review)."""
@@ -107,6 +116,10 @@ def test_a_broken_rules_file_is_a_named_error_not_a_guess(monkeypatch):
         monkeypatch.setattr(guard, "rules_text", lambda: json.dumps({"version": 2, "pay_words": ["pay"]}))
         guard.rules.cache_clear(); guard._compiled.cache_clear()
         with __import__("pytest").raises(guard.GuardRulesError, match="lacks"):
+            guard.package_verdict("com.phonepe.app")
+        monkeypatch.setattr(guard, "rules_text", lambda: "[]")  # valid JSON, not an object
+        guard.rules.cache_clear(); guard._compiled.cache_clear()
+        with __import__("pytest").raises(guard.GuardRulesError, match="not an object"):
             guard.package_verdict("com.phonepe.app")
     finally:
         monkeypatch.undo()

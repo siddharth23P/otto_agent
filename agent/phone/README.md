@@ -46,8 +46,10 @@ Code, on both sides, and the phone's verdict wins:
   field): that is what the last button of a checkout is usually called.
 - A **commit word** ("Send", "Delete", "Confirm", and "Checkout": reaching
   the payment page is the person's call, once): only `phone_commit`.
-- `press enter` is the keyboard's submit and is judged like a tap on the
-  screen; `back`, `home` and `recents` are the way out and always allowed.
+- `press enter` is the keyboard's submit. It has no label to judge, so the
+  screen is judged instead: the sensitive-screen verdict, then a checkout
+  signal or any pay button on the screen (what Enter would submit) refuses
+  it. `back`, `home` and `recents` are the way out and always allowed.
 - A tap by coordinates is judged by the element under the point. A point
   with no element under it is refused on a screen that has clickable
   elements (a checkout drawn on a canvas inside an ordinary page is exactly
