@@ -158,7 +158,7 @@ def configure(home: str | os.PathLike, *, env_file: str | os.PathLike | None = N
                            "resolved from the environment at that time", ", ".join(late))
     if env_path is None:
         env_path = _configured.get("env_file")  # sticky: a repeat call without it keeps the file
-    _configured.update(home=root, env_file=env_path, late=late,
+    _configured.update(home=root, env_file=env_path, late=late or _configured.get("late", []),
                        keys_from_host=bool(environ) or _configured.get("keys_from_host", False))
     from agent.router import overrides
 

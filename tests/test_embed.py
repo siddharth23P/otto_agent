@@ -124,6 +124,8 @@ def test_configure_sets_the_output_dir_and_reports_late_imports(tmp_path, monkey
     # This module imported the pipeline (and so the state modules) before
     # configure() ran: that is reported, and raises when asked to.
     assert "agent.memory.store" in embed.late_imports()
+    embed.configure(tmp_path / "home")  # a repeat call keeps the diagnostic
+    assert "agent.memory.store" in embed.late_imports()
     monkeypatch.setattr(embed, "_configured", {})
     with pytest.raises(RuntimeError, match="before importing"):
         embed.configure(tmp_path / "strict", strict=True)
