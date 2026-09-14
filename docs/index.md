@@ -8,7 +8,7 @@ description: A terminal AI agent that uses what it built and judges its own work
 A terminal AI agent that works on a codebase, a container, a browser or a
 desktop, uses what it built, and judges its own work against criteria it
 wrote before it started. One agent loop with modes over four model vendors,
-a rubric-first evaluator, tiered memory, six benchmark harnesses, and 1,552
+a rubric-first evaluator, tiered memory, six benchmark harnesses, and 1,586
 tests that need no API key.
 
 [Source on GitHub](https://github.com/siddharth23P/otto_agent) ·
