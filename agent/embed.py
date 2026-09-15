@@ -15,7 +15,7 @@ these names are:
     configure(home, env_file=, environ=) where state and keys live -- FIRST
     set_key / key_status / ready / doctor / version
     Runtime.open_session / list_sessions / delete_session / transcript
-    SessionHandle.run / answer / cancel / close
+    SessionHandle.run / answer / cancel / rename / close
 
 and, beside them, agent/phone/ (the phone tools) and agent/pipeline/toolkit.py's
 `ExtraTool`. A host pins the otto release it was tested against and reads
@@ -39,8 +39,16 @@ or Swift host can hand them across a bridge unchanged:
         phone tools runs: "working on your phone" or "answering here"
     {"type": "board",    "node", "lines": [...], "output": str | None}
     {"type": "ask",      "thread_id", "question", "choices": [...]}
-    {"type": "final",    "text", "usage": {...}, "trace_id"}
-    {"type": "error",    "code": "provider" | "cancelled" | "failed", "message"}
+    {"type": "final",    "text", "usage": {...}, "trace_id", "turn", "title", "turns",
+                         "phone", "document"}
+    {"type": "error",    "code": "provider" | "cancelled" | "failed", "message", "turn"}
+
+`turn` is what this turn alone spent, {"tokens", "calls", "cost"} (cost None
+when a model that answered has no rate); `usage` stays the session's running
+total. `phone` is where the turn ran (None: it had no phone tools). `document`
+is None, or the Markdown document a research turn wrote:
+{"path" (workspace-relative), "format": "md", "markdown" (at most
+DOCUMENT_MAX_BYTES), "truncated", "files": ["document.md", "document.docx", ...]}.
 
 An `ask` pauses the run inside `run()` until `answer()` arrives from another
 thread (the UI's), exactly as agent/cli/tui.py's worker thread blocks on its
@@ -261,6 +269,13 @@ def version() -> dict[str, Any]:
 # Sessions and turns
 # --------------------------------------------------------------------------
 
+#: The most of a research document a `final` event carries. A report runs to
+#: tens of kilobytes; this bounds the frame a runaway one makes.
+DOCUMENT_MAX_BYTES = 2 * 1024 * 1024
+#: The files a research run may leave beside document.md (agent/pipeline/
+#: research.py FORMATS), listed on the event so a host can offer them.
+DOCUMENT_FORMATS: tuple[str, ...] = ("md", "docx", "pdf", "xlsx")
+
 #: How often a streamed partial answer is forwarded. A diffusing route emits
 #: whole-reply refinements many times a second; a UI redrawing on each is
 #: what makes a phone stutter.
@@ -450,6 +465,15 @@ class SessionHandle:
                 self._cancel.set()
             self._answer_ready.set()
 
+    def rename(self, title: str) -> str:
+        """Name the session, as `/rename` does; returns the title as stored
+        (whitespace collapsed). A blank title is a ValueError: clearing a
+        name is not something any front end offers."""
+        if not " ".join(str(title or "").split()):
+            raise ValueError("a title needs some text")
+        self._session.rename(str(title))
+        return self.title
+
     def close(self) -> None:
         # A phone turn distils its lesson after its answer is sent
         # (agent/pipeline/nodes.py wait_for_learning). Give it a bounded
@@ -479,6 +503,7 @@ class SessionHandle:
         from agent.router.overrides import bind_seats
 
         started = time.monotonic()
+        mark = self._ledger_mark()
         last_partial = 0.0
 
         def sink(update) -> None:
@@ -559,20 +584,57 @@ class SessionHandle:
                                     "output": delta.get("output") or None})
                     stream = next_stream
         except Cancelled:
-            events({"type": "error", "code": "cancelled", "message": "stopped"})
+            events({"type": "error", "code": "cancelled", "message": "stopped",
+                    "turn": self._turn_totals(mark)})
             return
         except (AuthError, ProviderError) as exc:
-            events({"type": "error", "code": "provider", "message": str(exc)})
+            events({"type": "error", "code": "provider", "message": str(exc),
+                    "turn": self._turn_totals(mark)})
             return
         except Exception as exc:  # a provider's own exception must not kill the host
             logger.exception("turn failed")
-            events({"type": "error", "code": "failed", "message": f"{type(exc).__name__}: {exc}"})
+            events({"type": "error", "code": "failed", "message": f"{type(exc).__name__}: {exc}",
+                    "turn": self._turn_totals(mark)})
             return
 
         raw = ((final or {}).get("final_output") or "").strip()
+        # The history keeps the short report a research turn answers with;
+        # the document itself rides beside it on the event, never in memory.
         self._session.record_turn(human, AIMessage(raw) if raw else None)
         events({"type": "final", "text": raw, "usage": self.usage.snapshot(),
-                "trace_id": self._session.trace_id})
+                "trace_id": self._session.trace_id, "turn": self._turn_totals(mark),
+                "title": self.title, "turns": self.turns, "phone": self.phone,
+                "document": _document(workspace, (final or {}).get("document_path"))})
+
+    def _ledger_mark(self) -> dict[str, tuple[int, int, int, int, int]]:
+        """Where each model's counters stood, so a turn's own share can be
+        taken off the session ledger afterwards (`_turn_totals`)."""
+        return {name: (m.calls, m.input_tokens, m.output_tokens, m.cached_input_tokens,
+                       m.cache_write_tokens)
+                for name, m in list(self.usage.by_model.items())}
+
+    def _turn_totals(self, mark: Mapping[str, tuple[int, int, int, int, int]]) -> dict[str, Any]:
+        """This turn's tokens, calls and dollars: the ledger minus `mark`,
+        priced per model the way agent/pipeline/usage.py prices the whole --
+        cost None when a model that reported tokens has no rate, rather than
+        a short total passed off as the total."""
+        from agent.pipeline.usage import ModelUsage
+
+        tokens = calls = 0
+        cost: float | None = 0.0
+        for name, m in list(self.usage.by_model.items()):
+            c0, i0, o0, r0, w0 = mark.get(name, (0, 0, 0, 0, 0))
+            share = ModelUsage(model=name, calls=m.calls - c0, input_tokens=m.input_tokens - i0,
+                               output_tokens=m.output_tokens - o0, cached_input_tokens=m.cached_input_tokens - r0,
+                               cache_write_tokens=m.cache_write_tokens - w0, reported=m.reported)
+            if share.calls <= 0 and share.total_tokens <= 0:
+                continue
+            calls += share.calls
+            tokens += share.total_tokens
+            if share.reported and share.total_tokens:
+                priced = share.cost
+                cost = None if priced is None or cost is None else cost + priced
+        return {"tokens": tokens, "calls": calls, "cost": cost}
 
     def _workspace_for(self, on_phone: bool, workspace) -> str | None:
         """The directory a turn's file tools and research documents get.
@@ -602,6 +664,29 @@ class SessionHandle:
             if self._cancel is not None and self._cancel.is_set():
                 raise Cancelled("stopped while waiting for an answer")
             return self._answer or ""
+
+
+def _document(workspace: str | None, relative: str | None) -> dict[str, Any] | None:
+    """The document a research turn wrote, for the `final` event, or None.
+
+    `relative` comes out of the graph's state, so it is treated as untrusted:
+    it must resolve (symlinks included) to a Markdown file inside the turn's
+    own workspace, or nothing is read."""
+    if not workspace or not relative:
+        return None
+    try:
+        root = Path(workspace).resolve()
+        path = (root / str(relative)).resolve()
+        if not path.is_relative_to(root) or path.suffix != ".md" or not path.is_file():
+            return None
+        with path.open("rb") as fh:
+            data = fh.read(DOCUMENT_MAX_BYTES + 1)
+    except (OSError, ValueError):
+        return None
+    files = [f"{path.stem}.{fmt}" for fmt in DOCUMENT_FORMATS if path.with_suffix(f".{fmt}").is_file()]
+    return {"path": path.relative_to(root).as_posix(), "format": "md",
+            "markdown": data[:DOCUMENT_MAX_BYTES].decode("utf-8", errors="ignore"),
+            "truncated": len(data) > DOCUMENT_MAX_BYTES, "files": files}
 
 
 def _is_phone_tool(tool) -> bool:

@@ -473,3 +473,16 @@ def test_a_no_verdict_rejection_resubmits_the_document_unchanged(monkeypatch, tm
         assert again.goto == "evaluator"
         assert any("no verdict" in line for line in again.update["board"])
         assert again.update["output"].startswith("Document written")
+
+
+def test_conversion_is_refused_where_the_host_switched_code_execution_off(monkeypatch, tmp_path):
+    """Otto embedded in the phone app disables execute_python; converting a
+    document must not spawn the interpreter anyway (2026-09-15)."""
+    from agent.pipeline.profile import bind_tool_profile
+
+    def never(script, **kwargs):
+        raise AssertionError("no subprocess in this host")
+
+    monkeypatch.setattr(rs, "execute_python", never)
+    with bind_workspace(str(tmp_path)), bind_tool_profile({"execute_python"}):
+        assert rs._convert("otto_research/x", "docx") == (False, "code execution is off in this host")

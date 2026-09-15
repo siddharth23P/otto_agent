@@ -276,5 +276,120 @@ def test_the_decision_is_counted_stoppable_and_never_streams_as_an_answer(serve_
     monkeypatch.setattr(pn, "needs_phone", stopped)
     events.clear()
     handle.run("x", events=events.append, **_phone_kwargs())
-    assert events == [{"type": "error", "code": "cancelled", "message": "stopped"}]
+    assert [(e["type"], e["code"], e["message"]) for e in events] == [("error", "cancelled", "stopped")]
+    handle.close()
+
+
+# --------------------------------------------------------------------------
+# what the final event carries (B2)
+# --------------------------------------------------------------------------
+
+REPORT = "Document written to `otto_research/tides/document.md` -- 3 sections, 1,200 words."
+
+
+def _writes_a_document(monkeypatch, relative="otto_research/tides/document.md", body="# Tides\n\nThe moon.\n",
+                       extra=("docx",)):
+    def fake_run(text, **kwargs):
+        from pathlib import Path
+
+        target = Path(kwargs["workspace"]) / "otto_research/tides/document.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+        for fmt in extra:
+            target.with_suffix(f".{fmt}").write_bytes(b"PK")
+        yield {"__final__": {"final_output": REPORT, "route": "research", "document_path": relative},
+               "__trace_id__": None}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+
+
+def test_a_research_document_rides_on_the_final_event(serve_style, monkeypatch):
+    _writes_a_document(monkeypatch)
+    handle = embed.Runtime().open_session()
+    events = []
+    handle.run("write a research note on tides", events=events.append, phone=False, tools=PHONE_TOOLS)
+    final = events[-1]
+    assert final["type"] == "final" and final["text"] == REPORT
+    assert final["document"] == {"path": "otto_research/tides/document.md", "format": "md",
+                                 "markdown": "# Tides\n\nThe moon.\n", "truncated": False,
+                                 "files": ["document.md", "document.docx"]}
+    assert final["title"] == "write a research note on tides" and final["turns"] == 1 and final["phone"] is False
+    # The history keeps the report, not twenty thousand words.
+    assert [m["text"] for m in embed.Runtime().transcript(handle.id)["messages"]] == [
+        "write a research note on tides", REPORT]
+    handle.close()
+
+
+@pytest.mark.parametrize("relative", ["../outside.md", "/etc/hosts", "otto_research/tides/document.docx", ""])
+def test_a_document_path_outside_the_workspace_or_not_markdown_is_ignored(serve_style, monkeypatch, relative):
+    outside = serve_style / "workspaces" / "outside.md"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("secret")
+    _writes_a_document(monkeypatch, relative=relative)
+    handle = embed.Runtime().open_session()
+    events = []
+    handle.run("x", events=events.append, phone=False, tools=PHONE_TOOLS)
+    assert events[-1]["type"] == "final" and events[-1]["document"] is None
+    handle.close()
+
+
+def test_a_long_document_is_cut_and_says_so(serve_style, monkeypatch):
+    monkeypatch.setattr(embed, "DOCUMENT_MAX_BYTES", 10)
+    _writes_a_document(monkeypatch, body="0123456789abcdef", extra=())
+    handle = embed.Runtime().open_session()
+    events = []
+    handle.run("x", events=events.append, phone=False, tools=PHONE_TOOLS)
+    document = events[-1]["document"]
+    assert document["markdown"] == "0123456789" and document["truncated"] is True
+    assert document["files"] == ["document.md"]
+    handle.close()
+
+
+def test_turn_totals_are_this_turns_share_and_ride_on_errors_too(serve_style, monkeypatch):
+    spend = {"tokens": (100, 20)}
+
+    def fake_run(text, **kwargs):
+        i, o = spend["tokens"]
+        kwargs["usage"].record("nobody:unpriced-model", {"input_tokens": i, "output_tokens": o})
+        if text == "fail":
+            raise RuntimeError("boom")
+        yield {"__final__": {"final_output": "ok"}, "__trace_id__": None}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    handle = embed.Runtime().open_session()
+    events = []
+    handle.run("one", events=events.append)
+    assert events[-1]["turn"] == {"tokens": 120, "calls": 1, "cost": None}
+    spend["tokens"] = (5, 5)
+    handle.run("two", events=events.append)
+    assert events[-1]["turn"] == {"tokens": 10, "calls": 1, "cost": None}
+    assert events[-1]["usage"]["total_tokens"] == 130
+    handle.run("fail", events=events.append)
+    assert events[-1]["type"] == "error" and events[-1]["turn"]["tokens"] == 10
+    handle.close()
+
+
+def test_a_turn_of_a_priced_model_has_a_cost(serve_style, monkeypatch):
+    from agent.pipeline import usage as usage_module
+
+    monkeypatch.setattr(usage_module, "cost_of", lambda model, **kw: 0.5)
+
+    def fake_run(text, **kwargs):
+        kwargs["usage"].record("inception:mercury-2.5", {"input_tokens": 10, "output_tokens": 2})
+        yield {"__final__": {"final_output": "ok"}, "__trace_id__": None}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    handle = embed.Runtime().open_session()
+    events = []
+    handle.run("one", events=events.append)
+    assert events[-1]["turn"] == {"tokens": 12, "calls": 1, "cost": 0.5}
+    handle.close()
+
+
+def test_a_session_can_be_renamed_through_its_handle(serve_style):
+    handle = embed.Runtime().open_session()
+    assert handle.rename("  tide   notes ") == "tide notes" and handle.title == "tide notes"
+    with pytest.raises(ValueError):
+        handle.rename("   ")
+    assert embed.Runtime().list_sessions()[0]["title"] == "tide notes"
     handle.close()
