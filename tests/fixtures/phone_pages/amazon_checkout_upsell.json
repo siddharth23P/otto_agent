@@ -1,0 +1,1736 @@
+{
+ "snapshot_id": "amazon_checkout_upsell",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": [
+   "Ax-Sc-AddToCartButton-Personalization_QuantityStepper"
+  ]
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Back",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    165,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    165,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 3,
+   "t": "Search or ask a question",
+   "d": "",
+   "r": "text",
+   "b": [
+    368,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1441,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 8,
+   "t": "Need anything else?",
+   "d": "",
+   "r": "view",
+   "b": [
+    48,
+    395,
+    1391,
+    518
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 9,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    52,
+    608,
+    1387,
+    2517
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "Buy it again",
+   "d": "",
+   "r": "text",
+   "b": [
+    52,
+    608,
+    1387,
+    698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 11,
+   "t": "",
+   "d": "Wayona Type C to Type C 65W/3.25A Fast Charging 3M/10ft Long Braided USB C to C Cable Compatible with iPhone 15 Series,Samsung Galaxy S25 Ultra,S24/S23/S22/S21/S20, iPad, Macbook Air/Pro (3M, Black)",
+   "r": "view",
+   "b": [
+    52,
+    740,
+    532,
+    1201
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "",
+   "d": "Wayona Type C to Type C 65W/3.25A Fast Charging 3M/10ft Long Braided USB C to C Cable Compatible with iPhone 15 Series,Samsung Galaxy S25 Ultra,S24/S23/S22/S21/S20, iPad, Macbook Air/Pro (3M, Black)",
+   "r": "image",
+   "b": [
+    52,
+    740,
+    532,
+    1201
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    386,
+    1055,
+    510,
+    1178
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "",
+   "d": "Wayona Type C to Type C 65W/3.25A Fast Charging 3M/10ft Long Braided USB C to C Cable Compatible with iPhone 15 Series,Samsung Galaxy S25 Ultra,S24/S23/S22/S21/S20, iPad, Macbook Air/Pro (3M, Black)",
+   "r": "view",
+   "b": [
+    67,
+    1193,
+    517,
+    1272
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 15,
+   "t": "Wayona Type C to Type C 65W/3.25A Fast Charging 3M/10ft Long Braided USB C to C Cable Compatible with iPhone 15 Series,Samsung Galaxy S25 Ultra,S24/S23/S22/S21/S20, iPad, Macbook Air/Pro (3M, Black)",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    447,
+    495,
+    1272
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 16,
+   "t": "Limited time deal",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    1265,
+    517,
+    1332
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 17,
+   "t": "-57%",
+   "d": "",
+   "r": "text",
+   "b": [
+    82,
+    1332,
+    240,
+    1407
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "₹468.99",
+   "d": "",
+   "r": "text",
+   "b": [
+    262,
+    1336,
+    495,
+    1411
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "M.R.P:",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    1415,
+    191,
+    1467
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "₹1,099.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    198,
+    1415,
+    412,
+    1475
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "",
+   "d": "Prime",
+   "r": "image",
+   "b": [
+    67,
+    1475,
+    232,
+    1523
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "Today",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    1531,
+    198,
+    1587
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 23,
+   "t": "",
+   "d": "Surf Excel Matic Liquid Detergent 5 kg for Top Load | Removes tough Stains in 1st wash | Superior Fragrance | Color Protection | Trusted by machine manufacturers like Whirlpool, Bosch, Lloyd, Voltas",
+   "r": "view",
+   "b": [
+    52,
+    1632,
+    532,
+    2093
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "",
+   "d": "Surf Excel Matic Liquid Detergent 5 kg for Top Load | Removes tough Stains in 1st wash | Superior Fragrance | Color Protection | Trusted by machine manufacturers like Whirlpool, Bosch, Lloyd, Voltas",
+   "r": "image",
+   "b": [
+    52,
+    1632,
+    532,
+    2093
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    386,
+    1947,
+    510,
+    2071
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "",
+   "d": "Surf Excel Matic Liquid Detergent 5 kg for Top Load | Removes tough Stains in 1st wash | Superior Fragrance | Color Protection | Trusted by machine manufacturers like Whirlpool, Bosch, Lloyd, Voltas",
+   "r": "view",
+   "b": [
+    67,
+    2090,
+    517,
+    2165
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "Surf Excel Matic Liquid Detergent 5 kg for Top Load | Removes tough Stains in 1st wash | Superior Fragrance | Color Protection | Trusted by machine manufacturers like Whirlpool, Bosch, Lloyd, Voltas",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    1467,
+    517,
+    2165
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "-14%",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    2161,
+    225,
+    2236
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 29,
+   "t": "₹638.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    232,
+    2165,
+    465,
+    2243
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "M.R.P:",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    2243,
+    191,
+    2296
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "₹740.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    198,
+    2243,
+    375,
+    2300
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "(₹127.60/l)",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    2303,
+    285,
+    2356
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "",
+   "d": "Prime",
+   "r": "image",
+   "b": [
+    67,
+    2360,
+    232,
+    2412
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "Tomorrow, 17 Sept",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    2416,
+    476,
+    2476
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 35,
+   "t": "",
+   "d": "Belkin Apple Certified USB-C to USB-C Braided Nylon Cable 1M | Fast Charging Cable | Type C Charger Cable for iPhone 17, 16, Galaxy S25, Pixel 9, MacBook, iPad Pro | 2 Years Warranty | White",
+   "r": "view",
+   "b": [
+    551,
+    740,
+    1031,
+    1201
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "",
+   "d": "Belkin Apple Certified USB-C to USB-C Braided Nylon Cable 1M | Fast Charging Cable | Type C Charger Cable for iPhone 17, 16, Galaxy S25, Pixel 9, MacBook, iPad Pro | 2 Years Warranty | White",
+   "r": "image",
+   "b": [
+    551,
+    740,
+    1031,
+    1201
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    885,
+    1055,
+    1008,
+    1178
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "",
+   "d": "Belkin Apple Certified USB-C to USB-C Braided Nylon Cable 1M | Fast Charging Cable | Type C Charger Cable for iPhone 17, 16, Galaxy S25, Pixel 9, MacBook, iPad Pro | 2 Years Warranty | White",
+   "r": "view",
+   "b": [
+    566,
+    1193,
+    1016,
+    1272
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "Belkin Apple Certified USB-C to USB-C Braided Nylon Cable 1M | Fast Charging Cable | Type C Charger Cable for iPhone 17, 16, Galaxy S25, Pixel 9, MacBook, iPad Pro | 2 Years Warranty | White",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    575,
+    1008,
+    1272
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "-43%",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    1268,
+    723,
+    1343
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "₹799.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    731,
+    1272,
+    960,
+    1347
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "M.R.P:",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    1347,
+    686,
+    1400
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "₹1,399.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    697,
+    1347,
+    911,
+    1407
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 44,
+   "t": "",
+   "d": "Prime",
+   "r": "image",
+   "b": [
+    566,
+    1407,
+    727,
+    1456
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 45,
+   "t": "Today",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    1463,
+    697,
+    1520
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 46,
+   "t": "",
+   "d": "Sammvaad Masala Chai – 250g | Kadak Assam CTC Tea with Ginger & Cardamom | Strong & Aromatic | Makes 135 Cups | Freshness Sealed Pack",
+   "r": "view",
+   "b": [
+    551,
+    1632,
+    1031,
+    2093
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 47,
+   "t": "",
+   "d": "Sammvaad Masala Chai – 250g | Kadak Assam CTC Tea with Ginger & Cardamom | Strong & Aromatic | Makes 135 Cups | Freshness Sealed Pack",
+   "r": "image",
+   "b": [
+    551,
+    1632,
+    1031,
+    2093
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 48,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    885,
+    1947,
+    1008,
+    2071
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 49,
+   "t": "",
+   "d": "Sammvaad Masala Chai – 250g | Kadak Assam CTC Tea with Ginger & Cardamom | Strong & Aromatic | Makes 135 Cups | Freshness Sealed Pack",
+   "r": "view",
+   "b": [
+    566,
+    2090,
+    1016,
+    2165
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 50,
+   "t": "Sammvaad Masala Chai – 250g | Kadak Assam CTC Tea with Ginger & Cardamom | Strong & Aromatic | Makes 135 Cups | Freshness Sealed Pack",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    1595,
+    1012,
+    2165
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 51,
+   "t": "₹219.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    2165,
+    798,
+    2243
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 52,
+   "t": "(₹87.60/100 g)",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    2240,
+    855,
+    2292
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 53,
+   "t": "",
+   "d": "Prime",
+   "r": "image",
+   "b": [
+    566,
+    2300,
+    727,
+    2348
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 54,
+   "t": "Mon, 21 Sept",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    2352,
+    851,
+    2412
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 55,
+   "t": "",
+   "d": "Tide Plus Detergent Washing Powder - 10kg Mega Saver Pack | Jasmine & Rose Fragrance | Removes deep-seated Oil, Gravy, Tea Stains | World's No. 1 Detergent Brand",
+   "r": "view",
+   "b": [
+    1050,
+    740,
+    1441,
+    1201
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 56,
+   "t": "",
+   "d": "Tide Plus Detergent Washing Powder - 10kg Mega Saver Pack | Jasmine & Rose Fragrance | Removes deep-seated Oil, Gravy, Tea Stains | World's No. 1 Detergent Brand",
+   "r": "image",
+   "b": [
+    1050,
+    740,
+    1441,
+    1201
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 57,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    1383,
+    1055,
+    1441,
+    1178
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 58,
+   "t": "",
+   "d": "Tide Plus Detergent Washing Powder - 10kg Mega Saver Pack | Jasmine & Rose Fragrance | Removes deep-seated Oil, Gravy, Tea Stains | World's No. 1 Detergent Brand",
+   "r": "view",
+   "b": [
+    1065,
+    1193,
+    1441,
+    1272
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 59,
+   "t": "Tide Plus Detergent Washing Powder - 10kg Mega Saver Pack | Jasmine & Rose Fragrance | Removes deep-seated Oil, Gravy, Tea Stains | World's No. 1 Detergent Brand",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    638,
+    1441,
+    1272
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 60,
+   "t": "-32%",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    1268,
+    1218,
+    1343
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 61,
+   "t": "₹861.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    1230,
+    1272,
+    1441,
+    1347
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 62,
+   "t": "M.R.P:",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    1347,
+    1185,
+    1400
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 63,
+   "t": "₹1,265.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    1196,
+    1347,
+    1406,
+    1407
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 64,
+   "t": "(₹86.10/kg)",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    1407,
+    1290,
+    1463
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 65,
+   "t": "Thu, 24 Sept",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    1471,
+    1335,
+    1527
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 66,
+   "t": "",
+   "d": "Finish Dishwasher Rinse Aid Liquid, Shine & Dry - 400 Ml",
+   "r": "view",
+   "b": [
+    1050,
+    1632,
+    1441,
+    2093
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 67,
+   "t": "",
+   "d": "Finish Dishwasher Rinse Aid Liquid, Shine & Dry - 400 Ml",
+   "r": "image",
+   "b": [
+    1050,
+    1632,
+    1441,
+    2093
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 68,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    1383,
+    1947,
+    1441,
+    2071
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 69,
+   "t": "",
+   "d": "Finish Dishwasher Rinse Aid Liquid, Shine & Dry - 400 Ml",
+   "r": "view",
+   "b": [
+    1065,
+    2090,
+    1441,
+    2165
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 70,
+   "t": "Finish Dishwasher Rinse Aid Liquid, Shine & Dry - 400 Ml",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    1913,
+    1441,
+    2165
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 71,
+   "t": "-18%",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    2161,
+    1218,
+    2236
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 72,
+   "t": "₹263.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    1230,
+    2165,
+    1441,
+    2243
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 73,
+   "t": "M.R.P:",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    2243,
+    1185,
+    2296
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 74,
+   "t": "₹320.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    1196,
+    2243,
+    1368,
+    2300
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 75,
+   "t": "(₹657.50/l)",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    2303,
+    1282,
+    2356
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 76,
+   "t": "",
+   "d": "Prime",
+   "r": "image",
+   "b": [
+    1065,
+    2360,
+    1226,
+    2412
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 77,
+   "t": "Fri, 18 Sept",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    2416,
+    1308,
+    2476
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 78,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    52,
+    2585,
+    1387,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 79,
+   "t": "Home Essentials",
+   "d": "",
+   "r": "text",
+   "b": [
+    52,
+    2585,
+    1387,
+    2671
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 80,
+   "t": "",
+   "d": "AIR-ROMA Aroma Diffuser Oil Combo of 6 (Lemon Grass, Japanese Rose, Madurai Jasmine, Apple Spice, English Ocean and Ginger Lily) 60ml for Home, Candle, Office",
+   "r": "view",
+   "b": [
+    52,
+    2712,
+    532,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 81,
+   "t": "",
+   "d": "AIR-ROMA Aroma Diffuser Oil Combo of 6 (Lemon Grass, Japanese Rose, Madurai Jasmine, Apple Spice, English Ocean and Ginger Lily) 60ml for Home, Candle, Office",
+   "r": "image",
+   "b": [
+    52,
+    2712,
+    532,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 82,
+   "t": "AIR-ROMA Aroma Diffuser Oil Combo of 6 (Lemon Grass, Japanese Rose, Madurai Jasmine, Apple Spice, English Ocean and Ginger Lily) 60ml for Home, Candle, Office",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    2615,
+    517,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 83,
+   "t": "",
+   "d": "ApTechDeals HTC-1 Digital Hygrometer Thermometer Humidity Meter With Clock LCD Display",
+   "r": "view",
+   "b": [
+    551,
+    2712,
+    1031,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 84,
+   "t": "",
+   "d": "ApTechDeals HTC-1 Digital Hygrometer Thermometer Humidity Meter With Clock LCD Display",
+   "r": "image",
+   "b": [
+    551,
+    2712,
+    1031,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 85,
+   "t": "ApTechDeals HTC-1 Digital Hygrometer Thermometer Humidity Meter With Clock LCD Display",
+   "d": "",
+   "r": "text",
+   "b": [
+    566,
+    2866,
+    1005,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 86,
+   "t": "",
+   "d": "INOVERA 50 Piece Cable Organizer Hook & Loop Tape - Wire/Cord Holder Management Strap - Reusable Hook & Loop Ties for PC, TV, Desk, WFH Accessories - Black",
+   "r": "view",
+   "b": [
+    1050,
+    2712,
+    1441,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 87,
+   "t": "",
+   "d": "INOVERA 50 Piece Cable Organizer Hook & Loop Tape - Wire/Cord Holder Management Strap - Reusable Hook & Loop Ties for PC, TV, Desk, WFH Accessories - Black",
+   "r": "image",
+   "b": [
+    1050,
+    2712,
+    1441,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 88,
+   "t": "INOVERA 50 Piece Cable Organizer Hook & Loop Tape - Wire/Cord Holder Management Strap - Reusable Hook & Loop Ties for PC, TV, Desk, WFH Accessories - Black",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    2678,
+    1441,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 89,
+   "t": "",
+   "d": "Continue to checkout",
+   "r": "view",
+   "b": [
+    63,
+    2637,
+    1376,
+    2798
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 90,
+   "t": "Continue to checkout",
+   "d": "",
+   "r": "text",
+   "b": [
+    427,
+    2678,
+    1012,
+    2753
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ]
+}

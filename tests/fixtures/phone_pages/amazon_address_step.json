@@ -1,0 +1,155 @@
+{
+ "snapshot_id": "amazon_address_step",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Select a delivery address",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    400,
+    1395,
+    480
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "",
+   "r": "radio",
+   "b": [
+    60,
+    560,
+    150,
+    650
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": true,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "Person, 12 Example Street, Person, BIHAR, 000000",
+   "d": "",
+   "r": "text",
+   "b": [
+    180,
+    540,
+    1380,
+    700
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "",
+   "r": "radio",
+   "b": [
+    60,
+    760,
+    150,
+    850
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": ""
+  },
+  {
+   "i": 5,
+   "t": "Person, Office, Example Road, Person, BIHAR, 000000",
+   "d": "",
+   "r": "text",
+   "b": [
+    180,
+    740,
+    1380,
+    900
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 6,
+   "t": "Deliver to this address",
+   "d": "",
+   "r": "button",
+   "b": [
+    45,
+    1000,
+    1395,
+    1160
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 7,
+   "t": "Add a new address",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    1220,
+    800,
+    1300
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 7,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

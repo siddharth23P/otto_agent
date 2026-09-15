@@ -1,0 +1,1164 @@
+{
+ "snapshot_id": "amazon_cart",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": [
+   "cart-important-message-box",
+   "diamonds-cashback-cart-container",
+   "sc-delivery-message-below-buy-box",
+   "sc-buy-box-recs-container",
+   "value-on-cart-ingress-container",
+   "value-on-cart-saving-message",
+   "value-on-cart-saving-callout",
+   "value-on-cart-saving-ingress",
+   "value-on-cart-ingress-link",
+   "value-on-cart-ingress-link-text",
+   "sc-active-cart-trust-messaging",
+   "cart-atf-recommendations",
+   "cart-atf-recommendations_0",
+   "AddToCartLibrary-AddToCartButton-Personalization",
+   "sc-saved-cart",
+   "savedCartViewForm",
+   "sc-saved-cart-list-caption-text",
+   "mobile-action-move-to-cart",
+   "cart-bottom-recommendations_0",
+   "cart-bottom-recommendations_1",
+   "cart-bottom-recommendations_2"
+  ]
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    83,
+    200,
+    173,
+    290
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_search_disabled"
+  },
+  {
+   "i": 3,
+   "t": "Search or ask a question",
+   "d": "",
+   "r": "text",
+   "b": [
+    203,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1440,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 8,
+   "t": "Total ₹394.00 View details",
+   "d": "",
+   "r": "view",
+   "b": [
+    48,
+    410,
+    1391,
+    518
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sc-subtotal-row"
+  },
+  {
+   "i": 9,
+   "t": "Proceed to checkout",
+   "d": "",
+   "r": "button",
+   "b": [
+    52,
+    560,
+    1387,
+    721
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "",
+   "r": "checkbox",
+   "b": [
+    63,
+    848,
+    157,
+    938
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sc-buy-box-gift-checkbox"
+  },
+  {
+   "i": 11,
+   "t": "Send as a gift. Include custom message",
+   "d": "",
+   "r": "text",
+   "b": [
+    180,
+    856,
+    1252,
+    931
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "Shop for ₹610 more, get",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    1077,
+    652,
+    1141
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "₹50 cashback",
+   "d": "",
+   "r": "text",
+   "b": [
+    648,
+    1077,
+    986,
+    1141
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "Pay with any prepaid payment method",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    1231,
+    1391,
+    1302
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 15,
+   "t": "",
+   "d": "Deselect all items",
+   "r": "view",
+   "b": [
+    52,
+    1407,
+    536,
+    1482
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "deselect-all"
+  },
+  {
+   "i": 16,
+   "t": "Deselect all items",
+   "d": "",
+   "r": "text",
+   "b": [
+    52,
+    1407,
+    536,
+    1482
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 17,
+   "t": "",
+   "d": "Prime",
+   "r": "image",
+   "b": [
+    45,
+    1568,
+    247,
+    1628
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "FREE delivery",
+   "d": "",
+   "r": "text",
+   "b": [
+    255,
+    1553,
+    641,
+    1632
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "Tomorrow 8 am - 12 pm",
+   "d": "",
+   "r": "text",
+   "b": [
+    637,
+    1553,
+    1305,
+    1632
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 20,
+   "t": "",
+   "d": "Select LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1) for checkout",
+   "r": "checkbox",
+   "b": [
+    75,
+    1681,
+    165,
+    1771
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "",
+   "d": "LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1)",
+   "r": "view",
+   "b": [
+    600,
+    1696,
+    1383,
+    1838
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1)",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1696,
+    1383,
+    1838
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "200+ bought in past month",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1831,
+    1383,
+    1913
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "Limited time deal",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1925,
+    1042,
+    1992
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "-74%",
+   "d": "",
+   "r": "text",
+   "b": [
+    615,
+    2018,
+    772,
+    2093
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "₹389.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    806,
+    2007,
+    1121,
+    2112
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "(₹38,900.00 / 100 g)",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    2003,
+    1383,
+    2183
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "M.R.P.: ₹1,499.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    2210,
+    1383,
+    2296
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 29,
+   "t": "In stock",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    2330,
+    791,
+    2397
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "",
+   "d": "10 days Returnable",
+   "r": "view",
+   "b": [
+    600,
+    2405,
+    1065,
+    2472
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "10 days Returnable",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    2405,
+    1065,
+    2472
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "10% Off on select cards",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    2540,
+    1188,
+    2607
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "",
+   "d": "Terms",
+   "r": "view",
+   "b": [
+    1185,
+    2532,
+    1331,
+    2611
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "Terms",
+   "d": "",
+   "r": "text",
+   "b": [
+    1185,
+    2540,
+    1331,
+    2607
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "",
+   "d": "Delete LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1)",
+   "r": "button",
+   "b": [
+    67,
+    2648,
+    191,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "1",
+   "d": "",
+   "r": "text",
+   "b": [
+    277,
+    2663,
+    315,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "1",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    2675,
+    105,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "",
+   "d": "Increase quantity by one, Quantity is 1, LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1)",
+   "r": "button",
+   "b": [
+    397,
+    2648,
+    525,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "",
+   "d": "Delete LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1)",
+   "r": "button",
+   "b": [
+    603,
+    2641,
+    847,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "",
+   "d": "Save for later LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1)",
+   "r": "button",
+   "b": [
+    881,
+    2641,
+    1286,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    0,
+    2698,
+    240,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "",
+   "d": "Home Tab 1 of 6",
+   "r": "view",
+   "b": [
+    45,
+    2698,
+    195,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    57,
+    2821,
+    182,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 44,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    240,
+    2698,
+    480,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "Your Amazon.com Tab 2 of 6",
+   "r": "view",
+   "b": [
+    285,
+    2698,
+    435,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 46,
+   "t": "You",
+   "d": "",
+   "r": "text",
+   "b": [
+    317,
+    2821,
+    403,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 47,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    480,
+    2698,
+    720,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 48,
+   "t": "",
+   "d": "Wallet Tab 3 of 6",
+   "r": "view",
+   "b": [
+    525,
+    2698,
+    675,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 49,
+   "t": "Wallet",
+   "d": "",
+   "r": "text",
+   "b": [
+    533,
+    2821,
+    667,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 50,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    720,
+    2698,
+    960,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 51,
+   "t": "",
+   "d": "Cart 1 item Tab 4 of 6",
+   "r": "view",
+   "b": [
+    765,
+    2698,
+    915,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 52,
+   "t": "1",
+   "d": "",
+   "r": "text",
+   "b": [
+    839,
+    2718,
+    859,
+    2788
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "cart_count"
+  },
+  {
+   "i": 53,
+   "t": "Cart",
+   "d": "",
+   "r": "text",
+   "b": [
+    790,
+    2821,
+    889,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 54,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    960,
+    2698,
+    1200,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 55,
+   "t": "",
+   "d": "Browse menu Tab 5 of 6",
+   "r": "view",
+   "b": [
+    1005,
+    2698,
+    1155,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 56,
+   "t": "Menu",
+   "d": "",
+   "r": "text",
+   "b": [
+    1021,
+    2821,
+    1139,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 57,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    1200,
+    2698,
+    1440,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 58,
+   "t": "",
+   "d": "Amazon Rufus Tab 6 of 6",
+   "r": "view",
+   "b": [
+    1245,
+    2698,
+    1395,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 59,
+   "t": "Rufus",
+   "d": "",
+   "r": "text",
+   "b": [
+    1256,
+    2821,
+    1383,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  }
+ ]
+}

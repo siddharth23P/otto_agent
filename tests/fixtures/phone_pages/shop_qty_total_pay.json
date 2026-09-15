@@ -1,0 +1,98 @@
+{
+ "snapshot_id": "shop_qty_total_pay",
+ "app": {
+  "package": "com.example.shop",
+  "label": "Shop"
+ },
+ "screen": {
+  "w": 1080,
+  "h": 2400
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Qty",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    900,
+    200,
+    960
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 2,
+   "t": "2",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    220,
+    900,
+    400,
+    960
+   ],
+   "c": true,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": "",
+   "n": "num"
+  },
+  {
+   "i": 3,
+   "t": "Total ₹56",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    1000,
+    600,
+    1060
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 4,
+   "t": "Pay",
+   "d": "",
+   "r": "button",
+   "b": [
+    60,
+    1100,
+    1020,
+    1200
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 2,
+  "activity": "com.example.shop.MainActivity",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

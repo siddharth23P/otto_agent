@@ -1,0 +1,59 @@
+{
+ "snapshot_id": "phonepe_upi_pin",
+ "app": {
+  "package": "com.phonepe.app",
+  "label": "PhonePe"
+ },
+ "screen": {
+  "w": 1080,
+  "h": 2400
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Enter UPI PIN",
+   "d": "",
+   "r": "text",
+   "b": [
+    0,
+    0,
+    100,
+    40
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    0,
+    0,
+    100,
+    40
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": true,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 1,
+  "activity": "com.phonepe.app.ui.activity.Navigator_MainActivity",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

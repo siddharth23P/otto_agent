@@ -1,0 +1,896 @@
+{
+ "snapshot_id": "amazon_search_suggestions",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Search Amazon.in",
+   "r": "view",
+   "b": [
+    0,
+    125,
+    1440,
+    331
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "rs_search_entry_bar"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Back",
+   "r": "image",
+   "b": [
+    0,
+    155,
+    165,
+    320
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon_image"
+  },
+  {
+   "i": 3,
+   "t": "Search or ask a question",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    330,
+    197,
+    1395,
+    273
+   ],
+   "c": true,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": "rs_search_src_text",
+   "h": "Search or ask a question"
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "scan it",
+   "r": "image",
+   "b": [
+    1063,
+    188,
+    1229,
+    278
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "search_right_cam_img"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "voice",
+   "r": "image",
+   "b": [
+    1229,
+    188,
+    1395,
+    278
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "search_right_mic_img"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    331,
+    1440,
+    1744
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    331,
+    1440,
+    466
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-1"
+  },
+  {
+   "i": 8,
+   "t": "ps vr2 pc adapter delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    331,
+    1440,
+    466
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-1-cell-1"
+  },
+  {
+   "i": 9,
+   "t": "",
+   "d": "ps vr2 pc adapter",
+   "r": "button",
+   "b": [
+    183,
+    331,
+    1323,
+    462
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    349,
+    1413,
+    443
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 11,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    462,
+    1440,
+    601
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-2"
+  },
+  {
+   "i": 12,
+   "t": "playstation vr2 headset delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    462,
+    1440,
+    597
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-2-cell-1"
+  },
+  {
+   "i": 13,
+   "t": "",
+   "d": "playstation vr2 headset",
+   "r": "button",
+   "b": [
+    183,
+    466,
+    1323,
+    597
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    484,
+    1413,
+    578
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 15,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    597,
+    1440,
+    736
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-3"
+  },
+  {
+   "i": 16,
+   "t": "playstation vr2 headset pc compatible delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    597,
+    1440,
+    732
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-3-cell-1"
+  },
+  {
+   "i": 17,
+   "t": "",
+   "d": "playstation vr2 headset pc compatible",
+   "r": "button",
+   "b": [
+    183,
+    601,
+    1323,
+    732
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    619,
+    1413,
+    713
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    732,
+    1440,
+    871
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-4"
+  },
+  {
+   "i": 20,
+   "t": "samsung galaxy z flip6 5g 256gb delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    732,
+    1440,
+    867
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-4-cell-1"
+  },
+  {
+   "i": 21,
+   "t": "",
+   "d": "samsung galaxy z flip6 5g 256gb",
+   "r": "button",
+   "b": [
+    183,
+    732,
+    1323,
+    867
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    751,
+    1413,
+    848
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    867,
+    1440,
+    1006
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-5"
+  },
+  {
+   "i": 24,
+   "t": "apple iphone delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    867,
+    1440,
+    1002
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-5-cell-1"
+  },
+  {
+   "i": 25,
+   "t": "",
+   "d": "apple iphone",
+   "r": "button",
+   "b": [
+    183,
+    867,
+    1323,
+    998
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    886,
+    1413,
+    979
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    998,
+    1440,
+    1137
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-6"
+  },
+  {
+   "i": 28,
+   "t": "iphone delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    998,
+    1440,
+    1137
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-6-cell-1"
+  },
+  {
+   "i": 29,
+   "t": "",
+   "d": "iphone",
+   "r": "button",
+   "b": [
+    183,
+    1002,
+    1323,
+    1133
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    1021,
+    1413,
+    1114
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1133,
+    1440,
+    1272
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-7"
+  },
+  {
+   "i": 32,
+   "t": "s25 ultra delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1133,
+    1440,
+    1268
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-7-cell-1"
+  },
+  {
+   "i": 33,
+   "t": "",
+   "d": "s25 ultra",
+   "r": "button",
+   "b": [
+    183,
+    1137,
+    1323,
+    1268
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    1156,
+    1413,
+    1249
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1268,
+    1440,
+    1407
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-8"
+  },
+  {
+   "i": 36,
+   "t": "apple iphone 13 128gb delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1268,
+    1440,
+    1403
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-8-cell-1"
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "apple iphone 13 128gb",
+   "r": "button",
+   "b": [
+    183,
+    1268,
+    1323,
+    1403
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    1291,
+    1413,
+    1384
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1403,
+    1440,
+    1542
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-9"
+  },
+  {
+   "i": 40,
+   "t": "apple iphone 13 delete",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1403,
+    1440,
+    1538
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sac-suggestion-row-9-cell-1"
+  },
+  {
+   "i": 41,
+   "t": "",
+   "d": "apple iphone 13",
+   "r": "button",
+   "b": [
+    183,
+    1403,
+    1323,
+    1538
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "",
+   "d": "delete",
+   "r": "button",
+   "b": [
+    1320,
+    1422,
+    1413,
+    1519
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "",
+   "d": "Search with photo",
+   "r": "view",
+   "b": [
+    34,
+    1507,
+    720,
+    1709
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "iss_btn_flk"
+  },
+  {
+   "i": 44,
+   "t": "Search with photo",
+   "d": "",
+   "r": "text",
+   "b": [
+    237,
+    1575,
+    621,
+    1641
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "iss_ingress_title"
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "Search with camera",
+   "r": "view",
+   "b": [
+    720,
+    1507,
+    1406,
+    1709
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "iss_btn_sp"
+  },
+  {
+   "i": 46,
+   "t": "Search with camera",
+   "d": "",
+   "r": "text",
+   "b": [
+    905,
+    1575,
+    1325,
+    1641
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "iss_ingress_title"
+  }
+ ]
+}

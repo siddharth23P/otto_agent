@@ -192,7 +192,7 @@ def _allowed(note: L.Lesson) -> bool:
     whatever it says worked: the guard would refuse the tap anyway, and a
     note is shown to every later run in that app."""
     parts = [note.cue, note.action]
-    return not (any(guard.target_verdict(part) == "pay" for part in parts) or guard.sensitive_matches(parts))
+    return not (any(guard.mentions_pay_control(part) for part in parts) or guard.sensitive_text(parts))
 
 
 def record_app_notes(by_package: dict[str, list[L.Lesson]], *, seen) -> list[tuple[str, L.Lesson]]:

@@ -1,0 +1,862 @@
+{
+ "version": 3,
+ "pages": {
+  "amazon_address_form_pincode.json": {
+   "sha256": "ffb3423436399cafd43023dc30279892f80f68ca1b93db7730bb5de5857ccfdf",
+   "kind": "checkout",
+   "payment": 0,
+   "checkout": 6,
+   "cart": 1,
+   "features": [
+    "address_choice",
+    "checkout_title",
+    "no_clickable_amounts"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "Use this address",
+     "",
+     "button",
+     "forward"
+    ]
+   ]
+  },
+  "amazon_address_step.json": {
+   "sha256": "b39193ab1b8c670acbd6583c9f020da9b4fbd0255574afa2b63fa1e5525506ad",
+   "kind": "checkout",
+   "payment": 0,
+   "checkout": 6,
+   "cart": 1,
+   "features": [
+    "address_choice",
+    "checkout_title",
+    "no_clickable_amounts"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "Deliver to this address",
+     "",
+     "button",
+     "forward"
+    ]
+   ]
+  },
+  "amazon_buy_now_sheet.json": {
+   "sha256": "5574c3c19039e1c34bcfdee5ae0accc23b781bde7c6c001aaae6681d70a7d00e",
+   "kind": "payment",
+   "payment": 8,
+   "checkout": 1,
+   "cart": 3,
+   "features": [
+    "final_pay_control",
+    "no_clickable_amounts",
+    "primary_after_total",
+    "product_page",
+    "total_with_amount"
+   ],
+   "enter": "handover",
+   "controls": [
+    [
+     "Place your order",
+     "",
+     "button",
+     "pay"
+    ],
+    [
+     "",
+     "buy-now-button",
+     "",
+     "pay"
+    ]
+   ]
+  },
+  "amazon_cart.json": {
+   "sha256": "aa4a368fdaef050a30b83ce79c7cd89d888203492ad550e9dc41b552322568f2",
+   "kind": "cart",
+   "payment": 1,
+   "checkout": 1,
+   "cart": 8,
+   "features": [
+    "cart_structure",
+    "entry_control",
+    "no_clickable_amounts",
+    "primary_after_total",
+    "product_page",
+    "total_with_amount"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "Proceed to checkout",
+     "",
+     "button",
+     "entry"
+    ],
+    [
+     "Delete LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1)",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "Delete LEAWALL Modern White Flower Pot with Stand | Large Indoor Outdoor Planter for Home Garden Balcony Living Room | Italian Ribbed Design Tall Decorative Plastic Plant Pots with Legs (Green, 1)",
+     "",
+     "button",
+     "commit"
+    ]
+   ]
+  },
+  "amazon_cart_pens.json": {
+   "sha256": "11577d1121298ceec6bf4ac3e0c957591e6ee09d7b69459b78ac627204e5bea5",
+   "kind": "cart",
+   "payment": 1,
+   "checkout": 1,
+   "cart": 8,
+   "features": [
+    "cart_structure",
+    "entry_control",
+    "no_clickable_amounts",
+    "primary_after_total",
+    "product_page",
+    "total_with_amount"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "Proceed to checkout",
+     "",
+     "button",
+     "entry"
+    ],
+    [
+     "Delete Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "Delete Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "Share Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+     "a-autoid-4",
+     "button",
+     "commit"
+    ]
+   ]
+  },
+  "amazon_checkout_payment.json": {
+   "sha256": "3a325a2933860b5d0447e36061bd0ecee7b69ec0ec0b915b84db82e693c3887c",
+   "kind": "payment",
+   "payment": 14,
+   "checkout": 6,
+   "cart": 1,
+   "features": [
+    "address_choice",
+    "checkout_title",
+    "final_pay_control",
+    "masked_card",
+    "no_clickable_amounts",
+    "payment_method_list",
+    "payment_title"
+   ],
+   "enter": "handover",
+   "controls": [
+    [
+     "Confirm order",
+     "",
+     "view",
+     "pay"
+    ],
+    [
+     "",
+     "checkout-primary-continue-button-id",
+     "view",
+     "forward"
+    ],
+    [
+     "Submit",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "",
+     "checkout-primary-continue-button-id",
+     "",
+     "forward"
+    ]
+   ]
+  },
+  "amazon_checkout_payment_scrolled.json": {
+   "sha256": "da0a27911adc1ee054485330515a0121270703ac9088d5c3addd23ef7838d379",
+   "kind": "payment",
+   "payment": 6,
+   "checkout": 3,
+   "cart": 1,
+   "features": [
+    "address_choice",
+    "masked_card",
+    "no_clickable_amounts",
+    "payment_method_list"
+   ],
+   "enter": "handover",
+   "controls": [
+    [
+     "",
+     "checkout-primary-continue-button-id",
+     "",
+     "forward"
+    ]
+   ]
+  },
+  "amazon_checkout_upsell.json": {
+   "sha256": "d1a1eb1ec75781cb4b84741ae96664992d0d6f3c43698c8f6f90909c0a89883b",
+   "kind": "none",
+   "payment": -5,
+   "checkout": -3,
+   "cart": 1,
+   "features": [
+    "entry_control",
+    "listing",
+    "no_clickable_amounts",
+    "product_page"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "Continue to checkout",
+     "",
+     "view",
+     "entry"
+    ]
+   ]
+  },
+  "amazon_filters.json": {
+   "sha256": "ed97a2df06035486d342d6926c64ead5c86e99ffff335cff79189f5bc9891684",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 0,
+   "features": [],
+   "enter": "press",
+   "controls": [
+    [
+     "Continue Shopping",
+     "",
+     "view",
+     "forward"
+    ]
+   ]
+  },
+  "amazon_home.json": {
+   "sha256": "9afdc84a9e78e08ebe571e0043e08a9f5f1086496727bccbc104b962ad0679f5",
+   "kind": "none",
+   "payment": 3,
+   "checkout": 0,
+   "cart": 0,
+   "features": [
+    "bare_pay_control"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "Pay",
+     "tiles_nav_item_holder",
+     "view",
+     "pay"
+    ]
+   ]
+  },
+  "amazon_order_review.json": {
+   "sha256": "ff87e30a0e591a09fe741b1d2016d665e92e3fd4c3fb5ee3e2e38c9ce83ea2f7",
+   "kind": "payment",
+   "payment": 11,
+   "checkout": 4,
+   "cart": 3,
+   "features": [
+    "checkout_title",
+    "final_pay_control",
+    "no_clickable_amounts",
+    "payment_title",
+    "primary_after_total",
+    "total_with_amount"
+   ],
+   "enter": "handover",
+   "controls": [
+    [
+     "Place your order",
+     "",
+     "button",
+     "pay"
+    ]
+   ]
+  },
+  "amazon_order_review_scrolled.json": {
+   "sha256": "a923073e411221e6a4a0bec62f79ccf07a3f351a026d6c56a2f3f70bd46588a6",
+   "kind": "none",
+   "payment": 2,
+   "checkout": 1,
+   "cart": 3,
+   "features": [
+    "no_clickable_amounts",
+    "total_with_amount"
+   ],
+   "enter": "press",
+   "controls": []
+  },
+  "amazon_product.json": {
+   "sha256": "5178c43fce0cae38f716d96f9ac12a48954fa55ed77933793b86011b3a57c830",
+   "kind": "none",
+   "payment": -2,
+   "checkout": 0,
+   "cart": 0,
+   "features": [
+    "product_page"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "",
+     "dsvDigitalBuyNow_feature_div",
+     "",
+     "pay"
+    ],
+    [
+     "",
+     "buyNow_feature_div",
+     "",
+     "pay"
+    ],
+    [
+     "",
+     "buyNow",
+     "",
+     "pay"
+    ],
+    [
+     "",
+     "buyNowCheckout",
+     "",
+     "pay"
+    ],
+    [
+     "",
+     "buy-now-button",
+     "",
+     "pay"
+    ],
+    [
+     "",
+     "add-to-wishlist-button-submit",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "tax-id-submit-button",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "dpx-rex-nile-submit-button",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "dpx-rex-nile-submit-button-announce",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "dpx-rex-nile-search-submit-focus-container",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "postPurchaseSideSheet_MP_feature_div",
+     "",
+     "commit"
+    ]
+   ]
+  },
+  "amazon_product_buybox.json": {
+   "sha256": "e028c45bb3f105acd610047fd75dcf2eaccbef3c44b9220b464b5d347c2d383d",
+   "kind": "none",
+   "payment": -2,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts",
+    "product_page"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "",
+     "buy-now-button",
+     "button",
+     "pay"
+    ],
+    [
+     "",
+     "dsvDigitalBuyNow_feature_div",
+     "",
+     "pay"
+    ],
+    [
+     "",
+     "buyNow_feature_div",
+     "",
+     "pay"
+    ],
+    [
+     "",
+     "tax-id-submit-button",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "dpx-rex-nile-submit-button",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "dpx-rex-nile-submit-button-announce",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "dpx-rex-nile-search-submit-focus-container",
+     "",
+     "commit"
+    ],
+    [
+     "",
+     "postPurchaseSideSheet_MP_feature_div",
+     "",
+     "commit"
+    ]
+   ]
+  },
+  "amazon_product_ids.json": {
+   "sha256": "a60579a13b92ee2a10b705c9789b6805ef95907ddd1ee6be59f369388f94ce54",
+   "kind": "none",
+   "payment": -2,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts",
+    "product_page"
+   ],
+   "enter": "decline",
+   "controls": [
+    [
+     "Submit",
+     "",
+     "radio",
+     "commit"
+    ],
+    [
+     "Submit",
+     "",
+     "radio",
+     "commit"
+    ],
+    [
+     "Submit",
+     "add-to-cart-button",
+     "button",
+     "commit"
+    ],
+    [
+     "Submit",
+     "buy-now-button",
+     "button",
+     "pay"
+    ],
+    [
+     "",
+     "buy-now-button",
+     "",
+     "pay"
+    ]
+   ]
+  },
+  "amazon_results_after_review.json": {
+   "sha256": "2280cc6b3854cd63e99e00cabf5bbce20fd6f53cfd733f5d154bb573a2dc48d3",
+   "kind": "none",
+   "payment": -3,
+   "checkout": -3,
+   "cart": -3,
+   "features": [
+    "listing"
+   ],
+   "enter": "press",
+   "controls": []
+  },
+  "amazon_results_offers.json": {
+   "sha256": "d7e00e675bf891f1cf7f0d088d102190c15200a15b6c05f8cd489a1a1157fd6f",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 0,
+   "features": [],
+   "enter": "press",
+   "controls": []
+  },
+  "amazon_results_search.json": {
+   "sha256": "e10cd25038af8cdeed2f47c7e8de13ba51164d1820dc0ad1c115ba99186b278c",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 0,
+   "features": [],
+   "enter": "press",
+   "controls": []
+  },
+  "amazon_results_sorted.json": {
+   "sha256": "9ef88614c681b25c6da768ba4ba21d6d0ec74bfb61ca9c90b4c271ef971da534",
+   "kind": "none",
+   "payment": -3,
+   "checkout": -3,
+   "cart": -3,
+   "features": [
+    "listing"
+   ],
+   "enter": "press",
+   "controls": []
+  },
+  "amazon_search_suggestions.json": {
+   "sha256": "6d159f6bd02e269eeede9106480ee1ebf1e44639ae3ef12f1b06d7a71360edd8",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 3,
+   "features": [
+    "cart_structure",
+    "no_clickable_amounts"
+   ],
+   "enter": "press",
+   "controls": [
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ],
+    [
+     "delete",
+     "",
+     "button",
+     "commit"
+    ]
+   ]
+  },
+  "amazon_sign_in.json": {
+   "sha256": "12568c7bb45ac83470e704b429e220eb28210597bdc3f5d091fab5d9e1eaa07f",
+   "kind": "secure",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "handover",
+   "controls": []
+  },
+  "amazon_sort_price.json": {
+   "sha256": "4cefad90a5c5be6aef059a1c6cc623801463f497ecfc1cc08eaf6abd353f6ec8",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 3,
+   "features": [
+    "cart_structure",
+    "no_clickable_amounts"
+   ],
+   "enter": "press",
+   "controls": []
+  },
+  "amazon_sort_sheet.json": {
+   "sha256": "c7e1366f67a70fcadd54737ba968647a6d6ec4b4e9e929431d9607a7649c0bcc",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 3,
+   "features": [
+    "cart_structure",
+    "no_clickable_amounts"
+   ],
+   "enter": "press",
+   "controls": []
+  },
+  "amazon_upi_pin_screen.json": {
+   "sha256": "2a685d6e429dc0df5cc4370c409c4cc8d476f6600d584c7c28364710b1dffc6d",
+   "kind": "secure",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "handover",
+   "controls": []
+  },
+  "bank_pin_numpw.json": {
+   "sha256": "09e7f2b8c0229d61e1661f5420e414785f5169b8165c0c590b1d0fad9ed3aad9",
+   "kind": "secure",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "handover",
+   "controls": []
+  },
+  "blinkit_cart_pay.json": {
+   "sha256": "5c54463125c91515e9a4aff77c9ca668ed3db3fcfd9927bc23f645afba163295",
+   "kind": "payment",
+   "payment": 7,
+   "checkout": 1,
+   "cart": 4,
+   "features": [
+    "cart_title",
+    "final_pay_control",
+    "total_with_amount"
+   ],
+   "enter": "handover",
+   "controls": [
+    [
+     "Proceed to Pay ₹28",
+     "",
+     "button",
+     "pay"
+    ]
+   ]
+  },
+  "blinkit_search.json": {
+   "sha256": "09b71d4a6780645afe171517ccdab2e29083d47a110da85f3b7cad7bfdff5533",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "press",
+   "controls": []
+  },
+  "chat_with_otp.json": {
+   "sha256": "9447f0dd9c93c730a5f6eda962f9ddab9380de2b110748c4b0ea6a143adf6b8b",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "press",
+   "controls": [
+    [
+     "Send",
+     "",
+     "button",
+     "commit"
+    ]
+   ]
+  },
+  "phonepe_upi_pin.json": {
+   "sha256": "8aecea8c15ac4b66ffda33f0c7c336fa8cfa5a7475b5db5bb3735c08cb06defc",
+   "kind": "secure",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "handover",
+   "controls": []
+  },
+  "settings_display.json": {
+   "sha256": "92807ec069e814aab85df753d1e7781919927168eab4f0e134b6bc00e4c12b0c",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "press",
+   "controls": []
+  },
+  "shop_onboarding_continue.json": {
+   "sha256": "9550f2a4aa521a6e3828face3cdccb87208dce04470601d43cca60898d25aefb",
+   "kind": "none",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "press",
+   "controls": [
+    [
+     "Continue",
+     "",
+     "button",
+     "forward"
+    ]
+   ]
+  },
+  "shop_order_summary_continue.json": {
+   "sha256": "1eccc6e3ce1a87ed02282d0ba3142c631fe1cd965dc604ec5dd8a2d463223f9d",
+   "kind": "payment",
+   "payment": 6,
+   "checkout": 1,
+   "cart": 3,
+   "features": [
+    "no_clickable_amounts",
+    "payment_title",
+    "primary_after_total",
+    "total_with_amount"
+   ],
+   "enter": "handover",
+   "controls": [
+    [
+     "Continue",
+     "",
+     "button",
+     "forward"
+    ]
+   ]
+  },
+  "shop_otp_boxes.json": {
+   "sha256": "a7a700c008887ca397c4544e697b4854c4c457076b8a6e746b42f5858303e3ca",
+   "kind": "secure",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "handover",
+   "controls": []
+  },
+  "shop_otp_caption.json": {
+   "sha256": "41e25b081b806c297436c27abf97a4e111538245bcafcb3355ee3e2fb878e08e",
+   "kind": "secure",
+   "payment": 0,
+   "checkout": 0,
+   "cart": 1,
+   "features": [
+    "no_clickable_amounts"
+   ],
+   "enter": "handover",
+   "controls": []
+  },
+  "shop_qty_total_pay.json": {
+   "sha256": "fcdd4c1f66a2823361868e5305121fb69b120bd5bf9f513d475cfb4f2b27bb61",
+   "kind": "payment",
+   "payment": 6,
+   "checkout": 1,
+   "cart": 3,
+   "features": [
+    "bare_pay_control",
+    "no_clickable_amounts",
+    "primary_after_total",
+    "total_with_amount"
+   ],
+   "enter": "handover",
+   "controls": [
+    [
+     "Pay",
+     "",
+     "button",
+     "pay"
+    ]
+   ]
+  }
+ },
+ "sequences": [
+  {
+   "name": "a payment page scrolled stays a payment page",
+   "pages": [
+    "amazon_checkout_payment.json",
+    "amazon_checkout_payment_scrolled.json"
+   ],
+   "kinds": [
+    "payment",
+    "payment"
+   ]
+  },
+  {
+   "name": "an order review scrolled past its total is still one, until a product grid shows",
+   "pages": [
+    "amazon_order_review.json",
+    "amazon_order_review_scrolled.json",
+    "amazon_results_after_review.json"
+   ],
+   "kinds": [
+    "payment",
+    "payment",
+    "none"
+   ]
+  }
+ ]
+}

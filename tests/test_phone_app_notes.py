@@ -118,9 +118,9 @@ def test_notes_never_change_what_the_guard_allows(bank, fake_embeddings):  # noq
     opened = tools["phone_open"]('{"app": "Amazon"}').stdout
     assert "tap #buy-now-button to finish the order" in opened
     refused = tools["phone_act"]('{"op": "tap", "target": "#buy-now-button"}')
-    assert refused.stderr.startswith("GUARD: phone_act:") and "payment step" in refused.stderr
+    assert refused.stderr.startswith("phone_act:") and "payment control" in refused.stderr
     refused = tools["phone_do"]('{"steps": [{"op": "tap", "target": "#buy-now-button"}]}')
-    assert refused.stderr.startswith("GUARD: phone_do:")
+    assert refused.stderr.startswith("phone_do: stopped at step 1 of 1:") and "payment control" in refused.stderr
     assert not any(call[0] == "tap_node" for call in phone.calls)
 
 

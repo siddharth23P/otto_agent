@@ -1,0 +1,180 @@
+{
+ "snapshot_id": "amazon_address_form_pincode",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Add a new address",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    400,
+    1395,
+    480
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 2,
+   "t": "Full name (First and Last name)",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    560,
+    1395,
+    620
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    45,
+    630,
+    1395,
+    740
+   ],
+   "c": true,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "n": "text"
+  },
+  {
+   "i": 4,
+   "t": "Mobile number",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    780,
+    1395,
+    840
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    45,
+    850,
+    1395,
+    960
+   ],
+   "c": true,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "n": "phone",
+   "m": 10
+  },
+  {
+   "i": 6,
+   "t": "PIN code",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    1000,
+    1395,
+    1060
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    45,
+    1070,
+    1395,
+    1180
+   ],
+   "c": true,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": "",
+   "h": "6 digits [0-9] PIN code",
+   "n": "num",
+   "m": 6
+  },
+  {
+   "i": 8,
+   "t": "Use this address",
+   "d": "",
+   "r": "button",
+   "b": [
+    45,
+    2600,
+    1395,
+    2760
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 8,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

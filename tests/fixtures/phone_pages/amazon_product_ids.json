@@ -1,0 +1,157 @@
+{
+ "snapshot_id": "amazon_product_ids",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1080,
+  "h": 2400
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "PHILIPS 100W Magnetic Type-C to Type-C Fast Charging Cable",
+   "d": "",
+   "r": "text",
+   "b": [
+    0,
+    0,
+    100,
+    40
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 2,
+   "t": "Submit",
+   "d": "",
+   "r": "radio",
+   "b": [
+    56,
+    1200,
+    517,
+    1500
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": true,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "Submit",
+   "d": "",
+   "r": "radio",
+   "b": [
+    577,
+    1200,
+    1031,
+    1500
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": ""
+  },
+  {
+   "i": 4,
+   "t": "₹559",
+   "d": "",
+   "r": "text",
+   "b": [
+    0,
+    0,
+    100,
+    40
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 5,
+   "t": "Submit",
+   "d": "",
+   "r": "button",
+   "b": [
+    52,
+    2000,
+    1387,
+    2140
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "add-to-cart-button"
+  },
+  {
+   "i": 6,
+   "t": "Submit",
+   "d": "",
+   "r": "button",
+   "b": [
+    52,
+    2180,
+    1387,
+    2320
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "buy-now-button"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1440,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 5,
+  "activity": "",
+  "offscreen_ids": [
+   "add-to-cart-button",
+   "buy-now-button"
+  ]
+ },
+ "settled": true
+}

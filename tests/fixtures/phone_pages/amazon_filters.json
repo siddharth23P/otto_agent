@@ -1,0 +1,743 @@
+{
+ "snapshot_id": "amazon_filters",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Back",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    165,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    165,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    248,
+    200,
+    338,
+    290
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_search_disabled"
+  },
+  {
+   "i": 4,
+   "t": "apple iphone",
+   "d": "",
+   "r": "text",
+   "b": [
+    368,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 8,
+   "t": "Filters",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    402,
+    225,
+    477
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 9,
+   "t": "",
+   "d": "s?k=apple+iphone&dplnk=Y&dplnkId=3c03f9b3-3c2b-42c6-8c45-c05f316929c4&ni=1&ni_pt=SR&ref=d6k_applink#",
+   "r": "view",
+   "b": [
+    1350,
+    391,
+    1398,
+    492
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    530,
+    453,
+    2682
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 11,
+   "t": "Continue Shopping",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    530,
+    453,
+    728
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "Suggested Filters",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    728,
+    453,
+    927
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "Prime & Delivery",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    927,
+    453,
+    1126
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "Brands",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1122,
+    453,
+    1325
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 15,
+   "t": "Price and Deals",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1321,
+    453,
+    1523
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 16,
+   "t": "Storage Capacity",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1520,
+    453,
+    1718
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 17,
+   "t": "Item Condition",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1718,
+    453,
+    1917
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "Customer Reviews",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1917,
+    453,
+    2116
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "Cellular Technology",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2112,
+    453,
+    2315
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "Screen Size",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2311,
+    453,
+    2510
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "Battery Capacity",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2510,
+    453,
+    2708
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "RAM Size",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2708,
+    453,
+    2907
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "Operating System",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2907,
+    453,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "Continue Shopping",
+   "d": "",
+   "r": "text",
+   "b": [
+    495,
+    578,
+    1038,
+    653
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "Recent Searches",
+   "d": "",
+   "r": "text",
+   "b": [
+    495,
+    721,
+    866,
+    785
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "",
+   "d": "Apply the filter Iphone to narrow results",
+   "r": "view",
+   "b": [
+    510,
+    815,
+    776,
+    938
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "p_rs/0"
+  },
+  {
+   "i": 27,
+   "t": "Iphone",
+   "d": "",
+   "r": "text",
+   "b": [
+    555,
+    841,
+    727,
+    912
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "",
+   "d": "Apply the filter S25 Ultra to narrow results",
+   "r": "view",
+   "b": [
+    795,
+    815,
+    1121,
+    938
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "p_rs/1"
+  },
+  {
+   "i": 29,
+   "t": "S25 Ultra",
+   "d": "",
+   "r": "text",
+   "b": [
+    843,
+    841,
+    1076,
+    912
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "",
+   "d": "Apply the filter Apple Iphone 13 128gb to narrow results",
+   "r": "view",
+   "b": [
+    510,
+    965,
+    1173,
+    1088
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "p_rs/2"
+  },
+  {
+   "i": 31,
+   "t": "Apple Iphone 13 128gb",
+   "d": "",
+   "r": "text",
+   "b": [
+    555,
+    991,
+    1128,
+    1062
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "",
+   "d": "Apply the filter Apple Iphone 13 to narrow results",
+   "r": "view",
+   "b": [
+    510,
+    1115,
+    1005,
+    1238
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "p_rs/3"
+  },
+  {
+   "i": 33,
+   "t": "Apple Iphone 13",
+   "d": "",
+   "r": "text",
+   "b": [
+    555,
+    1141,
+    960,
+    1212
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "",
+   "d": "Apply the filter Iphone Cheapest to narrow results",
+   "r": "view",
+   "b": [
+    510,
+    1265,
+    1012,
+    1388
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "p_rs/4"
+  },
+  {
+   "i": 35,
+   "t": "Iphone Cheapest",
+   "d": "",
+   "r": "text",
+   "b": [
+    555,
+    1291,
+    963,
+    1362
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "Recently Used Filters",
+   "d": "",
+   "r": "text",
+   "b": [
+    495,
+    1411,
+    975,
+    1475
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "Apply the filter Over ₹155,000 to narrow results",
+   "r": "view",
+   "b": [
+    510,
+    1505,
+    963,
+    1628
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "p_ru/p_36-slider-15500000-"
+  },
+  {
+   "i": 38,
+   "t": "Over ₹155,000",
+   "d": "",
+   "r": "text",
+   "b": [
+    555,
+    1531,
+    915,
+    1602
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ]
+}

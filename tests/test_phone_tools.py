@@ -55,7 +55,7 @@ def test_the_note_names_every_tool_and_the_guidance():
     for name in ("phone_screen", "phone_act", "phone_install"):
         assert name in note
     assert "op: \"tap\"|\"tap_text\"" in note
-    assert "Shopping ends at the payment page" in note
+    assert "ends at the payment page" in note
     with bind_tool_profile(PHONE_DISABLED_STANDING_TOOLS):
         assert "execute_bash" not in reachable_tools()
 
@@ -137,8 +137,9 @@ def test_a_pay_button_is_refused_and_a_commit_button_needs_phone_commit():
     phone = FakePhone([BLINKIT_CART, CHAT_WITH_OTP, CHAT_WITH_OTP, CHAT_WITH_OTP])
     by_name, _ = _tools(phone)
     by_name["phone_screen"]("{}")
+    # The cart with "Proceed to Pay ₹28" and its total is a payment page: nothing on it is tapped.
     result = by_name["phone_act"]('{"op": "tap", "target": "Proceed to Pay"}')
-    assert result.stderr.startswith("GUARD:") and "payment step" in result.stderr
+    assert result.stderr.startswith("GUARD:") and "payment page" in result.stderr
     result = by_name["phone_commit"]('{"target": "Proceed to Pay"}')
     assert result.stderr.startswith("GUARD:")
     assert not any(c[0] == "tap_node" for c in phone.calls)
@@ -150,28 +151,27 @@ def test_a_pay_button_is_refused_and_a_commit_button_needs_phone_commit():
 
 
 def test_typing_into_a_password_field_is_refused():
-    """A screen that names the secret is refused whole; a password field
-    whose label the patterns do not know is still never typed into."""
-    lock = snapshot("p", "com.example.notes", "Notes",
-                    [node(1, "Unlock", r="text"), node(2, "", d="Passcode", r="edit-field", e=True, p=True)])
-    by_name, _ = _tools(FakePhone([lock]))
-    assert by_name["phone_screen"]("{}").stderr.startswith("GUARD:")
-    odd = snapshot("q", "com.example.notes", "Notes",
-                   [node(1, "Unlock", r="text"), node(2, "", d="Secret", r="edit-field", e=True, p=True)])
-    phone = FakePhone([odd])
-    by_name, _ = _tools(phone)
-    assert by_name["phone_screen"]("{}").ok
-    result = by_name["phone_act"]('{"op": "type", "target": "Secret", "text": "1234"}')
-    assert not result.ok and "person types there" in result.stderr
-    assert not any(c[0] == "type_text" for c in phone.calls)
+    """A field that asks for a secret makes its screen a sign-in screen: not
+    described and not typed into, whatever its label says -- the password flag
+    or input type decides, as a label the patterns know does."""
+    for label in ("Passcode", "Secret"):
+        lock = snapshot("p", "com.example.notes", "Notes",
+                        [node(1, "Unlock", r="text"), node(2, "", d=label, r="edit-field", e=True, p=True)])
+        phone = FakePhone([lock] * 2)
+        by_name, _ = _tools(phone)
+        assert by_name["phone_screen"]("{}").stderr.startswith("GUARD:"), label
+        # Not described, so not kept: there is no field to name, and nothing is typed.
+        result = by_name["phone_act"](f'{{"op": "type", "target": "{label}", "text": "1234"}}')
+        assert not result.ok, label
+        assert not any(c[0] == "type_text" for c in phone.calls)
 
 
 def test_the_phones_own_refusal_reads_as_a_handover():
-    phone = FakePhone([BLINKIT_CART] * 2,
+    phone = FakePhone([BLINKIT_SEARCH] * 2,
                       fail={"tap_node": {"code": "guard", "message": "secure window", "handover": True}})
     by_name, _ = _tools(phone)
     by_name["phone_screen"]("{}")
-    result = by_name["phone_act"]('{"op": "tap", "target": "Cart"}')
+    result = by_name["phone_act"]('{"op": "tap", "target": "Milk"}')
     assert result.stderr.startswith("GUARD: phone_act: secure window")
     assert "handed control to the person" in result.stderr
 
@@ -262,7 +262,7 @@ def test_the_loop_reads_the_screen_acts_and_sees_third_party_results():
     assert output.startswith("added milk")
     assert phone.calls[-1] == ("tap_node", "s1", 4, False, False)
     assert any(m.startswith(pn.THIRD_PARTY_RESULT) for m in llm.calls[1])
-    assert any("Shopping ends at the payment page" in m for m in llm.calls[0])
+    assert any("ends at the payment page" in m for m in llm.calls[0])
 
 
 def test_the_gate_reads_phone_install_as_mutating_and_phone_act_as_not():
@@ -368,7 +368,7 @@ def test_a_tap_by_coordinates_is_judged_by_what_is_under_the_point():
     by_name, _ = _tools(phone)
     by_name["phone_screen"]("{}")
     result = by_name["phone_act"]('{"op": "tap", "x": 540, "y": 2250}')
-    assert result.stderr.startswith("GUARD:") and "payment step" in result.stderr
+    assert result.stderr.startswith("GUARD:") and "payment page" in result.stderr
     chat = snapshot("k", "com.whatsapp", "WhatsApp", [node(1, "Send", r="button", b=(900, 2200, 1060, 2280), c=True)])
     by_name, _ = _tools(FakePhone([chat] * 2))
     by_name["phone_screen"]("{}")
@@ -447,7 +447,7 @@ def test_pressing_enter_is_judged_like_a_tap_and_the_exit_keys_are_not():
     by_name, _ = _tools(phone)
     assert by_name["phone_screen"]("{}").ok
     refused = by_name["phone_act"]('{"op": "press", "key": "enter"}')
-    assert refused.stderr.startswith("GUARD:") and "Enter would submit" in refused.stderr
+    assert refused.stderr.startswith("GUARD:") and "payment page" in refused.stderr
     assert by_name["phone_act"]('{"op": "press", "key": "back"}').ok
     assert not any(c == ("press", "enter") for c in phone.calls)
 
@@ -460,8 +460,8 @@ def test_the_continue_of_a_checkout_is_refused_and_an_onboarding_continue_is_not
     by_name, _ = _tools(FakePhone([checkout] * 3))
     by_name["phone_screen"]("{}")
     refused = by_name["phone_act"]('{"op": "tap", "target": "Continue"}')
-    assert refused.stderr.startswith("GUARD:") and "payment step" in refused.stderr
-    assert "payment step" in by_name["phone_commit"]('{"target": "Continue"}').stderr
+    assert refused.stderr.startswith("GUARD:") and "payment page" in refused.stderr
+    assert "payment page" in by_name["phone_commit"]('{"target": "Continue"}').stderr
     onboarding = snapshot("w", "com.grofers.customerapp", "Blinkit", [
         node(1, "Pick your location", r="text"),
         node(2, "Continue", r="button", b=(60, 2200, 1020, 2300), c=True),
@@ -484,7 +484,8 @@ def test_typing_without_a_target_respects_a_password_field():
     by_name, _ = _tools(FakePhone([unfocused_secret] * 2))
     by_name["phone_screen"]("{}")
     assert by_name["phone_act"]('{"op": "type", "text": "hello"}').stderr.startswith("GUARD:")
-    assert by_name["phone_act"]('{"op": "type", "target": "Note", "text": "hello"}').ok
+    # A screen with a password field on it is a sign-in screen: not its other fields either.
+    assert not by_name["phone_act"]('{"op": "type", "target": "Note", "text": "hello"}').ok
     assert not any(c[0] == "type_text" for c in phone.calls)
 
 

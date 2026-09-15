@@ -162,8 +162,13 @@ def shown_nodes(nodes: list[dict]) -> list[dict]:
     return [node for node, _ in shown]
 
 
-def render_digest(snapshot: dict, *, max_nodes: int = MAX_NODES, max_chars: int = MAX_CHARS) -> str:
-    """The whole screen, bounded. Never raises on a partial snapshot."""
+#: What the header says about a page the money guard judged (agent/phone/guard.py `classify_page`).
+PAGE_NOTES = {"cart": "cart", "checkout": "checkout", "payment": "payment (the person pays here)"}
+
+
+def render_digest(snapshot: dict, *, max_nodes: int = MAX_NODES, max_chars: int = MAX_CHARS, page: str = "") -> str:
+    """The whole screen, bounded. Never raises on a partial snapshot. `page`
+    is the guard's class for it; an ordinary page says nothing."""
     app = snapshot.get("app") or {}
     screen = snapshot.get("screen") or {}
     head = (
@@ -175,6 +180,8 @@ def render_digest(snapshot: dict, *, max_nodes: int = MAX_NODES, max_chars: int 
     )
     if snapshot.get("secure"):
         head += "  (secure window: screenshots are blocked here)"
+    if page in PAGE_NOTES:
+        head += f"  page: {PAGE_NOTES[page]}"
     nodes = [n for n in (snapshot.get("nodes") or []) if isinstance(n, dict)]
     shown = shown_nodes(nodes)
     lines = [head]
@@ -208,7 +215,8 @@ def render_digest(snapshot: dict, *, max_nodes: int = MAX_NODES, max_chars: int 
 #: with its [index]), so nothing an app displays can pass for one.
 DIGEST_HEAD = re.compile(
     r"^app: (?P<label>.*) \((?P<package>[^\n]*?)\)  screen \S+x\S+  keyboard: (?:shown|hidden)"
-    r"  snapshot: (?P<snapshot>\S+)(?:  \(secure window: screenshots are blocked here\))?$",
+    r"  snapshot: (?P<snapshot>\S+)(?:  \(secure window: screenshots are blocked here\))?"
+    r"(?:  page: (?:cart|checkout|payment \(the person pays here\)))?$",
     re.MULTILINE,
 )
 #: What a folded screen starts with, and how a fold knows not to fold twice.

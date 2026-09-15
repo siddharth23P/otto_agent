@@ -8,13 +8,21 @@ import json
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
-def node(i, t="", *, d="", r="text", b=(0, 0, 100, 40), c=False, e=False, s=False, p=False, f=False, k=None, v=""):
-    return {"i": i, "t": t, "d": d, "r": r, "b": list(b), "c": c, "e": e, "s": s, "p": p, "f": f, "k": k, "v": v}
+def node(i, t="", *, d="", r="text", b=(0, 0, 100, 40), c=False, e=False, s=False, p=False, f=False, k=None, v="",
+         h=None, n=None, m=None, g=None):
+    """A node as the app sends it; `h` (hint), `n` (input kind), `m` (max length) and `g` (heading)
+    only when given, as the app omits them."""
+    out = {"i": i, "t": t, "d": d, "r": r, "b": list(b), "c": c, "e": e, "s": s, "p": p, "f": f, "k": k, "v": v}
+    out.update({key: value for key, value in (("h", h), ("n", n), ("m", m), ("g", g)) if value is not None})
+    return out
 
 
-def snapshot(sid, package, label, nodes, *, keyboard=False, secure=False):
-    return {"snapshot_id": sid, "app": {"package": package, "label": label},
-            "screen": {"w": 1080, "h": 2400}, "keyboard": keyboard, "secure": secure, "nodes": nodes}
+def snapshot(sid, package, label, nodes, *, keyboard=False, secure=False, page=None):
+    out = {"snapshot_id": sid, "app": {"package": package, "label": label},
+           "screen": {"w": 1080, "h": 2400}, "keyboard": keyboard, "secure": secure, "nodes": nodes}
+    if page is not None:
+        out["page"] = page
+    return out
 
 
 BLINKIT_SEARCH = snapshot("s1", "com.grofers.customerapp", "Blinkit", [
