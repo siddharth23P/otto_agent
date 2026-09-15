@@ -12,6 +12,7 @@ call 75518 characters, last call 75518 characters. The ceilings below are
 the baseline; each speed-up lowers them.
 
 after the phone's own agent prompt: 12 calls, largest 72808 chars.
+after folding old screens: 12 calls, largest 38370 chars.
 """
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
@@ -23,7 +24,7 @@ from agent.pipeline.toolkit import bind_extra_tools
 from tests.phone_fakes import FakePhone, node, snapshot
 
 MAX_LOOP_CALLS = 12
-MAX_LARGEST_CALL_CHARS = 72808
+MAX_LARGEST_CALL_CHARS = 38370
 
 SCRIPT = [
     "ACTION: phone_screen\nCODE:\n{}",

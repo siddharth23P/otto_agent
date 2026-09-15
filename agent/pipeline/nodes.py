@@ -2147,6 +2147,66 @@ _NEVER_COMPACT = (
 )
 
 
+#: How many of a phone run's screens stay whole: the one in front of the
+#: model, and the one before it (what the last action changed).
+SCREENS_KEPT = 2
+#: Fold only once this many more have piled up, not on every action. Each
+#: fold rewrites messages in the middle of the transcript, which is the
+#: shared prefix a vendor's prompt cache keys on; folding four at a time
+#: breaks that prefix once per four actions instead of once per action.
+SCREEN_FOLD_EVERY = 4
+
+
+def _folders() -> dict[str, Callable[[str], str | None]]:
+    """The fold of every bound tool that has one -- a phone run's screen
+    tools, and nothing on any other run."""
+    return {name: tool.fold for name, tool in current_extra_tools().items() if tool.fold is not None}
+
+
+def _result_folder(messages: list, i: int, folders) -> Callable[[str], str | None] | None:
+    """The fold of the tool whose call produced the result at `i`, or None.
+
+    Asked of the call rather than of the text: a web page that happens to
+    print something shaped like a screen header is not a screen, and must not
+    have its result rewritten by the phone's fold."""
+    if not folders or i == 0 or not isinstance(messages[i - 1], AIMessage):
+        return None
+    kind, tool, _ = _parse_worker_reply(_content_text(messages[i - 1].content), allowed=dispatch_table())
+    return folders.get(tool) if kind == "action" else None
+
+
+def _fold_old_results(messages: list) -> int:
+    """Fold all but the last SCREENS_KEPT unfolded phone screens, in place,
+    once SCREENS_KEPT + SCREEN_FOLD_EVERY of them are unfolded. Returns how
+    many it folded. No model call.
+
+    Measured on tests/test_phone_call_budget.py's ten-action search: every
+    action returned a ~6k-character screen and every later call re-sent all
+    of them, so the largest call carried eleven. A folded screen keeps its
+    app, its capture id and what was priced on it -- what a shopping run
+    compares across screens it has moved past.
+    """
+    folders = _folders()
+    if not folders:
+        return 0
+    unfolded: list[tuple[int, str]] = []
+    for i, message in enumerate(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        text = _content_text(message.content)
+        if not text.startswith(THIRD_PARTY_RESULT):
+            continue
+        fold = _result_folder(messages, i, folders)
+        folded = fold(text[len(THIRD_PARTY_RESULT):]) if fold is not None else None
+        if folded is not None:
+            unfolded.append((i, folded))
+    if len(unfolded) < SCREENS_KEPT + SCREEN_FOLD_EVERY:
+        return 0
+    for i, folded in unfolded[:-SCREENS_KEPT]:
+        messages[i] = HumanMessage(THIRD_PARTY_RESULT + folded)
+    return len(unfolded) - SCREENS_KEPT
+
+
 def _compact(messages: list, actions: list[str] | None = None) -> int:
     """Shrink the oldest tool results in place. Returns how many it rewrote.
 
@@ -2171,6 +2231,7 @@ def _compact(messages: list, actions: list[str] | None = None) -> int:
     """
     rewritten = 0
     protected = len(messages) - KEEP_VERBATIM
+    folders = _folders()
     summaries = list(actions or [])
     seen_results = 0
     for i, message in enumerate(messages):
@@ -2196,7 +2257,10 @@ def _compact(messages: list, actions: list[str] | None = None) -> int:
         summary = summaries[index] if index < len(summaries) else ""
         # The full text, kept where `recall_memory` can find it again, BEFORE
         # the message is overwritten. This is the second tier.
-        kept = _keep_evicted(text)
+        # Never a phone's screen: it is a state the phone has already left,
+        # a recall that surfaced it would be describing a screen that is not
+        # there, and embedding it costs a network call on the phone's turn.
+        kept = False if _result_folder(messages, i, folders) is not None else _keep_evicted(text)
         # The stub says where the rest went -- but ONLY when it actually went
         # somewhere. A model that can see the bytes are missing and is not told
         # they are searchable will re-run the command, which is what it was
@@ -2358,6 +2422,10 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     llm = ROUTER.chat_model(MODES[mode].task)
 
     while max_iterations is None or iteration < max_iterations:
+        folded = _fold_old_results(messages)
+        if folded:
+            logger.info("agent loop: folded %d older screen(s)", folded)
+            _emit({"agent": {"board": [f"folded {folded} older screen(s)"]}})
         if _transcript_size(messages) > LOOP_COMPACT_AT:
             dropped = _compact(messages, actions)
             if dropped:
