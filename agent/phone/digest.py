@@ -7,11 +7,25 @@ has walked it (the Android app's TreeWalker):
      "screen": {"w": 1080, "h": 2400}, "keyboard": false, "secure": false,
      "nodes": [{"i": 3, "t": "Add to cart", "d": "", "r": "button",
                 "b": [900, 1700, 1060, 1780], "c": true, "e": false,
-                "s": false, "p": false, "f": false, "k": null}, ...]}
+                "s": false, "p": false, "f": false, "k": null,
+                "v": "add-to-cart-button"}, ...]}
 
     i index   t text   d content description   r role   b bounds [l,t,r,b]
     c clickable   e editable   s scrollable   p password field
     f focused   k checked (true/false, null when not checkable)
+    v resource id, package prefix dropped ("" or absent when none)
+
+A web page hands one product to accessibility several times over (a link, a
+heading, a text) and a price as a summary plus each of its pieces. The digest
+shows a label once: a node whose label an earlier, enclosing node already
+shows is folded into that node's line (`shown_nodes`). It is still on the
+screen and still a target by its text. An element whose label says it is
+sponsored carries the flag `ad`, and a label that is only a tracking link
+reads `(link)`.
+
+An actionable element shows its id after a `#`. A web page's form buttons
+often all read "Submit" and say what they do only in their id, so a target
+may name the id ("#add-to-cart-button", or its words: "add to cart").
 
 The digest is one line per node, bounded, with every piece of screen text
 made inert the same way agent/pipeline/toolkit.py makes a tool description
@@ -24,12 +38,21 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from agent.phone import guard
+
 #: How many nodes a digest shows before it says how many it left out.
 MAX_NODES = 120
 #: Ceiling on the whole digest.
 MAX_CHARS = 6000
 #: Longest a single label is shown at.
 MAX_LABEL = 80
+
+#: A label that says the element is a paid placement.
+_SPONSORED = re.compile(r"\bsponsored\b", re.IGNORECASE)
+#: The "Sponsored Ad - " a listing puts before the product's own name.
+_SPONSORED_PREFIX = re.compile(r"^\s*sponsored(\s+ad)?\s*[-\u2013\u2014:\u00b7|]\s*", re.IGNORECASE)
+#: A label that is a URL or a tracking query, not words: nothing to read out.
+_LINK = re.compile(r"^(?:ref=|click\?|https?://|www\.)\S*$|^\S*[?&]\S*=\S*$", re.IGNORECASE)
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f  ]+")
 
@@ -45,6 +68,16 @@ def inert_text(text: Any, limit: int = MAX_LABEL) -> str:
 def label_of(node: dict) -> str:
     """What a person reads on the node: its text, else its description."""
     return str(node.get("t") or node.get("d") or "").strip()
+
+
+def is_ad(node: dict) -> bool:
+    """Whether the element's label says it is sponsored."""
+    return bool(_SPONSORED.search(label_of(node)))
+
+
+def view_id_of(node: dict) -> str:
+    """The node's resource id, "" when it has none."""
+    return str(node.get("v") or "").strip()
 
 
 def centre_of(node: dict) -> tuple[int, int] | None:
@@ -83,9 +116,50 @@ def render_line(node: dict) -> str:
     flags = _flags(node)
     if node.get("p"):
         return f"[{index}] password field (text hidden){' ' + flags if flags else ''}{where}"
-    label = inert_text(label_of(node))
-    shown = f'"{label}"' if label else "(no text)"
-    return f"[{index}] {shown} {role}{' ' + flags if flags else ''}{where}"
+    raw = label_of(node)
+    if raw and _LINK.match(raw):
+        shown = "(link)"
+    else:
+        label = inert_text(_SPONSORED_PREFIX.sub("", raw) if is_ad(node) else raw)
+        shown = f'"{label}"' if label else "(no text)"
+    if is_ad(node):
+        flags = f"{flags} ad".strip()
+    ident = view_id_of(node)
+    tag = f" #{inert_text(ident, 48)}" if ident and (node.get("c") or node.get("e") or node.get("s")) else ""
+    return f"[{index}] {shown} {role}{' ' + flags if flags else ''}{tag}{where}"
+
+
+def _words(text: str) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _within(inner: dict, outer: dict) -> bool:
+    """Whether `inner`'s bounds lie inside `outer`'s, give or take 2px."""
+    try:
+        il, it, ir, ib = (int(v) for v in inner.get("b"))
+        ol, ot, orr, ob = (int(v) for v in outer.get("b"))
+    except (TypeError, ValueError):
+        return False
+    return ol - 2 <= il and ot - 2 <= it and ir <= orr + 2 and ib <= ob + 2
+
+
+def shown_nodes(nodes: list[dict]) -> list[dict]:
+    """The nodes a digest gives a line: all of them, except one whose label,
+    as whole words, an earlier node enclosing it already shows. A clickable
+    node folds only into a clickable one, so what can be tapped keeps a line.
+    A password field, an editable or scrollable node and a checkable one
+    (its state is on its own line) always show."""
+    shown: list[tuple[dict, str]] = []
+    for node in nodes:
+        label = _words(label_of(node))
+        foldable = label and not (node.get("p") or node.get("e") or node.get("s") or node.get("k") is not None)
+        if foldable and any(
+            _within(node, prior) and f" {label} " in f" {prior_label} " and (not node.get("c") or prior.get("c"))
+            for prior, prior_label in shown
+        ):
+            continue
+        shown.append((node, label))
+    return [node for node, _ in shown]
 
 
 def render_digest(snapshot: dict, *, max_nodes: int = MAX_NODES, max_chars: int = MAX_CHARS) -> str:
@@ -102,11 +176,12 @@ def render_digest(snapshot: dict, *, max_nodes: int = MAX_NODES, max_chars: int 
     if snapshot.get("secure"):
         head += "  (secure window: screenshots are blocked here)"
     nodes = [n for n in (snapshot.get("nodes") or []) if isinstance(n, dict)]
+    shown = shown_nodes(nodes)
     lines = [head]
-    for node in nodes[:max_nodes]:
+    for node in shown[:max_nodes]:
         lines.append(render_line(node))
-    if len(nodes) > max_nodes:
-        lines.append(f"(+{len(nodes) - max_nodes} more nodes not shown; scroll to see them)")
+    if len(shown) > max_nodes:
+        lines.append(f"(+{len(shown) - max_nodes} more nodes not shown; scroll to see them)")
     if not nodes:
         lines.append("(no readable nodes -- a drawn or web view; try phone_look with a question)")
     text = "\n".join(lines)
@@ -116,34 +191,55 @@ def render_digest(snapshot: dict, *, max_nodes: int = MAX_NODES, max_chars: int 
 
 
 def find_node(snapshot: dict, text: str, *, clickable_only: bool = False) -> tuple[int | None, list[int]]:
-    """`(index, candidates)`: the one node whose label matches `text`, or None
-    with the indices that partially matched. An exact label wins over a
-    substring; a unique substring wins; anything else is ambiguous and the
-    caller shows the candidates rather than guessing."""
+    """`(index, candidates)`: the one node whose label or id matches `text`,
+    or None with the indices that matched too loosely. Tiers, first match
+    wins: exact label, exact id (its words, or "#the-id" as shown), label
+    substring, id-words substring. Within a tier one node wins and several
+    are ambiguous: the caller shows the candidates rather than guessing. A
+    label always outranks an id, so naming what is written keeps working.
+    "[12]", the number the digest shows, names that element whatever its
+    text: a list with no label (Amazon's filter categories) has no other
+    name, and a scroll needs one when a page holds several lists."""
     want = " ".join(str(text or "").lower().split())
     if not want:
         return None, []
-    exact: list[int] = []
-    partial: list[int] = []
+    numbered = re.fullmatch(r"\[(\d+)\]", want)
+    if numbered:
+        wanted = int(numbered.group(1))
+        for node in snapshot.get("nodes") or []:
+            if (isinstance(node, dict) and node.get("i") == wanted and not node.get("p")
+                    and (node.get("c") or not clickable_only)):
+                return wanted, []
+        return None, []
+    bare = want[1:].strip() if want.startswith("#") else want
+    want_words = guard.id_words(bare)
+    tiers: list[list[int]] = [[], [], [], []]
     for node in snapshot.get("nodes") or []:
         if not isinstance(node, dict) or node.get("p"):
             continue
         if clickable_only and not node.get("c"):
             continue
-        label = " ".join(label_of(node).lower().split())
-        if not label or "i" not in node:
+        if "i" not in node:
             continue
-        if label == want:
-            exact.append(int(node["i"]))
-        elif want in label:
-            partial.append(int(node["i"]))
-    if len(exact) == 1:
-        return exact[0], []
-    if exact:
-        return None, exact
-    if len(partial) == 1:
-        return partial[0], []
-    return None, partial
+        label = " ".join(label_of(node).lower().split())
+        ident = view_id_of(node)
+        words = guard.id_words(ident)
+        if not label and not words:
+            continue
+        if label and label == want:
+            tiers[0].append(int(node["i"]))
+        elif words and (ident.lower() == bare or words == want_words):
+            tiers[1].append(int(node["i"]))
+        elif label and want in label:
+            tiers[2].append(int(node["i"]))
+        elif words and want_words and want_words in words:
+            tiers[3].append(int(node["i"]))
+    for found in tiers:
+        if len(found) == 1:
+            return found[0], []
+        if found:
+            return None, found
+    return None, []
 
 
 def node_at(snapshot: dict, x: int, y: int) -> dict | None:
