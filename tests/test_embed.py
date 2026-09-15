@@ -226,7 +226,9 @@ def test_cancel_releases_a_pending_question(configured, monkeypatch):
             threading.Thread(target=handle.cancel).start()
 
     handle.run("q", events=on_event)
-    assert events[-1] == {"type": "error", "code": "cancelled", "message": "stopped"}
+    assert {k: events[-1][k] for k in ("type", "code", "message")} == {
+        "type": "error", "code": "cancelled", "message": "stopped"}
+    assert events[-1]["turn"] == {"tokens": 0, "calls": 0, "cost": 0.0}
     assert handle.turns == 0
     handle.close()
 
@@ -262,7 +264,8 @@ def test_a_provider_failure_is_an_event_not_an_exception(configured, monkeypatch
     handle = embed.Runtime().open_session()
     events = []
     handle.run("q", events=events.append)
-    assert events == [{"type": "error", "code": "provider", "message": "Otto requires Inception"}]
+    assert [{k: e[k] for k in ("type", "code", "message")} for e in events] == [
+        {"type": "error", "code": "provider", "message": "Otto requires Inception"}]
     handle.close()
 
 
