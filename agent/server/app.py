@@ -106,7 +106,7 @@ PHONE_MODES: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
 
 #: The lanes (module docstring). Message types not named here are inline.
 ORDERED = frozenset({"turn", "sessions"})
-CONCURRENT: frozenset[str] = frozenset({"setup", "doctor", "models", "routing", "lessons", "notes"})
+CONCURRENT: frozenset[str] = frozenset({"setup", "doctor", "models", "routing", "lessons", "notes", "files"})
 
 #: The longest key `setup set_key` takes. A vendor key is under 200.
 MAX_KEY_CHARS = 512
@@ -317,6 +317,8 @@ class Connection:
             await self.lessons(message, rid)
         elif kind == "notes":
             await self.notes(message, rid)
+        elif kind == "files":
+            await self.files(message, rid)
         elif kind == "doctor":
             from agent import embed
 
@@ -614,6 +616,31 @@ class Connection:
             return
         deleted = await self.blocking(embed.delete_note, package, lesson_id)
         await self.reply("notes_result", rid, op=op, package=package, lesson_id=lesson_id, deleted=deleted)
+
+    async def files(self, message: dict, rid: str | int | None = None) -> None:
+        """A research document from a session's workspace (embed
+        `Runtime.document_file`): the .docx or .pdf a final event lists but
+        does not carry. Read-only, so no gate and no busy check."""
+        from agent import embed
+
+        op = str(message.get("op") or "get")
+        if op != "get":
+            await self.send_error("unknown", f"unknown files op {op!r}", rid)
+            return
+        sid = _sid(message.get("session_id"))
+        runtime = await self.runtime_async()
+        try:
+            result = await self.blocking(runtime.document_file, sid, message.get("name"))
+        except embed.FileTooLarge as exc:
+            await self.send_error("too_large", str(exc), rid)
+            return
+        except FileNotFoundError as exc:
+            await self.send_error("not_found", str(exc), rid)
+            return
+        except ValueError as exc:
+            await self.send_error("invalid", str(exc), rid)
+            return
+        await self.reply("files_result", rid, op=op, session_id=sid, **result)
 
     async def close(self) -> None:
         """Best-effort teardown: nothing here may raise, but everything that

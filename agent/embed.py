@@ -18,7 +18,7 @@ these names are:
     routing / routing_options / set_pin / clear_pin
     lessons / delete_lesson / clear_lessons / notes / note / delete_note
     Runtime.open_session / list_sessions / delete_session / transcript /
-            rename_session / export_session / import_session
+            rename_session / export_session / import_session / document_file
     SessionHandle.run / answer / cancel / rename / usage_report / close
 
 and, beside them, agent/phone/ (the phone tools) and agent/pipeline/toolkit.py's
@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -470,6 +471,30 @@ DOCUMENT_MAX_BYTES = 2 * 1024 * 1024
 #: research.py FORMATS), listed on the event so a host can offer them.
 DOCUMENT_FORMATS: tuple[str, ...] = ("md", "docx", "pdf", "xlsx")
 
+#: The most of one document file `Runtime.document_file` hands over. A Word
+#: or PDF render of a long report is a few hundred kilobytes; base64 of this
+#: still fits agent/server/protocol.py's frame limit.
+FILE_MAX_BYTES = 8 * 1024 * 1024
+#: The files a host may ask a session's workspace for: a research document,
+#: by name (the newest) or under its otto_research/<slug>/ directory.
+_DOCUMENT_NAME = re.compile(r"(?:otto_research/(?!\.)[A-Za-z0-9._-]{1,80}/)?document\.(md|docx|pdf|xlsx)")
+_DOCUMENT_MIME = {
+    "md": "text/markdown",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+
+class FileTooLarge(ValueError):
+    """A document bigger than FILE_MAX_BYTES."""
+
+
+def session_workspace(session_id: str) -> Path:
+    """The directory a session's off-phone turns work in (`run(workspace=AUTO)`)."""
+    return _home.otto_home() / "workspaces" / session_id
+
+
 #: How often a streamed partial answer is forwarded. A diffusing route emits
 #: whole-reply refinements many times a second; a UI redrawing on each is
 #: what makes a phone stutter.
@@ -550,6 +575,50 @@ class Runtime:
         from agent.memory import sessions as index
 
         return _session_row(index.import_payload(data, keep_workspace=keep_workspace))
+
+    def document_file(self, session_id: str, name: str) -> dict[str, Any]:
+        """A document a research turn left in the session's workspace, as
+        {"name", "path" (workspace-relative), "format", "mime", "size",
+        "data" (base64)} -- the .docx or .pdf a `final` event's
+        `document.files` names, which the event itself does not carry.
+
+        `name` is document.<md|docx|pdf|xlsx>, the newest one, or
+        otto_research/<slug>/document.<fmt>. Nothing outside the workspace
+        is read, symlinks included. ValueError for any other name,
+        FileNotFoundError when there is no such file, FileTooLarge past
+        FILE_MAX_BYTES."""
+        import base64
+
+        from agent.memory import sessions as index
+
+        index.check_id(session_id)
+        match = _DOCUMENT_NAME.fullmatch(name) if isinstance(name, str) else None
+        if match is None:
+            raise ValueError("name is document.<md|docx|pdf|xlsx>, optionally under otto_research/<slug>/")
+        root = session_workspace(session_id).resolve()
+        if "/" in name:
+            candidates = [root / name]
+        else:
+            candidates = sorted(root.glob(f"otto_research/*/{name}"),
+                                key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+        found = None
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved.is_relative_to(root) and resolved.is_file():
+                found = resolved
+                break
+        if found is None:
+            raise FileNotFoundError(f"no {name} in this session's workspace")
+        size = found.stat().st_size
+        if size > FILE_MAX_BYTES:
+            raise FileTooLarge(f"{found.name} is {size:,} bytes; the most sent is {FILE_MAX_BYTES:,}")
+        fmt = match.group(1)
+        return {"name": found.name, "path": found.relative_to(root).as_posix(), "format": fmt,
+                "mime": _DOCUMENT_MIME[fmt], "size": size,
+                "data": base64.b64encode(found.read_bytes()).decode("ascii")}
 
     def transcript(self, ref: str) -> dict[str, Any]:
         """What a resumed session would show: the compacted earlier part as
@@ -892,7 +961,7 @@ class SessionHandle:
             return None if workspace is None else str(workspace)
         if on_phone:
             return None
-        return str(_home.otto_home() / "workspaces" / self._session.session_id)
+        return str(session_workspace(self._session.session_id))
 
     def _wait_for_answer(self, ask: dict, events: Events) -> str:
         from agent.pipeline.progress import Cancelled

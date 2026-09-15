@@ -31,6 +31,8 @@ client -> server
     lessons         {op: list | delete | clear, kind, lesson_id?}        protocol 2
                     kind: lesson | phone_lesson | app_note:<package>; lesson_id: 64 hex
     notes           {op: list | get | delete, package?, lesson_id?}      protocol 2
+    files           {op?: get, session_id, name}                        protocol 2
+                    name: document.<md|docx|pdf|xlsx> (newest) or otto_research/<slug>/document.<fmt>
     doctor          {}                                                   protocol 2
     models          {}                                                   protocol 2
     ping            {}
@@ -54,12 +56,13 @@ server -> client
     notes_result    list   {notes: [{package, seeded, learned}]}
                     get    {package, seeded, learned: [{lesson_id, cue, action, outcome, text}], shown: [...]}
                     delete {package, lesson_id, deleted}
+    files_result    {op: get, session_id, name, path, format, mime, size, data (base64, <= 8 MB)}
     doctor_result   {providers: [{provider, status, models, detail}], ready, required, also_configured}
     models_result   {models: [{spec, provider, id, display_name, capabilities, context_window,
                                max_output_tokens}]}
     error           {code, message}                  codes include invalid_session, busy,
                                                      no_session, invalid, no_phone, forbidden,
-                                                     invalid_pin
+                                                     invalid_pin, not_found, too_large
     pong            {}
 """
 from __future__ import annotations
@@ -75,7 +78,7 @@ MIN_PROTOCOL = 1
 FEATURES: tuple[str, ...] = (
     "ids", "turn.phone",
     "sessions.close", "sessions.rename", "sessions.export", "sessions.import", "sessions.usage",
-    "setup", "doctor", "models", "routing", "lessons", "notes",
+    "setup", "doctor", "models", "routing", "lessons", "notes", "files",
 )
 
 #: The longest string request id echoed back.
