@@ -103,7 +103,7 @@ from agent.memory.hashing import content_hash
 from agent.memory.retrieval import EVICTED_KIND
 from agent.memory.session import current_store
 from agent.memory.lessons import (
-    KIND as LESSON_KIND, PHONE_KIND, Lesson, bind_kind, learning_enabled, parse_distilled, recall_lessons,
+    KIND as LESSON_KIND, PHONE_KIND, Lesson, bind_kind, learning_enabled, parse_app_notes, parse_distilled, recall_lessons,
     record_lessons,
 )
 from agent.pipeline.evidence import Ledger, render_note as render_unproven
@@ -739,6 +739,17 @@ PHONE_DISTIL_NOTE = (
     "screen, a list, a button, a sort or filter control, a sponsored result, "
     "what phone_screen showed -- and never tell it to use a browser, a cache, "
     "a URL, a shell or a file: a phone run has none of them."
+)
+
+#: Sent after PHONE_DISTIL_NOTE when the run read an app's screens, naming
+#: those apps. A note is shown to every later run in that app
+#: (agent/phone/notes.py), so it is asked for as a fact about the app, never
+#: about the person or what they bought.
+APP_NOTE_NOTE = (
+    "THE APPS WHOSE SCREENS THIS RUN READ: {packages}. Besides the lessons, you may add up to two notes on "
+    "how one of THESE apps' screens work, as {{\"app\": \"<package>\", \"cue\": \"<which screen>\", "
+    "\"action\": \"<what works there>\", \"outcome\": \"worked\"|\"failed\"}}. Only facts a person could "
+    "check in that app -- never a product, a price, or anything about this person."
 )
 
 
@@ -3485,10 +3496,21 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     # A retried run holds BOTH a worse attempt and a better one, which is the
     # one situation where the comparison can be asked for rather than implied.
     rejections = state.get("rejections") or 0
+    on_phone = _lesson_kind() == PHONE_KIND
+    seen: list[str] = []
+    if on_phone:
+        from agent.phone import notes as app_notes
+
+        # Tool results only: a line the model wrote itself is not a screen
+        # it read, however it is spelled.
+        seen = app_notes.packages_seen(
+            str(entry.get("content") or "") for entry in state.get("transcript") or []
+            if isinstance(entry, dict) and entry.get("kind") != "ai")
     body = "\n\n".join(part for part in (
         f"TASK:\n{state['messages'][-1].content}",
         f"HOW IT WENT: {'the answer was accepted' if succeeded else 'it was NOT accepted'}",
-        PHONE_DISTIL_NOTE if _lesson_kind() == PHONE_KIND else "",
+        PHONE_DISTIL_NOTE if on_phone else "",
+        APP_NOTE_NOTE.format(packages=", ".join(seen)) if seen else "",
         (f"IT WAS REJECTED AND RETRIED {rejections} time(s). The earlier attempt "
          f"and the later one are both above.\n{CONTRAST_NOTE}" if rejections else ""),
         _actions_block(state),
@@ -3506,9 +3528,15 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
         logger.info("distilling lessons failed, learning nothing: %s", exc)
         return []
     with bind_kind(_lesson_kind()):
-        return record_lessons(parse_distilled(
+        kept = record_lessons(parse_distilled(
             reply, outcome_default="worked" if succeeded else "failed",
         ))
+    if seen:
+        try:
+            app_notes.record_app_notes(parse_app_notes(reply), seen=seen)
+        except Exception as exc:  # noqa: BLE001 -- never fail a finished run
+            logger.info("recording app notes failed: %s", exc)
+    return kept
 
 
 #: Phone runs still distilling their lesson after their answer went out.

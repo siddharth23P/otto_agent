@@ -19,7 +19,11 @@ Two sources:
   LEARNED  lessons of kind `app_note:<package>` in the lesson bank
            (agent/memory/lessons.py), newest first, after the seeded lines they
            do not repeat. The seeded lines never take the whole budget when a
-           learned one exists.
+           learned one exists. The phone run's distilling call may offer them
+           (agent/pipeline/nodes.py `_distil`); `record_app_notes` keeps at
+           most two a run, only for apps whose screens the run actually read,
+           never one that names a payment step or a secret, and an app keeps
+           its newest six.
 
 GUIDANCE, NEVER A RULE. Nothing here is read by agent/phone/guard.py: every
 verdict is drawn from the snapshot and the target, so a note that says "tap
@@ -41,6 +45,7 @@ from importlib import resources
 
 from agent.memory import lessons as L
 from agent.phone import digest as _digest
+from agent.phone import guard
 
 NOTES_RESOURCE = ("agent.phone", "assets/app_notes")
 
@@ -54,6 +59,16 @@ MAX_NOTE_CHARS = 200
 
 #: The lesson kind an app's learned notes are stored under.
 NOTE_KIND_PREFIX = "app_note:"
+#: How many notes one run may leave, across every app it used. A run that
+#: offers five has summarised itself (agent/memory/lessons.py rule 2).
+MAX_NOTES_PER_RUN = 2
+#: How many notes an app keeps; the oldest go first.
+MAX_NOTES_PER_APP = 6
+
+#: A folded screen's line (digest.fold_result), anchored like DIGEST_HEAD: no
+#: screen text or note can start a line, so neither can pass for one.
+_FOLDED_HEAD = re.compile(
+    rf"^{re.escape(_digest.SCREEN_FOLDED)} app: .* \((?P<package>[^\n()]*)\) snapshot \S+; seen: ", re.MULTILINE)
 
 #: An Android package name: two or more dot-separated identifiers. Checked
 #: before any lookup, so a package a screen reported can never name a path
@@ -146,3 +161,50 @@ def render_notes(label: str, package: str, lines: list[str]) -> str:
     body = [f"- {_digest.inert_text(line, MAX_NOTE_CHARS)}".replace(_digest.SCREEN_FOLDED, "(older screen)")
             for line in lines]
     return "\n".join([heading, *body])
+
+
+def packages_seen(texts) -> list[str]:
+    """The apps whose screens appear in `texts` (a run's results), in the
+    order first seen: a digest's header line, whole or folded. A package a
+    run only mentioned is not one it has seen work."""
+    found: dict[str, None] = {}
+    for text in texts:
+        text = str(text or "")
+        for match in (*_digest.DIGEST_HEAD.finditer(text), *_FOLDED_HEAD.finditer(text)):
+            package = match.group("package")
+            if valid_package(package):
+                found.setdefault(package, None)
+    return list(found)
+
+
+def _allowed(note: L.Lesson) -> bool:
+    """A note that points at a payment step or carries a secret is not kept,
+    whatever it says worked: the guard would refuse the tap anyway, and a
+    note is shown to every later run in that app."""
+    parts = [note.cue, note.action]
+    return not (any(guard.target_verdict(part) == "pay" for part in parts) or guard.sensitive_matches(parts))
+
+
+def record_app_notes(by_package: dict[str, list[L.Lesson]], *, seen) -> list[tuple[str, L.Lesson]]:
+    """Store the notes a distiller offered, and return the ones kept: at most
+    MAX_NOTES_PER_RUN, only for packages in `seen`, through the lesson bank's
+    own duplicate check and read-only switch, each app pruned to its newest
+    MAX_NOTES_PER_APP."""
+    seen = set(seen)
+    offered = 0
+    kept: list[tuple[str, L.Lesson]] = []
+    for package, offers in by_package.items():
+        if package not in seen or not valid_package(package):
+            continue
+        take = [note for note in offers if _allowed(note)][: MAX_NOTES_PER_RUN - offered]
+        if not take:
+            continue
+        offered += len(take)
+        with L.bind_kind(note_kind(package)):
+            stored = L.record_lessons(take, max_per_run=len(take))
+            if stored:
+                L.prune_kind(keep=MAX_NOTES_PER_APP)
+        kept.extend((package, note) for note in stored)
+        if offered >= MAX_NOTES_PER_RUN:
+            break
+    return kept

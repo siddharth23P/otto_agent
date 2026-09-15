@@ -34,6 +34,15 @@ the stop rules still apply and the screen wins where they disagree. They are
 shown once per app however often it comes back, never on a screen the guard
 refuses, and each note is one inert `- ` line. A folded screen keeps them.
 
+Learned notes come from the phone run's distilling call, which is told the
+packages whose screens the run read and may add up to two notes as
+`{"app", "cue", "action", "outcome"}` items -- facts about the app, never a
+product, a price or the person. `notes.record_app_notes` keeps at most two a
+run, only for those packages, drops any that names a payment step or matches
+a sensitive pattern, stores them as lessons of kind `app_note:<package>`
+(the bank's duplicate check and read-only switch apply) and keeps each app's
+newest six.
+
 Every result is third-party content to the loop, exactly as a web page is.
 The mutation gate keys on the first line of the body, so a one-line JSON
 body holds `phone_install` once per package and never holds a tap.
