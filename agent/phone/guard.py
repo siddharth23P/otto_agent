@@ -240,7 +240,22 @@ def checkout_context(texts: Iterable[str]) -> str:
     return ""
 
 
-def submit_verdict(texts: Iterable[str], view_ids: Iterable[str] = ()) -> str:
+def search_focused(nodes) -> bool:
+    """Whether the field being typed in is a search box: a focused, editable, non-password node
+    whose label (an empty field shows its hint) or resource id says "search". Enter there runs a
+    search, whatever buy offers surround it -- Amazon's results carry "Buy for ₹71,549 with HDFC"
+    on nearly every listing, and refusing Enter for that left phone runs unable to submit a typed
+    query (2026-09-16)."""
+    for n in nodes or ():
+        if not isinstance(n, dict) or not n.get("e") or not n.get("f") or n.get("p"):
+            continue
+        label = normal(str(n.get("t") or n.get("d") or ""))
+        if re.search(r"(^|\W)search($|\W)", label) or " search " in f" {id_words(str(n.get('v') or ''))} ":
+            return True
+    return False
+
+
+def submit_verdict(texts: Iterable[str], view_ids: Iterable[str] = (), search_focused: bool = False) -> str:
     """Why the keyboard's Enter may not be pressed on this screen, or "".
     Enter submits whatever the focused field's form does, and there is no
     label to judge, so the screen is judged instead: a checkout signal, or
@@ -250,6 +265,10 @@ def submit_verdict(texts: Iterable[str], view_ids: Iterable[str] = ()) -> str:
     seen = checkout_context(texts)
     if seen:
         return f"this screen is a checkout ({seen!r}); Enter would submit it -- the person does that"
+    if search_focused:
+        # A search box submits a search: the pay words elsewhere on the page are not what Enter
+        # would press. A checkout above is still refused.
+        return ""
     for text in texts:
         if target_verdict(text) == "pay":
             return f"this screen has a payment step ({text[:60]!r}); Enter would submit it -- the person does that"

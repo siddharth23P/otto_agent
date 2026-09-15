@@ -96,6 +96,20 @@ def test_enter_is_judged_on_the_screen_as_it_is_now_not_as_it_was_last_read():
     assert not any(call[0] == "press" for call in phone.calls)
 
 
+def test_enter_in_a_focused_search_box_runs_the_search_despite_buy_offers():
+    results = snapshot("rs", "in.amazon.mShop.android.shopping", "Amazon", [
+        node(1, "Search or ask a question", r="edit-field", b=(330, 197, 1395, 273), c=True, e=True, f=True,
+             v="rs_search_src_text"),
+        node(2, "₹71,599 M.R.P: ₹1,09,999 (35% off) Buy for ₹71,549 with HDFC Bank credit card", r="view",
+             b=(0, 1000, 1440, 1100), c=True),
+    ])
+    phone = FakePhone([results] * 4)
+    by_name = _tools(phone)
+    assert by_name["phone_screen"]("{}").ok
+    assert by_name["phone_act"]('{"op": "press", "key": "enter"}').ok
+    assert ("press", "enter") in phone.calls
+
+
 def test_a_swipe_starts_where_asked_and_is_judged_by_what_is_under_it():
     slider = snapshot("sl", "com.example.shop", "Shop", [
         node(1, "Photos", r="list", b=(0, 300, 1080, 900), s=True),
