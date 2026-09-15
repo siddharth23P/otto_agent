@@ -551,18 +551,19 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
     return [
         ExtraTool("phone_screen", "The phone's screen as text: the app in front and every element with a "
                   "[number], its text, role, flags and centre. Empty body {}.", phone_screen,
-                  mutates=False, schema={"type": "object", "properties": {}}),
+                  mutates=False, schema={"type": "object", "properties": {}}, fold=_digest.fold_result),
         ExtraTool("phone_act", "One reversible action, then the screen after it. op: tap|tap_text|long_press "
                   "(target: element text, or x,y) | type (text, target?) | press (key: back|home|recents|enter) "
                   "| swipe (direction the finger moves, from x,y) | scroll (direction: down shows what is below; "
-                  "target: the list).", phone_act, mutates=False, schema=act_schema),
+                  "target: the list).", phone_act, mutates=False, schema=act_schema, fold=_digest.fold_result),
         ExtraTool("phone_commit", "Tap a button that cannot be taken back (Send, Delete, Confirm, Submit) by its "
                   "text. Never a payment step.", phone_commit, mutates=True,
                   schema={"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
-                  target=commit_target),
+                  target=commit_target, fold=_digest.fold_result),
         ExtraTool("phone_open", "Launch an installed app by its name or package, then show its screen.",
                   phone_open, mutates=False,
-                  schema={"type": "object", "properties": {"app": {"type": "string"}}, "required": ["app"]}),
+                  schema={"type": "object", "properties": {"app": {"type": "string"}}, "required": ["app"]},
+                  fold=_digest.fold_result),
         ExtraTool("phone_apps", "Installed apps with their package names; query filters by name.", phone_apps,
                   mutates=False, schema={"type": "object", "properties": {"query": {"type": "string"}}}),
         ExtraTool("phone_look", "A vision model answers a question about a screenshot of the screen. Slow; "
@@ -573,9 +574,10 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                   + " (app_details needs package). Then act on it with phone_act.", phone_settings,
                   mutates=False, schema={"type": "object", "properties": {
                       "page": {"type": "string", "enum": list(guard.settings_pages())},
-                      "package": {"type": "string"}}, "required": ["page"]}),
+                      "package": {"type": "string"}}, "required": ["page"]}, fold=_digest.fold_result),
         ExtraTool("phone_install", "Open the Play Store listing for a package or a search query and install a "
                   "free app; paid apps are refused.", phone_install, mutates=True,
                   schema={"type": "object", "properties": {"package": {"type": "string"},
-                                                            "query": {"type": "string"}}}),
+                                                            "query": {"type": "string"}}},
+                  fold=_digest.fold_result),
     ]

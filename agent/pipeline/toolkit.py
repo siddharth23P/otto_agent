@@ -79,6 +79,12 @@ class ExtraTool:
     #: would share one gate key; the tool resolves the label to the element
     #: it would tap and names that instead. None means the first line.
     target: Callable[[str], str] | None = None
+    #: Shrink one of my old results, or None if the text is not mine. A tool
+    #: whose every result is a whole state (a phone's screen) makes the
+    #: transcript carry every state it has passed through; agent/pipeline/
+    #: nodes.py `_fold_old_results` asks this to fold the old ones. None means
+    #: results are kept as they are, which is right for anything else.
+    fold: Callable[[str], str | None] | None = None
 
 
 _current: contextvars.ContextVar[Mapping[str, ExtraTool]] = contextvars.ContextVar(

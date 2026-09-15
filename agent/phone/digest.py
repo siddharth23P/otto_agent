@@ -190,6 +190,94 @@ def render_digest(snapshot: dict, *, max_nodes: int = MAX_NODES, max_chars: int 
     return text
 
 
+# --------------------------------------------------------------------------
+# Folding an old screen
+# --------------------------------------------------------------------------
+#
+# Every phone action returns the whole screen after it, and every loop call
+# re-sends every earlier one: on the scripted ten-action search in
+# tests/test_phone_call_budget.py the largest call carried eleven full
+# digests. A screen the model read four actions ago is not the screen in
+# front of it -- what is still worth carrying is which app and capture it
+# was, and what was priced on it, because a shopping run compares prices
+# across screens it has scrolled past. So an old screen is folded to that
+# one line (agent/pipeline/nodes.py `_fold_old_results` decides which).
+
+#: The header line render_digest writes -- exactly it, anchored at the start
+#: of a line. Screen text can never start a line (every node line begins
+#: with its [index]), so nothing an app displays can pass for one.
+DIGEST_HEAD = re.compile(
+    r"^app: (?P<label>.*) \((?P<package>[^\n]*?)\)  screen \S+x\S+  keyboard: (?:shown|hidden)"
+    r"  snapshot: (?P<snapshot>\S+)(?:  \(secure window: screenshots are blocked here\))?$",
+    re.MULTILINE,
+)
+#: What a folded screen starts with, and how a fold knows not to fold twice.
+SCREEN_FOLDED = "(older screen, folded)"
+#: Ceiling on a folded screen's line.
+MAX_FOLDED_CHARS = 500
+#: How many priced items a fold keeps.
+MAX_FOLDED_ITEMS = 10
+#: A label at least this long reads as a product's title rather than a
+#: button ("ADD", "Submit") or a price on its own.
+MIN_TITLE_CHARS = 12
+
+#: A line render_digest writes below the header.
+_DIGEST_LINE = re.compile(r"^(?:\[\d+\] |\(\+\d+ more nodes|\(no readable nodes)")
+_QUOTED_LINE = re.compile(r'^\[\d+\] "(?P<label>.*)" (?P<rest>.*)$')
+_PRICE = re.compile(r"(?:₹|\bRs\.?|\$|€|£)\s?\d[\d,]*(?:\.\d+)?")
+_AD_FLAG = re.compile(r"(?:^| )ad(?: |$)")
+
+
+def _priced_items(lines: list[str]) -> list[str]:
+    """Up to MAX_FOLDED_ITEMS `"title" price` pairs, in screen order. A price
+    whose own label is only the price takes the nearest title above it --
+    the way a listing puts the name over the price."""
+    items: list[str] = []
+    title = ""
+    for line in lines:
+        m = _QUOTED_LINE.match(line)
+        if not m:
+            continue
+        label = m.group("label")
+        price = _PRICE.search(label)
+        if price is None:
+            if len(label) >= MIN_TITLE_CHARS:
+                title = label
+            continue
+        own = _PRICE.sub("", label).strip(" -–:|,")
+        name = own if len(own) >= MIN_TITLE_CHARS else title
+        item = (f'"{inert_text(name, 60)}" ' if name else "") + price.group(0)
+        if _AD_FLAG.search(m.group("rest").split(" #", 1)[0]):
+            item += " ad"
+        if item not in items:
+            items.append(item)
+        if len(items) >= MAX_FOLDED_ITEMS:
+            break
+    return items
+
+
+def fold_result(text: str) -> str | None:
+    """`text` with its screen digest folded to one line, or None when there
+    is no digest in it or it is already folded. Everything outside the
+    digest -- the action's done line, a note the loop appended -- is kept."""
+    if not text or SCREEN_FOLDED in text:
+        return None
+    head = DIGEST_HEAD.search(text)
+    if head is None:
+        return None
+    rest = text[head.end():].split("\n")
+    run = 1
+    while run < len(rest) and _DIGEST_LINE.match(rest[run]):
+        run += 1
+    end = head.end() + len("\n".join(rest[:run]))
+    items = _priced_items(rest[1:run])
+    line = (f"{SCREEN_FOLDED} app: {head.group('label')} ({head.group('package')}) "
+            f"snapshot {head.group('snapshot')}; seen: " + ("; ".join(items) if items else "no prices"))
+    if len(line) > MAX_FOLDED_CHARS:
+        line = line[: MAX_FOLDED_CHARS - 1].rstrip() + "…"
+    return text[:head.start()] + line + text[end:]
+
+
 def find_node(snapshot: dict, text: str, *, clickable_only: bool = False) -> tuple[int | None, list[int]]:
     """`(index, candidates)`: the one node whose label or id matches `text`,
     or None with the indices that matched too loosely. Tiers, first match
