@@ -34,7 +34,10 @@ they do.
 from __future__ import annotations
 
 import base64
+import dataclasses
+import json
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -389,7 +392,11 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                                         "Nothing was handed over -- tap the element you mean by its text, #id or "
                                         "[number] instead (on a product page, its Add to Cart button, with "
                                         "phone_commit).")
-                return acted(backend.press(key), f"pressed {key}")
+                pressed = backend.press(key)
+                # The phone says when Enter changed nothing on screen; that, not "pressed", is what the
+                # model must read, or it types the same query again (2026-09-16).
+                said = str(pressed.get("done") or "")
+                return acted(pressed, said if said.startswith("pressed") else f"pressed {key}")
             if op in ("swipe", "scroll"):
                 direction = parsed.get("direction")
                 if direction not in DIRECTIONS:
@@ -728,7 +735,7 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         except PhoneError as exc:
             return _failed(name, exc)
 
-    return [
+    tools = [
         ExtraTool("phone_screen", "The phone's screen as text: the app in front and every element with a "
                   "[number], its text, role, flags and centre. Empty body {}.", phone_screen,
                   mutates=False, schema={"type": "object", "properties": {}}, fold=_digest.fold_result),
@@ -763,3 +770,48 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                                                             "query": {"type": "string"}}},
                   fold=_digest.fold_result),
     ]
+    return [dataclasses.replace(tool, call=_logged(tool.name, tool.call)) for tool in tools]
+
+
+#: How much of a body or a result one log line carries.
+MAX_LOGGED = 160
+
+
+def _logged(name: str, call: Callable[[str], ToolResult]) -> Callable[[str], ToolResult]:
+    """`call`, logging what was asked and what came of it at INFO (otto serve prints it): the record of
+    a run that went back and forth. A typed text is logged as its length, never its words."""
+    def run(body: str) -> ToolResult:
+        result = call(body)
+        if logger.isEnabledFor(logging.INFO):
+            logger.info("%s %s -> %s", name, _asked(body), _came_of(result))
+        return result
+    return run
+
+
+def _asked(body: str) -> str:
+    try:
+        parsed = json.loads(body or "{}")
+    except ValueError:
+        return "(unparseable body)"
+    steps = parsed.get("steps") if isinstance(parsed, dict) and isinstance(parsed.get("steps"), list) else [parsed]
+    shown = []
+    for step in steps:
+        if not isinstance(step, dict):
+            shown.append("?")
+            continue
+        fields = {k: v for k, v in step.items() if k != "text"}
+        if "text" in step:
+            fields["text"] = f"<{len(str(step['text']))} chars>"
+        shown.append(" ".join(f"{k}={_digest.inert_text(str(v), 60)}" for k, v in fields.items()))
+    return " ; ".join(shown)[:MAX_LOGGED]
+
+
+#: What a result says was typed: kept out of the log like the body's text.
+_TYPED = re.compile(r"typed (['\"]).*")
+
+
+def _came_of(result: ToolResult) -> str:
+    if result.ok:
+        line = _TYPED.sub("typed <text>", (result.stdout or "").split("\n", 1)[0])
+        return "ok: " + _digest.inert_text(line, MAX_LOGGED)
+    return "failed: " + _digest.inert_text(_TYPED.sub("typed <text>", result.stderr or ""), MAX_LOGGED)

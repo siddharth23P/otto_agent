@@ -63,6 +63,20 @@ def ensure_token(explicit: str | None) -> str:
     return token
 
 
+def _log_phone_actions() -> None:
+    """Each phone tool call and what came of it, on stderr (agent/phone/tools.py logs them): what a
+    person reads when a run went back and forth. Typed text is never logged."""
+    import logging
+
+    phone = logging.getLogger("agent.phone")
+    if not any(getattr(h, "_otto_serve", False) for h in phone.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s phone %(message)s", "%H:%M:%S"))
+        handler._otto_serve = True  # type: ignore[attr-defined]
+        phone.addHandler(handler)
+    phone.setLevel(logging.INFO)
+
+
 def serve(
     host: Annotated[str, typer.Option(help="Interface to listen on; loopback unless you mean otherwise.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port to listen on.")] = 8765,
@@ -87,6 +101,7 @@ def serve(
     from agent.server.app import OttoServer
 
     embed.configure(otto_home(), env_file=ENV_PATH)
+    _log_phone_actions()
     secret = ensure_token(token)
     url = pairing_url(host, port)
     payload = f"{url}#{secret}"

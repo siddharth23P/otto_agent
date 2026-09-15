@@ -193,3 +193,36 @@ def test_binding_a_fresh_instance_actually_reaches_the_router(monkeypatch, healt
     from agent.router import router as rr
 
     assert rr.provider_health.HEALTH is module.HEALTH is health
+
+
+# --------------------------------------------------------------------------
+# An account out of credit
+# --------------------------------------------------------------------------
+
+def test_an_account_out_of_credit_cools_the_whole_vendor_for_an_hour(health):
+    """2026-09-16: Gemini refused every call with "Your prepayment credits are depleted". Cooled like
+    a rate limit for twenty seconds, the phone's judge seat asked again and was refused again on every
+    turn; out of credit is not a matter of seconds, and it is the account, so every model of it."""
+    from agent.router import health as module
+
+    exc = _Status(429)
+    exc.args = ("429 RESOURCE_EXHAUSTED. Your prepayment credits are depleted. Please go to AI Studio",)
+    note_failure(exc, provider="gemini", model_id="gemini-3.8-flash")
+    assert "out of credit" in health.cooling("gemini", "gemini-3.8-flash")
+    assert "out of credit" in health.cooling("gemini", "gemini-3.8-pro")
+    assert health.cooling_until("gemini", "gemini-3.8-flash") - module._now() > module.MAX_COOLDOWN_S
+
+
+def test_a_wrapped_refusal_with_no_status_is_read_by_its_words(health):
+    class GoogleRateLimitError(Exception):
+        pass
+
+    note_failure(GoogleRateLimitError("Error calling model 'gemini-3.8-flash' (RESOURCE_EXHAUSTED): "
+                                      "Your prepayment credits are depleted."), provider="gemini", model_id="gemini-3.8-flash")
+    assert "out of credit" in health.cooling("gemini", "gemini-3.8-flash")
+
+
+def test_a_plain_rate_limit_is_still_one_model_for_seconds(health):
+    note_failure(_Status(429), provider="gemini", model_id="gemini-3.8-flash")
+    assert "rate limited" in health.cooling("gemini", "gemini-3.8-flash")
+    assert health.cooling("gemini", "gemini-3.8-pro") == ""
