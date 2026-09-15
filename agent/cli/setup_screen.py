@@ -48,11 +48,13 @@ from agent.cli import art
 from agent.cli.art import animations_enabled
 from agent.router.llm_provider.base import ModelInfo, ProviderStatus
 from agent.router.mapping import Candidate, Task
-from agent.router.overrides import PROVIDER_ONLY
 
 __all__ = ["SetupBackend", "SetupScreen", "MappingRow", "pin_options", "NO_PIN"]
 
-NO_PIN = ("(no pin — default route)", "")
+# pin_options and NO_PIN live in agent/router/setup.py, beside the rest of the
+# setup data layer, so `otto serve` offers the same choices; re-exported here
+# for the screen and everything that imported them from it.
+from agent.router.setup import NO_PIN, pin_options  # noqa: E402
 CUSTOM = "__custom__"
 
 #: Status word -> primitive Rich style. agent/cli/doctor.py's map, without
@@ -84,21 +86,6 @@ class SetupBackend:
     set_base_url: Callable[[str, str], None]
     add_endpoint: Callable[[str, str], None]
     reload: Callable[[], Any]
-
-
-def pin_options(task: Task, models: list[ModelInfo],
-                routes: Mapping[Task, tuple[Candidate, ...]]) -> list[tuple[str, str]]:
-    """The Select options for one task: no pin, then every model the seat
-    could use -- the head candidate's `requires`, narrowed to the provider a
-    task is bound to (agent/router/overrides.py PROVIDER_ONLY)."""
-    head = routes[task][0]
-    bound = PROVIDER_ONLY.get(task)
-    eligible = [
-        m for m in models
-        if head.requires <= m.capabilities and (bound is None or m.provider == bound[0])
-    ]
-    eligible.sort(key=lambda m: (m.provider, m.id))
-    return [NO_PIN] + [(m.spec, m.spec) for m in eligible]
 
 
 class MappingRow(Horizontal):

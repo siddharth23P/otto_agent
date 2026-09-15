@@ -573,3 +573,181 @@ def test_usage_reports_the_sessions_spend_turn_by_turn(server, monkeypatch):
     assert usage["title"] == "hello there" and usage["turns"] == 2
     assert _request(ws, type="sessions", op="usage", session_id="c" * 32, id="u2")["code"] == "no_session"
     ws.close()
+
+
+# --------------------------------------------------------------------------
+# setup, doctor, models (protocol 2)
+# --------------------------------------------------------------------------
+
+def test_setup_status_is_masks_and_names_never_a_key(server):
+    ws, _ = _hello(server)
+    raw = None
+    ws.send(json.dumps({"type": "setup", "op": "status", "id": "s"}))
+    raw = ws.recv(timeout=10)
+    status = json.loads(raw)
+    assert status["type"] == "setup_result" and status["id"] == "s" and status["op"] == "status"
+    assert status["ready"] is True and status["setup_write"] is True
+    assert set(status["keys"]) == set(embed.KEY_VARS)
+    assert {row["name"] for row in status["vendors"]} >= {"inception", "openai", "anthropic", "gemini"}
+    assert set(status["vendors"][0]) == {"name", "label", "key_var", "url_var", "key_present", "url_present",
+                                         "custom", "masked_key"}
+    assert status["version"]["api"] == embed.API_VERSION
+    assert "test-placeholder-not-a-real-key" not in raw
+    ws.close()
+
+
+def test_a_key_is_set_only_by_name_from_this_computer_and_never_echoed(server, monkeypatch, caplog):
+    import logging
+    import os
+
+    caplog.set_level(logging.DEBUG)
+    secret = "sk-live-do-not-leak-4321"
+    original = os.environ.get("OPENAI_API_KEY", "")
+    ws, _ = _hello(server)
+    frames = []
+    try:
+        for bad in ({"name": "OTTO_SERVE_TOKEN", "value": secret}, {"name": "PATH", "value": secret},
+                    {"name": "OPENAI_API_KEY", "value": secret + "\nINCEPTION_API_KEY=x"},
+                    {"name": "OPENAI_API_KEY", "value": "x" * 513}):
+            ws.send(json.dumps({"type": "setup", "op": "set_key", "id": "bad", **bad}))
+            frames.append(ws.recv(timeout=10))
+            assert json.loads(frames[-1])["code"] == "invalid"
+        ws.send(json.dumps({"type": "setup", "op": "set_key", "name": "OPENAI_API_KEY", "value": secret, "id": "k"}))
+        frames.append(ws.recv(timeout=10))
+        assert json.loads(frames[-1]) == {"type": "setup_result", "id": "k", "op": "set_key",
+                                          "name": "OPENAI_API_KEY", "masked": "********4321", "ready": True}
+        assert os.environ["OPENAI_API_KEY"] == secret
+    finally:
+        ws.close()
+        embed.set_key("OPENAI_API_KEY", original)
+    assert not any(secret in frame for frame in frames)
+    assert secret not in caplog.text
+
+
+def test_a_client_elsewhere_may_read_setup_but_not_change_it(server, monkeypatch):
+    from agent.server import app as server_app
+
+    monkeypatch.setattr(server_app, "_peer_is_loopback", lambda websocket: False)
+    ws, _ = _hello(server)
+    status = _request(ws, type="setup", op="status", id=1)
+    assert status["setup_write"] is False
+    reply = _request(ws, type="setup", op="set_key", name="OPENAI_API_KEY", value="sk-x", id=2)
+    assert reply["type"] == "error" and reply["code"] == "forbidden" and "sk-x" not in json.dumps(reply)
+    ws.close()
+
+
+@pytest.fixture
+def remote_setup_server(configured):
+    yield from _serving(OttoServer(TOKEN, allow_remote_setup=True))
+
+
+def test_allow_remote_setup_lets_a_client_elsewhere_set_a_key(remote_setup_server, monkeypatch):
+    import os
+
+    from agent.server import app as server_app
+
+    monkeypatch.setattr(server_app, "_peer_is_loopback", lambda websocket: False)
+    original = os.environ.get("GEMINI_API_KEY", "")
+    ws, _ = _hello(remote_setup_server)
+    try:
+        assert _request(ws, type="setup", op="status", id=1)["setup_write"] is True
+        assert _request(ws, type="setup", op="set_key", name="GEMINI_API_KEY", value="g-1234", id=2)["masked"] \
+            == "********1234"
+    finally:
+        ws.close()
+        embed.set_key("GEMINI_API_KEY", original)
+
+
+def test_keys_do_not_change_under_a_running_turn(server, monkeypatch):
+    gate = threading.Event()
+
+    def fake_run(text, **kwargs):
+        gate.wait(5)
+        yield {"__final__": {"final_output": "ok"}, "__trace_id__": None}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    ws, _ = _hello(server)
+    ws.send(protocol.encode("turn", text="one"))
+    assert _frame(ws)["event"]["type"] == "started"
+    other, _ = _hello(server)
+    reply = _request(other, type="setup", op="set_key", name="OPENAI_API_KEY", value="sk-9999", id="k")
+    assert reply["type"] == "error" and reply["code"] == "busy", "a turn on another connection counts"
+    gate.set()
+    _recv_until(ws, "event")
+    ws.close()
+    other.close()
+
+
+def test_a_probe_names_a_vendor_and_reports_its_models(server, monkeypatch):
+    from agent.router import setup as router_setup
+    from agent.router.llm_provider.base import Capability, HealthReport, ModelInfo, ProviderStatus
+
+    seen = []
+
+    def fake_probe(name):
+        seen.append(name)
+        return router_setup.ProbeResult(HealthReport(name, ProviderStatus.OK, model_count=1),
+                                        [ModelInfo("gpt-5-mini", "openai", capabilities=frozenset({Capability.CHAT}))])
+
+    monkeypatch.setattr(router_setup, "probe", fake_probe)
+    ws, _ = _hello(server)
+    assert _request(ws, type="setup", op="probe", name="openai", id="p") == {
+        "type": "setup_result", "id": "p", "op": "probe", "name": "openai", "ok": True, "status": "ok",
+        "detail": "", "model_count": 1,
+        "models": [{"spec": "openai:gpt-5-mini", "provider": "openai", "id": "gpt-5-mini", "display_name": None,
+                    "capabilities": ["chat"], "context_window": None, "max_output_tokens": None}]}
+    for bad in ("../x", "nope", None):
+        assert _request(ws, type="setup", op="probe", name=bad, id="q")["code"] == "invalid"
+    assert seen == ["openai"]
+    ws.close()
+
+
+def test_doctor_reports_each_provider_and_the_conclusion(server, monkeypatch):
+    from agent.router import llm_provider
+    from agent.router.llm_provider.base import HealthReport, ProviderStatus
+
+    monkeypatch.setattr(llm_provider, "health_report", lambda: [
+        HealthReport("inception", ProviderStatus.OK, 3, ""),
+        HealthReport("openai", ProviderStatus.AUTH_FAILED, 0, "401")])
+    ws, _ = _hello(server)
+    report = _request(ws, type="doctor", id="d")
+    assert report["type"] == "doctor_result" and report["id"] == "d"
+    assert report["providers"] == [
+        {"provider": "inception", "status": "ok", "models": 3, "detail": ""},
+        {"provider": "openai", "status": "auth failed", "models": 0, "detail": "401"}]
+    assert report["ready"] is True and report["required"] == "inception"
+    assert "inception" not in report["also_configured"] and isinstance(report["also_configured"], list)
+    ws.close()
+
+
+def test_a_slow_model_catalogue_does_not_block_a_pong(server, monkeypatch):
+    from agent.router import llm_provider
+    from agent.router.llm_provider.base import Capability, ModelInfo
+
+    release = threading.Event()
+
+    def slow(capability=None):
+        release.wait(5)
+        return [ModelInfo("mercury-2.5", "inception", display_name="Mercury 2.5",
+                          capabilities=frozenset({Capability.CHAT, Capability.TOOLS}), context_window=128000)]
+
+    monkeypatch.setattr(llm_provider, "all_models", slow)
+    ws, _ = _hello(server)
+    ws.send(json.dumps({"type": "models", "id": "m"}))
+    ws.send(json.dumps({"type": "ping", "id": "p"}))
+    assert _frame(ws) == {"type": "pong", "id": "p"}
+    ws.send(json.dumps({"type": "sessions", "op": "list", "id": "l"}))
+    assert _frame(ws)["id"] == "l", "a slow catalogue does not hold up the session lane either"
+    release.set()
+    assert _frame(ws) == {"type": "models_result", "id": "m", "models": [
+        {"spec": "inception:mercury-2.5", "provider": "inception", "id": "mercury-2.5",
+         "display_name": "Mercury 2.5", "capabilities": ["chat", "tools"], "context_window": 128000,
+         "max_output_tokens": None}]}
+    ws.close()
+
+
+def test_pin_options_live_with_the_setup_data_layer():
+    from agent.cli import setup_screen
+    from agent.router import setup as router_setup
+
+    assert setup_screen.pin_options is router_setup.pin_options and setup_screen.NO_PIN == router_setup.NO_PIN

@@ -106,7 +106,10 @@ PHONE_MODES: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
 
 #: The lanes (module docstring). Message types not named here are inline.
 ORDERED = frozenset({"turn", "sessions"})
-CONCURRENT: frozenset[str] = frozenset()
+CONCURRENT: frozenset[str] = frozenset({"setup", "doctor", "models"})
+
+#: The longest key `setup set_key` takes. A vendor key is under 200.
+MAX_KEY_CHARS = 512
 
 
 class Connection:
@@ -114,7 +117,8 @@ class Connection:
 
     def __init__(self, websocket, token: str, loop: asyncio.AbstractEventLoop,
                  executor: ThreadPoolExecutor | None = None, *, no_exec: bool = False,
-                 ops_executor: ThreadPoolExecutor | None = None) -> None:
+                 ops_executor: ThreadPoolExecutor | None = None, allow_remote_setup: bool = False,
+                 peers: set | None = None) -> None:
         self.ws = websocket
         self.token = token
         #: The operator's --no-exec: no turn on this server starts a subprocess.
@@ -125,6 +129,12 @@ class Connection:
         #: Whether the client is on this computer. Settings that change what
         #: the whole installation does are only taken from a local client.
         self.local = _peer_is_loopback(websocket)
+        #: Whether this client may change keys and routing: on this computer,
+        #: or the operator said `--allow-remote-setup`.
+        self.setup_write = self.local or allow_remote_setup
+        #: Every connection on this server (itself included), for "is any
+        #: turn running": a key or a pin changes what every turn resolves.
+        self.peers = peers
         self.phone: SocketPhone | None = None
         self.capabilities: set[str] = set()
         self.handles: dict[str, Any] = {}
@@ -200,6 +210,10 @@ class Connection:
 
     def any_busy(self) -> bool:
         return any(self.busy(sid) for sid in set(self.handles) | set(self.turns))
+
+    def server_busy(self) -> bool:
+        """Whether a turn runs anywhere on this server."""
+        return any(c.any_busy() for c in list(self.peers or ())) or self.any_busy()
 
     # -- the conversation --------------------------------------------------
 
@@ -295,6 +309,16 @@ class Connection:
                 handle.cancel()
         elif kind == "sessions":
             await self.sessions(message, rid)
+        elif kind == "setup":
+            await self.setup(message, rid)
+        elif kind == "doctor":
+            from agent import embed
+
+            await self.reply("doctor_result", rid, **(await self.blocking(embed.doctor_report)))
+        elif kind == "models":
+            from agent import embed
+
+            await self.reply("models_result", rid, models=await self.blocking(embed.models))
         else:
             await self.send_error("unknown", f"unknown message type {kind!r}", rid)
 
@@ -440,6 +464,44 @@ class Connection:
         except LookupError as exc:
             await self.send_error("no_session", str(exc), rid)
 
+    async def setup(self, message: dict, rid: str | int | None = None) -> None:
+        from agent import embed
+
+        op = str(message.get("op") or "status")
+        if op == "status":
+            status = await self.blocking(embed.setup_status)
+            await self.reply("setup_result", rid, op=op, setup_write=self.setup_write, **status)
+        elif op == "set_key":
+            name, value = message.get("name"), message.get("value", "")
+            # Nothing below may put `value` into a frame or a log line: every
+            # message is built from the name and the mask.
+            if not self.setup_write:
+                await self.send_error("forbidden", "keys are only set from this computer "
+                                                  "(or with otto serve --allow-remote-setup)", rid)
+                return
+            if name not in embed.KEY_VARS:
+                await self.send_error("invalid", f"name is one of {', '.join(embed.KEY_VARS)}", rid)
+                return
+            if not isinstance(value, str) or len(value) > MAX_KEY_CHARS or any(c in value for c in "\r\n\x00"):
+                await self.send_error("invalid", f"a key is one line of at most {MAX_KEY_CHARS} characters", rid)
+                return
+            if self.server_busy():
+                await self.send_error("busy", "a turn is running; change keys when it has finished", rid)
+                return
+            masked = await self.blocking(embed.set_key, name, value)
+            await self.reply("setup_result", rid, op=op, name=name, masked=masked,
+                             ready=await self.blocking(embed.ready))
+        elif op == "probe":
+            name = message.get("name")
+            try:
+                result = await self.blocking(embed.probe, name if isinstance(name, str) else "")
+            except ValueError as exc:
+                await self.send_error("invalid", str(exc), rid)
+                return
+            await self.reply("setup_result", rid, op=op, **result)
+        else:
+            await self.send_error("unknown", f"unknown setup op {op!r}", rid)
+
     async def close(self) -> None:
         """Best-effort teardown: nothing here may raise, but everything that
         goes wrong is logged as a warning so a field problem can be read."""
@@ -469,9 +531,12 @@ class Connection:
 
 class OttoServer:
     def __init__(self, token: str, *, allowed_origins: tuple[str, ...] = (),
-                 max_workers: int = MAX_TURN_WORKERS, no_exec: bool = False) -> None:
+                 max_workers: int = MAX_TURN_WORKERS, no_exec: bool = False,
+                 allow_remote_setup: bool = False) -> None:
         self.token = token
         self.no_exec = no_exec
+        self.allow_remote_setup = allow_remote_setup
+        self.connections: set[Connection] = set()
         self.allowed_origins = tuple(o.rstrip("/").lower() for o in allowed_origins)
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="otto-turn")
         self.ops_executor = ThreadPoolExecutor(max_workers=MAX_OP_WORKERS, thread_name_prefix="otto-ops")
@@ -490,7 +555,9 @@ class OttoServer:
     async def handler(self, websocket) -> None:
         loop = asyncio.get_running_loop()
         connection = Connection(websocket, self.token, loop, self.executor, no_exec=self.no_exec,
-                                ops_executor=self.ops_executor)
+                                ops_executor=self.ops_executor, allow_remote_setup=self.allow_remote_setup,
+                                peers=self.connections)
+        self.connections.add(connection)
         try:
             try:
                 first = await asyncio.wait_for(websocket.recv(), timeout=15)
@@ -510,6 +577,7 @@ class OttoServer:
                 except Exception:  # only a send on a socket that has gone
                     logger.debug("serve: could not answer a message", exc_info=True)
         finally:
+            self.connections.discard(connection)
             await connection.close()
 
     async def run(self, host: str, port: int, *, ready: asyncio.Event | None = None) -> None:

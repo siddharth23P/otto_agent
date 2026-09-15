@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Mapping
 
 from agent.config import envfile
 from agent.router import overrides
@@ -20,6 +21,8 @@ from agent.router.llm_provider import (
 )
 from agent.router.llm_provider import custom
 from agent.router.llm_provider.base import HealthReport, ModelInfo, ProviderError, ProviderStatus
+from agent.router.mapping import Candidate, Task
+from agent.router.overrides import PROVIDER_ONLY
 from agent.router.reload import reload_everything
 
 LABELS = {
@@ -117,6 +120,27 @@ def remove_endpoint(name: str) -> None:
     envfile.unset_value(custom.key_var(name))
     envfile.unset_value(custom.url_var(name))
     reload_everything()
+
+
+#: The "no pin" choice, first in every task's options.
+NO_PIN = ("(no pin — default route)", "")
+
+
+def pin_options(task: Task, models: list[ModelInfo],
+                routes: Mapping[Task, tuple[Candidate, ...]]) -> list[tuple[str, str]]:
+    """The choices for one task's pin: no pin, then every model the seat
+    could use -- the head candidate's `requires`, narrowed to the provider a
+    task is bound to (agent/router/overrides.py PROVIDER_ONLY). Here rather
+    than in the TUI's screen so `otto serve` offers the phone app the same
+    list (agent/cli/setup_screen.py re-exports it)."""
+    head = routes[task][0]
+    bound = PROVIDER_ONLY.get(task)
+    eligible = [
+        m for m in models
+        if head.requires <= m.capabilities and (bound is None or m.provider == bound[0])
+    ]
+    eligible.sort(key=lambda m: (m.provider, m.id))
+    return [NO_PIN] + [(m.spec, m.spec) for m in eligible]
 
 
 def detected_pool() -> list[ModelInfo]:

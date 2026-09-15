@@ -14,6 +14,7 @@ these names are:
     API_VERSION                          bumped on any incompatible change here
     configure(home, env_file=, environ=) where state and keys live -- FIRST
     set_key / key_status / ready / doctor / version
+    setup_status / probe / doctor_report / models
     Runtime.open_session / list_sessions / delete_session / transcript /
             rename_session / export_session / import_session
     SessionHandle.run / answer / cancel / rename / usage_report / close
@@ -253,6 +254,58 @@ def doctor() -> list[dict[str, Any]]:
          "detail": r.detail or ""}
         for r in health_report()
     ]
+
+
+def setup_status() -> dict[str, Any]:
+    """What a setup screen opens on, as data: whether Otto can run, every
+    vendor key masked, one row per vendor (agent/router/setup.py
+    `vendor_rows`: names, masks and presence, never a value) and the
+    version."""
+    from dataclasses import asdict
+
+    from agent.router import setup as router_setup
+
+    return {"ready": ready(), "keys": key_status(),
+            "vendors": [asdict(row) for row in router_setup.vendor_rows()], "version": version()}
+
+
+def probe(name: str) -> dict[str, Any]:
+    """One vendor, checked with a real call, and the models it lists.
+    ValueError for a name that is not a configured vendor row."""
+    from agent.router import setup as router_setup
+
+    if name not in {row.name for row in router_setup.vendor_rows()}:
+        raise ValueError(f"{str(name)[:40]!r} is not a vendor otto knows")
+    result = router_setup.probe(name)
+    report = result.report
+    return {"name": name, "ok": result.ok, "status": report.status.value, "detail": report.detail or "",
+            "model_count": report.model_count or len(result.models),
+            "models": [_model_row(m) for m in result.models]}
+
+
+def doctor_report() -> dict[str, Any]:
+    """`otto doctor` as data: every provider checked with a real call
+    (`doctor`), and the conclusion the TUI prints under it -- whether the
+    required provider is configured and which others are."""
+    from agent.router.router import Router
+
+    router = Router()
+    return {"providers": doctor(), "ready": router.ready(), "required": Router.REQUIRED,
+            "also_configured": [p for p in router.usable() if p != Router.REQUIRED]}
+
+
+def models() -> list[dict[str, Any]]:
+    """Every model every configured vendor lists, as `otto models --json`
+    shows them plus the spec a pin is written with. Network."""
+    from agent.router.llm_provider import all_models
+
+    return [_model_row(m) for m in sorted(all_models(None), key=lambda m: (m.provider, m.id))]
+
+
+def _model_row(m) -> dict[str, Any]:
+    return {"spec": m.spec, "provider": m.provider, "id": m.id, "display_name": m.display_name,
+            "capabilities": sorted(c.value for c in m.capabilities),
+            "context_window": m.context_window, "max_output_tokens": m.max_output_tokens}
 
 
 def version() -> dict[str, Any]:
