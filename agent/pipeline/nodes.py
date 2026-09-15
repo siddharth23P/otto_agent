@@ -85,6 +85,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
 import json
@@ -1716,13 +1717,17 @@ def _mode_message(name: str) -> HumanMessage:
     )
 
 
-def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
+def _seed_transcript(state: AgentState, task_text: str, checklist=None, *,
+                     lessons: str | None = None) -> list:
     """The conversation a run starts from. Built once per run, never rebuilt.
 
     The two system messages are adjacent at indices 0 and 1 on purpose: a run of
     system messages at the very start is legal on every vendor here, and the
     moment one appears later it is not (see _mode_message). Everything after
     them is Human/AI for the life of the run.
+
+    `lessons` is `_lessons_block(task_text)` when the caller already has it
+    (agent() looks it up beside the rubric call); None looks it up here.
     """
     history = _conversation_so_far(state)
     context = state.get("context") or ""
@@ -1730,7 +1735,7 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
         f"CONVERSATION SO FAR:\n{history}" if history else "",
         f"CONTEXT GATHERED SO FAR:\n{context}" if context else "",
         f"TASK:\n{task_text}",
-        _lessons_block(task_text),
+        _lessons_block(task_text) if lessons is None else lessons,
         _render_checklist(checklist),
     ) if part)
 
@@ -1753,6 +1758,23 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
     if not _phone_run():
         messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
     return messages
+
+
+def _look_up_lessons_early(task_text: str) -> Future[str]:
+    """`_lessons_block(task_text)`, started on its own thread now.
+
+    A fresh run's first thing is the rubric call, and the seed that follows it
+    needs the lesson lookup -- an embedding of the task and a search of the
+    bank, which with a hosted embedder is a network round trip of its own.
+    Neither needs the other, so they need not wait for each other. In a copy
+    of this context, so the bank and the phone-or-workspace kind are the
+    run's. A turn that ends on the chat fast path simply never reads it.
+    """
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="otto-lessons")
+    try:
+        return pool.submit(contextvars.copy_context().run, _lessons_block, task_text)
+    finally:
+        pool.shutdown(wait=False)
 
 
 def _lessons_block(task_text: str) -> str:
@@ -2925,6 +2947,9 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "resear
     checklist = state.get("checklist")
     conversational = False
     kind = "agent"
+    # Only where the seed below will need it: a fresh run with no criteria
+    # yet. A resume rebuilds from its stored transcript and reads no lessons.
+    lessons_ahead = _look_up_lessons_early(task_text) if checklist is None and not resuming else None
     if checklist is None or redirected:
         report_progress("phase", "working out what done looks like")
         rubric = _rubric(ROUTER.chat_model(Task.EVALUATE), _requested(state))
@@ -3016,7 +3041,9 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "resear
                 + "Fix what is still open. You have everything above."
             ))
     else:
-        messages = _seed_transcript(state, task_text, checklist)
+        messages = _seed_transcript(
+            state, task_text, checklist,
+            lessons=lessons_ahead.result() if lessons_ahead is not None else None)
 
     actions: list[str] = []
     mode_log: list[str] = []

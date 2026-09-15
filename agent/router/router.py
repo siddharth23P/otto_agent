@@ -1,5 +1,7 @@
+import contextvars
 import weakref
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
@@ -263,12 +265,32 @@ class Router:
         return tuple(p for p in self._configured if self._usable(p))
 
     def prewarm(self) -> dict[str, str]:
+        """Fetch every configured provider's catalogue, all at once.
+
+        They used to be fetched one after another, so the first turn of a
+        process waited for the sum of four vendors' model-list round trips
+        rather than the slowest one. Each is independent and cached after
+        (get_provider's lru_cache, each provider's own list cache). Same
+        result, same failures reported."""
+        names = self.usable()
         failures: dict[str, str] = {}
-        for name in self.usable():
+        if not names:
+            return failures
+
+        def fetch(name: str) -> str | None:
             try:
                 self.catalogue.models(name)
             except ProviderError as exc:
-                failures[name] = str(exc)
+                return str(exc)
+            return None
+
+        with ThreadPoolExecutor(max_workers=len(names), thread_name_prefix="otto-prewarm") as pool:
+            # One context copy per task: a Context cannot be entered by two
+            # threads at once.
+            futures = [pool.submit(contextvars.copy_context().run, fetch, name) for name in names]
+            for name, future in zip(names, futures):
+                if (problem := future.result()) is not None:
+                    failures[name] = problem
         return failures
     
     def _match(self, c: Candidate, only: str | None = None, *,
