@@ -54,6 +54,16 @@ displace the other. Measured 2026-09-15: ten lessons from phone runs ranked
 against 180 from workspace runs, and "the cheapest foldable phone on Amazon"
 was handed "switch browser, clear cache, use a direct URL" -- advice for a
 machine the phone run did not have.
+
+A phone run may also leave NOTES ON AN APP: how one app's screens work
+("Sort by is the last category behind All Filters"), stored as lessons of
+kind `app_note:<package>` and shown after that app's screen by
+agent/phone/notes.py rather than recalled by similarity. They come out of
+the same distilling call, as items carrying an "app" key: `parse_lessons`
+leaves those out and `parse_app_notes` reads only them, so a note never
+takes one of a run's three lesson slots. An app keeps its newest few
+(`prune_kind`): an app changes its screens, and the old note is the one
+most likely to have stopped being true.
 """
 from __future__ import annotations
 
@@ -383,14 +393,9 @@ def _parse(text: str) -> Lesson | None:
     return Lesson(cue=_cue(parts["cue"]), action=parts["action"], outcome=parts["outcome"])
 
 
-def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]:
-    """Every lesson in `text`, uncapped. The one parser behind both the
-    distiller's reply and an imported file.
-
-    Tolerant on purpose: a bare JSON list, an object with a "lessons" key, a
-    fenced block, or prose around the array all yield their lessons. Entries
-    missing a cue or an action are dropped, not fatal.
-    """
+def _items(text: str) -> list:
+    """The JSON items in `text`: a bare list, an object with a "lessons"
+    key, a fenced block, or prose around the array. [] when there are none."""
     body = (text or "").strip()
     fenced = re.search(r"```(?:json)?\s*(.+?)```", body, re.S)
     if fenced:
@@ -410,21 +415,50 @@ def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]
             items = json.loads(body[start:end + 1])
         except (json.JSONDecodeError, ValueError):
             return []
+    return items if isinstance(items, list) else []
 
-    lessons: list[Lesson] = []
-    for item in items if isinstance(items, list) else []:
-        if not isinstance(item, dict):
+
+def _lesson(item, outcome_default: str) -> Lesson | None:
+    if not isinstance(item, dict):
+        return None
+    cue = _cue(item.get("cue"))
+    action = str(item.get("action") or "").strip()
+    if not cue or not action:
+        return None
+    outcome = str(item.get("outcome") or outcome_default).strip().lower()
+    return Lesson(
+        cue=cue[:MAX_LESSON_CHARS], action=action[:MAX_LESSON_CHARS],
+        outcome="failed" if outcome.startswith("fail") else "worked",
+    )
+
+
+def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]:
+    """Every lesson in `text`, uncapped. The one parser behind both the
+    distiller's reply and an imported file.
+
+    Tolerant on purpose: a bare JSON list, an object with a "lessons" key, a
+    fenced block, or prose around the array all yield their lessons. Entries
+    missing a cue or an action are dropped, not fatal. An entry with an "app"
+    key is a note on that app (`parse_app_notes`), not a lesson.
+    """
+    lessons = (_lesson(item, outcome_default) for item in _items(text)
+               if not (isinstance(item, dict) and "app" in item))
+    return [lesson for lesson in lessons if lesson is not None]
+
+
+def parse_app_notes(text: str) -> dict[str, list[Lesson]]:
+    """The notes on apps in a distiller's reply, by package, uncapped: the
+    entries carrying an "app" key. Which of them are kept is
+    agent/phone/notes.py `record_app_notes`'s call."""
+    notes: dict[str, list[Lesson]] = {}
+    for item in _items(text):
+        if not (isinstance(item, dict) and "app" in item):
             continue
-        cue = _cue(item.get("cue"))
-        action = str(item.get("action") or "").strip()
-        if not cue or not action:
-            continue
-        outcome = str(item.get("outcome") or outcome_default).strip().lower()
-        lessons.append(Lesson(
-            cue=cue[:MAX_LESSON_CHARS], action=action[:MAX_LESSON_CHARS],
-            outcome="failed" if outcome.startswith("fail") else "worked",
-        ))
-    return lessons
+        package = str(item.get("app") or "").strip()
+        lesson = _lesson(item, "worked")
+        if package and lesson is not None:
+            notes.setdefault(package, []).append(lesson)
+    return notes
 
 
 def count_entries(text: str) -> int:
@@ -495,6 +529,23 @@ def clear_bank() -> int:
     store._conn.execute("DELETE FROM chunks WHERE kind = ?", (current_kind(),))
     store._conn.commit()
     return before
+
+
+def prune_kind(keep: int) -> int:
+    """Delete the oldest lessons of the current kind beyond the newest
+    `keep`. Returns how many went. A write, so a read-only run prunes
+    nothing."""
+    store = _bank()
+    if store is None or not _WRITES.get():
+        return 0
+    kind = current_kind()
+    hashes = store.chunk_hashes(kind)  # oldest first
+    doomed = hashes[: max(0, len(hashes) - max(0, keep))]
+    if doomed:
+        # Straight to the table, as clear_bank does.
+        store._conn.executemany("DELETE FROM chunks WHERE kind = ? AND hash = ?", [(kind, h) for h in doomed])
+        store._conn.commit()
+    return len(doomed)
 
 
 def export_lessons(path: Path) -> int:
