@@ -99,7 +99,8 @@ from agent.memory.hashing import content_hash
 from agent.memory.retrieval import EVICTED_KIND
 from agent.memory.session import current_store
 from agent.memory.lessons import (
-    Lesson, learning_enabled, parse_distilled, recall_lessons, record_lessons,
+    KIND as LESSON_KIND, PHONE_KIND, Lesson, bind_kind, learning_enabled, parse_distilled, recall_lessons,
+    record_lessons,
 )
 from agent.pipeline.evidence import Ledger, render_note as render_unproven
 from agent.pipeline.state import AgentState
@@ -722,6 +723,26 @@ CONTRAST_NOTE = (
     "instead. A lesson that describes only the better attempt is the generic "
     "kind nobody can act on."
 )
+
+#: Sent with a run that drove a phone. The distiller sees a trajectory and
+#: nothing about where it ran, and a phone run's friction ("the results would
+#: not read") came back as "switch browser, clear cache, use a direct URL" --
+#: steps the next phone run has no tool for.
+PHONE_DISTIL_NOTE = (
+    "THIS RUN WAS ON A PHONE: a person's Android phone, driven through phone_* "
+    "tools that read a screen of numbered elements and tap, type, swipe and "
+    "scroll on it. Write lessons for the next phone run, in those terms -- a "
+    "screen, a list, a button, a sort or filter control, a sponsored result, "
+    "what phone_screen showed -- and never tell it to use a browser, a cache, "
+    "a URL, a shell or a file: a phone run has none of them."
+)
+
+
+def _lesson_kind() -> str:
+    """The lessons this run reads and writes: a phone's own, when the host
+    bound agent/phone's tools, else the workspace bank. See
+    agent/memory/lessons.py PHONE_KIND for why the two are kept apart."""
+    return PHONE_KIND if "phone_screen" in current_extra_tools() else LESSON_KIND
 
 
 #: The whole agent, in one prompt.
@@ -1670,7 +1691,8 @@ def _lessons_block(task_text: str) -> str:
     is relevant -- agent/memory/lessons.py returns an empty list rather than
     the closest match, because an off-topic lesson is worse than silence.
     """
-    lessons = recall_lessons(str(task_text or ""))
+    with bind_kind(_lesson_kind()):
+        lessons = recall_lessons(str(task_text or ""))
     if not lessons:
         return ""
     return (
@@ -3296,6 +3318,7 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     body = "\n\n".join(part for part in (
         f"TASK:\n{state['messages'][-1].content}",
         f"HOW IT WENT: {'the answer was accepted' if succeeded else 'it was NOT accepted'}",
+        PHONE_DISTIL_NOTE if _lesson_kind() == PHONE_KIND else "",
         (f"IT WAS REJECTED AND RETRIED {rejections} time(s). The earlier attempt "
          f"and the later one are both above.\n{CONTRAST_NOTE}" if rejections else ""),
         _actions_block(state),
@@ -3312,9 +3335,10 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     except Exception as exc:  # noqa: BLE001 -- never fail a finished run
         logger.info("distilling lessons failed, learning nothing: %s", exc)
         return []
-    return record_lessons(parse_distilled(
-        reply, outcome_default="worked" if succeeded else "failed",
-    ))
+    with bind_kind(_lesson_kind()):
+        return record_lessons(parse_distilled(
+            reply, outcome_default="worked" if succeeded else "failed",
+        ))
 
 
 def evaluator(state: AgentState) -> Command[Literal["agent", "research", "evaluator", "__end__", "ask_user"]]:

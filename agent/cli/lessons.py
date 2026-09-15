@@ -14,6 +14,9 @@ rubbish" is how that gets noticed, and `--clear` is how it gets undone.
 through the same duplicate adjudication a run's own lessons face. The TUI's
 "Export lessons…" / "Import lessons…" palette entries call the same two
 functions (agent/memory/lessons.py).
+
+`--phone` (2026-09-15) does any of the above to the lessons phone runs keep
+apart from the workspace's (agent/memory/lessons.py PHONE_KIND).
 """
 from __future__ import annotations
 
@@ -28,7 +31,8 @@ from typing_extensions import Annotated
 
 from agent.cli.ui import err, out
 from agent.memory.lessons import (
-    Lesson, all_lessons, bank_path, bind_bank, clear_bank, export_lessons, import_lessons,
+    KIND, PHONE_KIND, Lesson, all_lessons, bank_path, bind_bank, bind_kind, clear_bank, export_lessons,
+    import_lessons,
 )
 from agent.memory.store import MemoryStore
 
@@ -69,6 +73,10 @@ def lessons_cmd(
         bool,
         typer.Option("--replace", help="With --import: empty the bank first."),
     ] = False,
+    phone: Annotated[
+        bool,
+        typer.Option("--phone", help="The lessons phone runs learn and read, instead of the workspace's."),
+    ] = False,
 ) -> None:
     path = bank or bank_path()
     if import_from is None and not path.exists():
@@ -76,7 +84,7 @@ def lessons_cmd(
         return
 
     store = MemoryStore(path)
-    with bind_bank(store):
+    with bind_bank(store), bind_kind(PHONE_KIND if phone else KIND):
         if clear:
             removed = clear_bank()
             err.print(f"cleared {removed} lesson(s) from {path}")
@@ -92,6 +100,6 @@ def lessons_cmd(
 
         learned = all_lessons()
         if not learned:
-            out.print(f"{path} is empty")
+            out.print(f"{path} has no phone lessons yet" if phone else f"{path} is empty")
             return
         out.print(lessons_table(learned, path))

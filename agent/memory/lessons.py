@@ -46,6 +46,14 @@ survives the session that learned it is not a lesson. Same `MemoryStore`
 schema, `kind="lesson"`, ranked by the same embeddings as everything else,
 and degrading the same way -- if the embedding backend is unreachable the
 bank falls back to most-recent rather than failing the run.
+
+A run that drives a phone keeps its own kind, `PHONE_KIND` (`bind_kind`). A
+phone run learns about screens, lists and filters, a workspace run about
+files and commands, and with TOP_K=1 over one namespace each can only
+displace the other. Measured 2026-09-15: ten lessons from phone runs ranked
+against 180 from workspace runs, and "the cheapest foldable phone on Amazon"
+was handed "switch browser, clear cache, use a direct URL" -- advice for a
+machine the phone run did not have.
 """
 from __future__ import annotations
 
@@ -72,6 +80,9 @@ log = logging.getLogger(__name__)
 #: The `kind` every lesson is stored under, so one bank file could later hold
 #: other cross-run material without the two ranking against each other.
 KIND = "lesson"
+
+#: The kind a phone run's lessons are stored and recalled under.
+PHONE_KIND = "phone_lesson"
 
 #: How many lessons one finished run may contribute. Three, per rule 2 above.
 #: A run that wants to write ten has not learned ten things, it has summarised
@@ -156,6 +167,39 @@ _BANK: ContextVar = ContextVar("otto_lesson_bank", default=_UNSET)
 _WRITES: ContextVar[bool] = ContextVar("otto_lesson_writes", default=True)
 
 
+#: Which kind of lesson reads and writes go to for the duration: `KIND` unless
+#: a run binds another (agent/pipeline/nodes.py binds PHONE_KIND for a run that
+#: has the phone's tools).
+_KIND: ContextVar[str] = ContextVar("otto_lesson_kind", default=KIND)
+
+
+@contextmanager
+def bind_kind(kind: str):
+    """Read and write lessons of `kind` for the duration."""
+    token = _KIND.set(kind)
+    try:
+        yield
+    finally:
+        _KIND.reset(token)
+
+
+def current_kind() -> str:
+    return _KIND.get()
+
+
+def _rows(store: MemoryStore) -> list:
+    kind = current_kind()
+    return store.get_chunk_rows(kind, store.chunk_hashes(kind))
+
+
+def _hash(text: str) -> str:
+    """A chunk's hash is unique across kinds, so the same words learned by a
+    phone run and a workspace run are two lessons, not one silently dropped.
+    The default kind keeps the plain content hash every existing bank has."""
+    kind = current_kind()
+    return content_hash(text if kind == KIND else f"{kind}\n{text}")
+
+
 def bank_path() -> Path:
     return DB_DIR / "lessons.db"
 
@@ -237,7 +281,7 @@ def recall_lessons(task: str, *, top_k: int = TOP_K) -> list[Lesson]:
     if store is None or not task.strip():
         return []
 
-    rows = store.get_chunk_rows(KIND, store.chunk_hashes(KIND))
+    rows = _rows(store)
     if not rows:
         return []
 
@@ -268,7 +312,7 @@ def all_lessons() -> list[Lesson]:
     store = _bank()
     if store is None:
         return []
-    parsed = [_parse(row.content) for row in store.get_chunk_rows(KIND, store.chunk_hashes(KIND))]
+    parsed = [_parse(row.content) for row in _rows(store)]
     return [lesson for lesson in parsed if lesson is not None]
 
 
@@ -288,17 +332,14 @@ def record_lessons(lessons, *, max_per_run: int = MAX_PER_RUN) -> list[Lesson]:
     if store is None or not _WRITES.get():
         return []
 
-    existing = [
-        (row.embedding, row.embedding_model)
-        for row in store.get_chunk_rows(KIND, store.chunk_hashes(KIND))
-    ]
+    existing = [(row.embedding, row.embedding_model) for row in _rows(store)]
     kept: list[Lesson] = []
     for lesson in list(lessons)[:max_per_run]:
         text = lesson.rendered()
         vector, model = _embed_one(text)
         if _is_duplicate(vector, model, existing):
             continue
-        store.add_chunk(KIND, content_hash(text), text, vector, model)
+        store.add_chunk(current_kind(), _hash(text), text, vector, model)
         existing.append((vector, model))
         kept.append(lesson)
     return kept
@@ -327,11 +368,19 @@ def _is_duplicate(vector, model, existing) -> bool:
 _RENDERED = re.compile(r"^When (?P<cue>.+?): (?P<action>.+?) \[(?P<outcome>\w+)\]$", re.S)
 
 
+def _cue(text: str) -> str:
+    """A cue without a leading "When": the stored form adds its own, and a
+    distiller asked for "the situation" routinely starts with the word, which
+    rendered every such lesson as "When When ..."."""
+    return re.sub(r"^when\s+", "", str(text or "").strip(), flags=re.IGNORECASE)
+
+
 def _parse(text: str) -> Lesson | None:
     match = _RENDERED.match(text.strip())
     if not match:
         return None
-    return Lesson(**match.groupdict())
+    parts = match.groupdict()
+    return Lesson(cue=_cue(parts["cue"]), action=parts["action"], outcome=parts["outcome"])
 
 
 def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]:
@@ -366,7 +415,7 @@ def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
             continue
-        cue = str(item.get("cue") or "").strip()
+        cue = _cue(item.get("cue"))
         action = str(item.get("action") or "").strip()
         if not cue or not action:
             continue
@@ -440,10 +489,10 @@ def clear_bank() -> int:
     store = _bank()
     if store is None:
         return 0
-    before = len(store.chunk_hashes(KIND))
+    before = len(store.chunk_hashes(current_kind()))
     # Straight to the table: lessons are chunks like any other, and the store
     # has no delete because nothing else in Otto ever needed one.
-    store._conn.execute("DELETE FROM chunks WHERE kind = ?", (KIND,))
+    store._conn.execute("DELETE FROM chunks WHERE kind = ?", (current_kind(),))
     store._conn.commit()
     return before
 
