@@ -93,10 +93,10 @@ def test_what_is_not_a_screen_is_not_folded():
     assert fold_result(once) is None
 
 
-def test_the_six_screen_tools_fold_and_the_rest_do_not():
+def test_the_seven_screen_tools_fold_and_the_rest_do_not():
     tools = {t.name: t for t in phone_tools(JsonBackend(FakePhone([])))}
     assert {n for n, t in tools.items() if t.fold is not None} == {
-        "phone_screen", "phone_act", "phone_commit", "phone_open", "phone_settings", "phone_install"}
+        "phone_screen", "phone_act", "phone_do", "phone_commit", "phone_open", "phone_settings", "phone_install"}
 
 
 # ---- _fold_old_results -------------------------------------------------------

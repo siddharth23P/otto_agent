@@ -838,7 +838,7 @@ def compose_phone_prompt(live_tool_names) -> str:
     -- and all of it rides on every loop call, which on a phone is one call
     per tap. Measured with the phone tools and PHONE_DISABLED_STANDING_TOOLS
     bound: compose_agent_prompt(reachable_tools()) is 3107 characters, this is
-    851, and the phone guidance in render_note (the next system message) is
+    851 (906 since it says phone_do shares the one call), and the phone guidance in render_note (the next system message) is
     unchanged and still says how to use each tool. With the MODE message it
     no longer needs, a scripted ten-action search's largest loop call went
     from 75518 characters to 72808 (tests/test_phone_call_budget.py).
@@ -862,7 +862,9 @@ def compose_phone_prompt(live_tool_names) -> str:
         "screen shows it done.\n\n"
         "reply with exactly\nACTION: <" + menu + ">\nCODE:\n<" + " ".join(hints)
         + ">\nand you will be shown the result, then you can continue. "
-        "One tool call per reply.\n\n"
+        "One tool call per reply."
+        + (" phone_do runs several steps in that one call." if "phone_do" in names else "")
+        + "\n\n"
         "Before FINAL, the last screen you read must show the result. When it "
         "does, reply with exactly\nFINAL:\n<the answer itself -- what is on "
         "the screen now, or what the person has to do next. No recap of your "
