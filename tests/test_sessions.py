@@ -638,3 +638,32 @@ def test_an_import_with_a_non_hex_id_gets_a_minted_one(tmp_path):
     path.write_text(json.dumps(payload))
     info = index.import_session(path)
     assert index.valid_id(info.id) and session_db_path(info.id).exists()
+
+
+def test_a_payload_round_trips_without_a_file_and_can_leave_the_workspace_behind(tmp_path):
+    first = Session(ctx=FakeCtx(), workspace=tmp_path)
+    first.record_turn(HumanMessage("hi"), AIMessage("hello"))
+    payload = index.export_payload(first.session_id, include_workspace=False)
+    assert payload["session"]["workspace"] is None
+    assert index.export_payload(first.session_id)["session"]["workspace"] == str(tmp_path)
+    first.close()
+    index.delete(first.session_id)
+    info = index.import_payload(dict(payload, session={**payload["session"], "workspace": "/"}),
+                                keep_workspace=False)
+    assert info.id == first.session_id and info.workspace is None and info.title == "hi"
+    assert index.export_filename(info).startswith(f"otto-session-{info.short_id}-")
+
+
+@pytest.mark.parametrize("bad", [
+    {"session": {}, "pending": "no"},
+    {"session": {}, "pending": [{"text": 5}]},
+    {"session": {}, "pending": [], "chunks": [{"hash": "h"}]},
+    {"session": {}, "pending": [], "bullets": [{"text": "t", "hash_refs": "r"}]},
+    {"session": {}, "pending": [], "version": "1"},
+])
+def test_a_malformed_payload_is_refused_before_anything_is_written(bad):
+    before = sorted(p.name for p in store_module.DB_DIR.glob("*.db")) if store_module.DB_DIR.exists() else []
+    with pytest.raises(ValueError):
+        index.import_payload(bad)
+    after = sorted(p.name for p in store_module.DB_DIR.glob("*.db")) if store_module.DB_DIR.exists() else []
+    assert before == after and index.list_sessions() == []
