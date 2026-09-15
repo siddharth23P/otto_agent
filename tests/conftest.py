@@ -170,6 +170,30 @@ def _no_real_session_memory(request, monkeypatch, tmp_path_factory):
         yield
 
 
+#: And never a phone decision nobody faked.
+#:
+#: agent/embed.py asks a model whether a turn handed the phone tools needs the
+#: phone (agent/pipeline/nodes.py `needs_phone`). Every phone and serve test
+#: written before that fakes the pipeline and nothing else, so the decision
+#: would reach the router -- and, failing, answer yes, which is only right by
+#: accident. Off unless a test asks for it by the `decide_phone` fixture name
+#: (tests/test_phone_decision.py), which turns it back on.
+from agent import embed as _embed  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_phone_decision(request, monkeypatch):
+    if "decide_phone" not in getattr(request, "fixturenames", ()):
+        monkeypatch.setattr(_embed, "DECIDE_PHONE", False)
+    yield
+
+
+@pytest.fixture
+def decide_phone(monkeypatch):
+    """Turn embed's per-turn phone decision on for this test."""
+    monkeypatch.setattr(_embed, "DECIDE_PHONE", True)
+
+
 #: Tests that can only run where the host shell is POSIX.
 #:
 #: Otto's remote branch -- every tool's container path -- generates POSIX

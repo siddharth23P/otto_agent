@@ -35,6 +35,8 @@ reports through a callback with plain dicts -- JSON-serialisable, so a Kotlin
 or Swift host can hand them across a bridge unchanged:
 
     {"type": "progress", "kind", "text", "calls", "elapsed", "partial", "detail"}
+        kind "phase" with detail {"phone": bool} says where a turn with the
+        phone tools runs: "working on your phone" or "answering here"
     {"type": "board",    "node", "lines": [...], "output": str | None}
     {"type": "ask",      "thread_id", "question", "choices": [...]}
     {"type": "final",    "text", "usage": {...}, "trace_id"}
@@ -82,6 +84,22 @@ Events = Callable[[dict[str, Any]], None]
 #: `configure(environ=...)` gets these switched off unless it says otherwise
 #: (`SessionHandle.run`'s `disabled_tools`).
 SUBPROCESS_TOOLS: tuple[str, ...] = ("execute_bash", "execute_python")
+
+#: Whether a turn that was handed the phone tools asks a model first if it
+#: needs the phone at all (agent/pipeline/nodes.py `needs_phone`). A module
+#: switch so a test suite can keep its turns free of that call
+#: (tests/conftest.py); a host says per turn with `run(phone=...)`.
+DECIDE_PHONE = True
+
+
+class _Auto:
+    def __repr__(self) -> str:
+        return "AUTO"
+
+
+#: `run(workspace=AUTO)`: no workspace on the phone, a directory of the
+#: session's own under `<OTTO_HOME>/workspaces/` everywhere else.
+AUTO: Any = _Auto()
 
 _configured: dict[str, Any] = {}
 _STATE_MODULES = ("agent.memory.store", "agent.memory.sessions", "agent.router.outcomes",
@@ -332,6 +350,9 @@ class SessionHandle:
         self._pending_thread: str | None = None
         self._answer_ready = threading.Event()
         self._answer: str | None = None
+        #: Where the last turn ran: True on the phone, False off it, None for
+        #: a turn that had no phone tools to decide about.
+        self.phone: bool | None = None
 
     @property
     def id(self) -> str:
@@ -352,7 +373,10 @@ class SessionHandle:
     def run(self, text: str, *, events: Events, tools: Sequence["ExtraTool"] = (),
             guidance: str = "", disabled_tools: Collection[str] | None = None,
             cancel: threading.Event | None = None,
-            seats: Mapping[str, str] | None = None) -> None:
+            seats: Mapping[str, str] | None = None,
+            phone: bool | None = None,
+            off_phone_disabled_tools: Collection[str] | None = None,
+            workspace: "str | os.PathLike | None" = AUTO) -> None:
         """One turn, to completion, on this thread.
 
         Every run-scoped binding happens here, on the thread that consumes
@@ -371,9 +395,28 @@ class SessionHandle:
         subprocess inherits the environment, keys included, and a host that
         kept its keys out of every file should not find them in a shell the
         model runs. Pass an explicit collection (`()` included) to decide.
+
+        WHETHER THE PHONE IS NEEDED is decided once, before anything is bound,
+        when `tools` include the phone's (`phone_*`): `phone=None` asks
+        agent/pipeline/nodes.py's `needs_phone` (one cheap call, failing
+        toward yes; skipped when DECIDE_PHONE is off, which keeps the phone),
+        True or False says. A `progress{kind: "phase"}` event reports it. On
+        the phone the turn binds exactly what the arguments above say, with
+        no workspace. Off it, the phone tools and `guidance` are left out,
+        routing is routes.json's (no seats), `off_phone_disabled_tools`
+        replaces `disabled_tools` (None: SUBPROCESS_TOOLS for keys from the
+        host, else nothing -- a person at `otto tui` has the shell too), and
+        the workspace defaults to the session's own directory, so a document
+        has somewhere to be written. The decision holds for the whole turn:
+        a question, its answer and every rejection run in the same bindings.
+
+        `workspace` AUTO is that default; None is no workspace; a path is that
+        directory, on or off the phone.
         """
         if disabled_tools is None:
             disabled_tools = SUBPROCESS_TOOLS if _configured.get("keys_from_host") else ()
+        if off_phone_disabled_tools is None:
+            off_phone_disabled_tools = SUBPROCESS_TOOLS if _configured.get("keys_from_host") else ()
         with self._lock:
             if self._running:
                 raise RuntimeError("a turn is already running in this session")
@@ -382,7 +425,8 @@ class SessionHandle:
             self._pending_thread = None
             self._answer_ready.clear()
         try:
-            self._drive(text, events, tools, guidance, disabled_tools, _seats_for(tools, seats))
+            self._drive(text, events, tools, guidance, disabled_tools, seats, phone=phone,
+                        off_phone_disabled=off_phone_disabled_tools, workspace=workspace)
         finally:
             with self._lock:
                 self._running = False
@@ -422,16 +466,19 @@ class SessionHandle:
     # -- the loop ----------------------------------------------------------
 
     def _drive(self, text: str, events: Events, tools, guidance: str, disabled,
-               seats: Mapping[str, str] | None = None) -> None:
+               seats: Mapping[str, str] | None = None, *, phone: bool | None = None,
+               off_phone_disabled: Collection[str] = (), workspace=AUTO) -> None:
         from langchain_core.messages import AIMessage, HumanMessage
 
         from agent.pipeline import run as pipeline
         from agent.pipeline.profile import bind_tool_profile
         from agent.pipeline.progress import Cancelled, bind_progress
         from agent.pipeline.toolkit import bind_extra_tools
+        from agent.pipeline.usage import bind_usage
         from agent.router.llm_provider.base import AuthError, ProviderError
         from agent.router.overrides import bind_seats
 
+        started = time.monotonic()
         last_partial = 0.0
 
         def sink(update) -> None:
@@ -449,7 +496,32 @@ class SessionHandle:
         history, memory_context = self._session.history_for_graph()
         session_id = self._session.session_id
         final = None
+        has_phone = any(_is_phone_tool(t) for t in tools)
+        self.phone = True if has_phone else None
         try:
+            if has_phone and (phone is not None or DECIDE_PHONE):
+                if phone is None:
+                    from agent.pipeline import nodes
+
+                    # Before the bindings: they are contextvars, which do not
+                    # carry from one LangGraph node to the next, so the choice
+                    # has to be made out here and held for the whole turn.
+                    # Counted in the session's ledger and stoppable, but with
+                    # no sink: its streamed "PHONE: no" is not an answer.
+                    with bind_progress(None, cancel=self._cancel), bind_usage(self.usage):
+                        self.phone = bool(nodes.needs_phone(text, history))
+                else:
+                    self.phone = bool(phone)
+                events({"type": "progress", "kind": "phase",
+                        "text": "working on your phone" if self.phone else "answering here",
+                        "calls": 0, "elapsed": round(time.monotonic() - started, 2),
+                        "partial": "", "detail": {"phone": self.phone}})
+            if has_phone and not self.phone:
+                tools = [t for t in tools if not _is_phone_tool(t)]
+                guidance, disabled, seats = "", off_phone_disabled, {}
+            else:
+                seats = _seats_for(tools, seats)
+            workspace = self._workspace_for(bool(self.phone), workspace)
             with bind_progress(sink, cancel=self._cancel), \
                  bind_extra_tools(list(tools), guidance=guidance), \
                  bind_tool_profile(disabled), \
@@ -459,7 +531,7 @@ class SessionHandle:
                 # this context into whatever worker runs a node.
                 stream = pipeline.run_pipeline_stream(
                     text, session_id=session_id, history=history,
-                    memory_context=memory_context, workspace=None, usage=self.usage,
+                    memory_context=memory_context, workspace=workspace, usage=self.usage,
                 )
                 while stream is not None:
                     next_stream = None
@@ -473,7 +545,7 @@ class SessionHandle:
                             stream.close()
                             next_stream = pipeline.resume_pipeline_stream(
                                 reply, thread_id=ask["thread_id"], session_id=session_id,
-                                workspace=None, usage=self.usage,
+                                workspace=workspace, usage=self.usage,
                             )
                             break
                         if "__final__" in update:
@@ -502,6 +574,19 @@ class SessionHandle:
         events({"type": "final", "text": raw, "usage": self.usage.snapshot(),
                 "trace_id": self._session.trace_id})
 
+    def _workspace_for(self, on_phone: bool, workspace) -> str | None:
+        """The directory a turn's file tools and research documents get.
+        AUTO: none on the phone (a phone run has no files, and its prompt and
+        call budget were measured without them), else the session's own
+        `<OTTO_HOME>/workspaces/<session_id>`, created by the run when it
+        binds it -- one per session, so a follow-up finds the document the
+        turn before wrote."""
+        if workspace is not AUTO:
+            return None if workspace is None else str(workspace)
+        if on_phone:
+            return None
+        return str(_home.otto_home() / "workspaces" / self._session.session_id)
+
     def _wait_for_answer(self, ask: dict, events: Events) -> str:
         from agent.pipeline.progress import Cancelled
 
@@ -517,6 +602,11 @@ class SessionHandle:
             if self._cancel is not None and self._cancel.is_set():
                 raise Cancelled("stopped while waiting for an answer")
             return self._answer or ""
+
+
+def _is_phone_tool(tool) -> bool:
+    """One of agent/phone/tools.py's: every one is named phone_*."""
+    return str(getattr(tool, "name", "") or "").startswith("phone_")
 
 
 def _seats_for(tools: Sequence["ExtraTool"], seats: Mapping[str, str] | None) -> Mapping[str, str]:
