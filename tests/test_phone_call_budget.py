@@ -13,7 +13,14 @@ the baseline; each speed-up lowers them.
 
 after the phone's own agent prompt: 12 calls, largest 72808 chars.
 after folding old screens: 12 calls, largest 38370 chars.
+after phone_do: the one-action-per-call script is unchanged in calls, and
+its largest call carries phone_do's description, guidance sentence and
+prompt clause without using them: 12 calls, largest 38744 chars (+374). The
+same ten actions as three phone_do calls (two scroll+tap pairs, two, one):
+5 calls, largest 30259 chars.
 """
+import json
+
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from agent.memory import lessons as L
@@ -24,7 +31,9 @@ from agent.pipeline.toolkit import bind_extra_tools
 from tests.phone_fakes import FakePhone, node, snapshot
 
 MAX_LOOP_CALLS = 12
-MAX_LARGEST_CALL_CHARS = 38370
+MAX_LARGEST_CALL_CHARS = 38744
+MAX_BATCHED_LOOP_CALLS = 5
+MAX_BATCHED_LARGEST_CALL_CHARS = 30259
 
 SCRIPT = [
     "ACTION: phone_screen\nCODE:\n{}",
@@ -34,6 +43,17 @@ SCRIPT = [
     )],
     "FINAL:\nthe cheapest is Example phone model 10 at Rs 9,999",
 ]
+
+
+def _pairs(*ks: int) -> str:
+    steps = [step for k in ks for step in (
+        {"op": "scroll", "direction": "down"}, {"op": "tap", "target": f"[{10 + k}]"})]
+    return "ACTION: phone_do\nCODE:\n" + json.dumps({"steps": steps})
+
+
+#: The same ten actions, sent as the phone_do batches a model that knows the
+#: next steps would send.
+BATCHED_SCRIPT = [SCRIPT[0], _pairs(0, 1), _pairs(2, 3), _pairs(4), SCRIPT[-1]]
 
 
 def results_screen(sid: str):
@@ -86,3 +106,12 @@ def test_a_ten_action_search_stays_within_its_loop_budget(monkeypatch):
     assert sum(1 for call in phone.calls if call[0] in ("tap_node", "scroll")) == 10
     assert len(sizes) <= MAX_LOOP_CALLS
     assert max(sizes) <= MAX_LARGEST_CALL_CHARS
+
+
+def test_the_same_search_in_phone_do_batches_costs_fewer_and_smaller_calls(monkeypatch):
+    result, phone, sizes = run_script(monkeypatch, BATCHED_SCRIPT)
+    assert result.goto == "evaluator"
+    assert result.update["output"].startswith("the cheapest is")
+    assert [call[0] for call in phone.calls if call[0] in ("tap_node", "scroll")] == ["scroll", "tap_node"] * 5
+    assert len(sizes) <= MAX_BATCHED_LOOP_CALLS
+    assert max(sizes) <= MAX_BATCHED_LARGEST_CALL_CHARS

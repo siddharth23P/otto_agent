@@ -1,4 +1,4 @@
-"""agent/phone/tools.py: the eight tools over a fake phone, through the real
+"""agent/phone/tools.py: the nine tools over a fake phone, through the real
 toolkit and the real tool loop."""
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 
@@ -39,7 +39,7 @@ def _tools(phone, **kw):
 
 def test_names_flags_and_descriptions():
     by_name, tools = _tools(FakePhone())
-    assert list(by_name) == ["phone_screen", "phone_act", "phone_commit", "phone_open", "phone_apps",
+    assert list(by_name) == ["phone_screen", "phone_act", "phone_do", "phone_commit", "phone_open", "phone_apps",
                              "phone_look", "phone_settings", "phone_install"]
     assert {t.name for t in tools if t.mutates} == {"phone_commit", "phone_install"}
     for t in tools:
