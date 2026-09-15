@@ -3421,6 +3421,64 @@ def _chat_reply(state: AgentState, task_text: str) -> str:
     return _call(ROUTER.chat_model(Task.CHAT_FAST), messages).strip()
 
 
+#: Asked once per turn by a host that has a phone's tools to bind
+#: (agent/embed.py), before anything is bound. `otto serve` used to bind the
+#: phone tools, the phone prompt and the phone's seats for EVERY turn before
+#: any model had read the request, and gave the turn no workspace -- so
+#: "write a research paper", asked from the app, could not take the research
+#: route (it needs a workspace) and fell to the phone loop, which went looking
+#: for something to tap.
+PHONE_DECIDE_PROMPT = (
+    "You decide one thing about the request below: does doing it need the person's Android "
+    "phone to be operated? Yes when it asks to act on or read this device -- its screen, its "
+    "settings, its apps, installing something, messaging or calling from it, or shopping in an "
+    "app (a cart, an order). No when it can be done without touching the phone -- writing, "
+    "explaining, computing, coding, research on the web, or making a document. A short "
+    "follow-up (\"do it\", \"the second one\", \"and a cover too\") inherits what the "
+    "conversation before it was doing. Reply with exactly one line: PHONE: yes, or PHONE: no."
+)
+
+_PHONE_LINE = re.compile(r"^[\s*_-]*PHONE[*_]*:[\s*_]*(yes|no)\b", re.I | re.M)
+#: How much of the conversation the decision sees: enough for a follow-up to
+#: inherit, not enough to make the cheapest call of the turn expensive.
+PHONE_DECIDE_MESSAGES = 6
+PHONE_DECIDE_CHARS = 600
+
+
+def parse_phone_decision(reply: str) -> bool:
+    """The first PHONE: line's answer. No such line reads as yes: a turn
+    that should have had the phone and did not is a request silently not
+    done, while a wrong yes is what every turn did before this existed."""
+    found = _PHONE_LINE.search(reply or "")
+    return True if found is None else found.group(1).lower() == "yes"
+
+
+def needs_phone(text: str, history=()) -> bool:
+    """Whether this turn should run on the phone: one call on the cheap chat
+    seat. Any failure -- no route, a provider error, an empty reply -- is
+    yes, today's behaviour. `Cancelled` is not a failure and propagates, so
+    a person who pressed Stop is not made to wait for the phone loop."""
+    from agent.pipeline.progress import Cancelled
+
+    lines = []
+    for message in list(history)[-PHONE_DECIDE_MESSAGES:]:
+        speaker = "you" if isinstance(message, HumanMessage) else "otto"
+        lines.append(f"{speaker}: {_content_text(message.content)[:PHONE_DECIDE_CHARS]}")
+    body = "\n\n".join(part for part in (
+        "CONVERSATION SO FAR:\n" + "\n".join(lines) if lines else "",
+        f"REQUEST:\n{str(text)[:4 * PHONE_DECIDE_CHARS]}",
+    ) if part)
+    try:
+        reply = _call(ROUTER.chat_model(Task.CHAT_FAST),
+                      [SystemMessage(PHONE_DECIDE_PROMPT), HumanMessage(body)])
+    except Cancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- deciding must never fail a turn
+        logger.warning("phone decision failed, keeping the phone: %s", exc)
+        return True
+    return parse_phone_decision(reply)
+
+
 def _record_seat(state: AgentState, *, approved: bool) -> None:
     """Credit the seat that produced this answer, for agent/router/outcomes.py.
 
