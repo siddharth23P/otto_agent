@@ -72,6 +72,8 @@ def serve(
         "--allow-origin", help="A browser origin allowed to connect (repeatable). Pages are refused otherwise.")] = None,
     no_exec: Annotated[bool, typer.Option(
         "--no-exec", help="No shell or Python for any turn: the app's answers stay in the workspace.")] = False,
+    allow_remote_setup: Annotated[bool, typer.Option(
+        "--allow-remote-setup", help="Take key and routing changes from a client not on this computer.")] = False,
 ) -> None:
     """Serve the agent over a WebSocket for the phone app."""
     try:
@@ -105,6 +107,6 @@ def serve(
         err.print("[warn]INCEPTION_API_KEY is not set; turns will fail until it is (otto tui -> Setup)[/]")
     try:
         asyncio.run(OttoServer(secret, allowed_origins=tuple(allow_origin or ()),
-                               no_exec=no_exec).run(host, port))
+                               no_exec=no_exec, allow_remote_setup=allow_remote_setup).run(host, port))
     except KeyboardInterrupt:
         out.print("[muted]bye[/]")
