@@ -12,6 +12,7 @@ and binds these through [agent/embed.py](../embed.py).
 | `digest.py` | the accessibility snapshot as bounded, inert text: one `[index] "label" role flags @x,y` line per element, password fields never shown; `find_node` resolves a text target (exact, then unique substring, else the candidates) |
 | `guard.py` + `assets/guard_rules.json` | the rules the phone enforces and this side pre-checks: denied packages, money words, sensitive-screen patterns (two signals required), pay words (never tappable), forward words that become pay words next to a checkout signal, commit words (only through `phone_commit`); a broken rules file is a `GuardRulesError` on every verdict |
 | `tools.py` | `phone_tools(backend)`: nine `ExtraTool`s, `PHONE_GUIDANCE`, and the standing tools a phone cannot run |
+| `notes.py` + `assets/app_notes/` | per-app notes shown after an app's screen the first time it is in front in a run: seeded `<package>.md` files (facts checked on a real phone; Amazon and Settings only) and notes learned by earlier runs, 800 characters in all; guidance only, never read by the guard |
 
 ## The tools
 
@@ -26,6 +27,12 @@ and binds these through [agent/embed.py](../embed.py).
 | `phone_look` | no | `{question}` -- a screenshot through the vision seat, words back |
 | `phone_settings` | no | `{page, package?}` -- a Settings page by intent |
 | `phone_install` | yes | `{package?, query?}` -- the Play listing, Install tapped; free apps only |
+
+The first screen of an app in a run is followed by that app's notes, when it
+has any, under a `NOTES ON <app>` heading that says they are guidance only:
+the stop rules still apply and the screen wins where they disagree. They are
+shown once per app however often it comes back, never on a screen the guard
+refuses, and each note is one inert `- ` line. A folded screen keeps them.
 
 Every result is third-party content to the loop, exactly as a web page is.
 The mutation gate keys on the first line of the body, so a one-line JSON
