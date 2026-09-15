@@ -37,6 +37,7 @@ from typing import Any
 
 from agent.phone import digest as _digest
 from agent.phone import guard
+from agent.phone import notes as _notes
 from agent.phone.backend import PhoneBackend, PhoneError
 from agent.pipeline.toolkit import ExtraTool, json_body, validate_against
 from agent.pipeline.tools import ToolResult
@@ -127,7 +128,9 @@ def _default_vision(question: str, data: bytes, media_type: str) -> str:
 def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[ExtraTool]:
     """The tools, bound to one backend. `vision` replaces the routed vision
     model (tests; a host with its own)."""
-    state: dict[str, Any] = {"snapshot": None}
+    #: `noted`: the packages whose notes (agent/phone/notes.py) this instance
+    #: has shown -- once per app, however often it comes back to the front.
+    state: dict[str, Any] = {"snapshot": None, "unread": "", "noted": set()}
     look_with = vision or _default_vision
 
     # -- helpers ----------------------------------------------------------
@@ -135,8 +138,10 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
     def keep(snapshot: dict | None) -> None:
         """The current screen. Every capture has its own id, and a look
         (phone_look) is keyed to the capture it was taken on, so a new
-        capture is what expires it: nothing to clear here."""
+        capture is what expires it: nothing to clear here. A capture held
+        is also the answer to an earlier screen that could not be read."""
         state["snapshot"] = snapshot
+        state["unread"] = ""
 
     def absorb(snapshot: dict | None) -> str:
         """Keep the screen an action left: the one it handed back, else a
@@ -151,15 +156,25 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                 state["unread"] = f"(could not read the screen after that: {exc})"
                 return state["unread"]
         keep(snapshot)
-        state["unread"] = ""
         return ""
 
     def render_current() -> str:
-        """The screen the last action left, as the model reads it."""
+        """The screen the last action left, as the model reads it, with the
+        app's notes after it the first time that app is in front. Never on a
+        screen the guard refuses: nothing is said about one."""
         if state.get("unread"):
             return state["unread"]
         snapshot = state.get("snapshot")
-        return _digest.render_digest(snapshot) if snapshot else ""
+        if not snapshot:
+            return ""
+        text = _digest.render_digest(snapshot)
+        app = snapshot.get("app") or {}
+        package = str(app.get("package") or "")
+        if package and package not in state["noted"] and not guard.snapshot_verdict(snapshot):
+            state["noted"].add(package)
+            if block := _notes.render_notes(str(app.get("label") or ""), package, _notes.notes_for(package)):
+                text += "\n" + block
+        return text
 
     def screen_now() -> tuple[dict | None, ToolResult | None]:
         """A fresh snapshot, refused as a whole when the guard says so."""
@@ -248,10 +263,10 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         parsed = json_body("phone_screen", body or "{}")
         if isinstance(parsed, ToolResult):
             return parsed
-        snapshot, failure = screen_now()
+        _, failure = screen_now()
         if failure:
             return failure
-        return ToolResult(stdout=_digest.render_digest(snapshot), stderr="", returncode=0)
+        return ToolResult(stdout=render_current(), stderr="", returncode=0)
 
     def blind_tap_refused(name: str) -> ToolResult | None:
         """A tap by coordinates that lands on no element. On a screen that

@@ -18,6 +18,10 @@ its largest call carries phone_do's description, guidance sentence and
 prompt clause without using them: 12 calls, largest 38744 chars (+374). The
 same ten actions as three phone_do calls (two scroll+tap pairs, two, one):
 5 calls, largest 30259 chars.
+after per-app notes: the results page is Amazon's, so its seeded notes
+(agent/phone/assets/app_notes) follow the first screen and ride in every
+later call: 12 calls, largest 39647 chars; batched 5 calls, largest 31162
+(+903 each, once per app per run).
 """
 import json
 
@@ -31,9 +35,9 @@ from agent.pipeline.toolkit import bind_extra_tools
 from tests.phone_fakes import FakePhone, node, snapshot
 
 MAX_LOOP_CALLS = 12
-MAX_LARGEST_CALL_CHARS = 38744
+MAX_LARGEST_CALL_CHARS = 39647
 MAX_BATCHED_LOOP_CALLS = 5
-MAX_BATCHED_LARGEST_CALL_CHARS = 30259
+MAX_BATCHED_LARGEST_CALL_CHARS = 31162
 
 SCRIPT = [
     "ACTION: phone_screen\nCODE:\n{}",
