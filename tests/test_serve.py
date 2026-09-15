@@ -363,3 +363,118 @@ def test_listening_beyond_loopback_says_what_the_token_grants():
     import inspect
 
     assert "no_exec" in inspect.signature(serve_cmd.serve).parameters
+
+
+# --------------------------------------------------------------------------
+# protocol 2 framing: features, request ids, lanes (2026-09-15)
+# --------------------------------------------------------------------------
+
+def _frame(ws, timeout=5):
+    return json.loads(ws.recv(timeout=timeout))
+
+
+def test_every_client_is_told_the_features_and_a_v1_client_is_still_served(server):
+    for version in (1, protocol.PROTOCOL_VERSION):
+        ws, reply = _hello(server, version=version)
+        assert reply["type"] == "hello_ok" and reply["protocol_version"] == 2 and reply["min_protocol"] == 1
+        assert "ids" in reply["features"] and "turn.phone" in reply["features"]
+        ws.close()
+
+
+def test_request_ids_are_echoed_and_a_message_without_one_is_answered_as_in_v1(server):
+    ws, _ = _hello(server)
+    ws.send(json.dumps({"type": "sessions", "op": "list", "id": "r1"}))
+    assert _frame(ws) == {"type": "sessions_result", "id": "r1", "op": "list", "sessions": []}
+    ws.send(json.dumps({"type": "sessions", "op": "list", "id": 7}))
+    assert _frame(ws)["id"] == 7
+    ws.send(protocol.encode("sessions", op="list"))
+    assert ws.recv(timeout=5) == protocol.encode("sessions_result", op="list", sessions=[])
+    ws.send(json.dumps({"type": "sessions", "op": "nope", "id": "r2"}))
+    assert _frame(ws) == {"type": "error", "id": "r2", "code": "unknown", "message": "unknown sessions op 'nope'"}
+    ws.send(json.dumps({"type": "whatever", "id": "r3"}))
+    assert _frame(ws)["id"] == "r3"
+    ws.send(json.dumps({"type": "ping", "id": "p"}))
+    assert _frame(ws) == {"type": "pong", "id": "p"}
+    ws.send(protocol.encode("ping"))
+    assert ws.recv(timeout=5) == protocol.encode("pong")
+    ws.send(json.dumps({"type": "turn", "text": "", "id": "t"}))
+    assert _frame(ws) == {"type": "error", "id": "t", "code": "empty", "message": "turn needs text"}
+    for bad in (True, "x" * 65, [1], "", 2 ** 60):
+        ws.send(json.dumps({"type": "sessions", "op": "list", "id": bad}))
+        reply = _frame(ws)
+        assert reply["type"] == "error" and reply["code"] == "invalid" and "id" not in reply, bad
+    ws.close()
+
+
+def test_a_failing_request_answers_with_its_id_and_the_connection_lives(server, monkeypatch):
+    def broken(self, limit=20):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(embed.Runtime, "list_sessions", broken)
+    ws, _ = _hello(server)
+    ws.send(json.dumps({"type": "sessions", "op": "list", "id": "boom"}))
+    assert _frame(ws) == {"type": "error", "id": "boom", "code": "failed",
+                          "message": "RuntimeError: disk on fire"}
+    ws.send(protocol.encode("ping"))
+    assert _frame(ws)["type"] == "pong"
+    ws.close()
+
+
+def test_a_slow_request_does_not_hold_up_a_ping(server, monkeypatch):
+    release = threading.Event()
+
+    def slow(self, limit=20):
+        release.wait(5)
+        return []
+
+    monkeypatch.setattr(embed.Runtime, "list_sessions", slow)
+    ws, _ = _hello(server)
+    ws.send(json.dumps({"type": "sessions", "op": "list", "id": "slow"}))
+    ws.send(json.dumps({"type": "ping", "id": "quick"}))
+    assert _frame(ws) == {"type": "pong", "id": "quick"}
+    release.set()
+    assert _frame(ws)["id"] == "slow"
+    ws.close()
+
+
+def test_a_running_session_is_not_deleted_and_a_turn_id_rides_on_started(server, monkeypatch):
+    gate = threading.Event()
+
+    def fake_run(text, **kwargs):
+        gate.wait(5)
+        yield {"__final__": {"final_output": "ok"}, "__trace_id__": None}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    ws, _ = _hello(server)
+    ws.send(json.dumps({"type": "turn", "text": "one", "id": "turn-1"}))
+    started = _frame(ws)
+    assert started["id"] == "turn-1" and started["event"]["type"] == "started"
+    sid = started["session_id"]
+    ws.send(json.dumps({"type": "sessions", "op": "delete", "session_id": sid, "id": "d1"}))
+    assert _frame(ws) == {"type": "error", "id": "d1", "code": "busy",
+                          "message": "that session is running a turn; stop it first"}
+    gate.set()
+    final, _ = _recv_until(ws, "event")
+    assert final["event"]["type"] == "final" and "id" not in final
+    ws.send(json.dumps({"type": "sessions", "op": "transcript", "ref": sid, "id": "tr"}))
+    transcript = _frame(ws)
+    assert transcript["id"] == "tr" and transcript["session_id"] == sid
+    ws.send(protocol.encode("sessions", op="transcript", ref=sid))
+    assert _frame(ws)["id"] == sid, "without a request id, v1's shape"
+    ws.send(json.dumps({"type": "sessions", "op": "delete", "session_id": sid, "id": "d2"}))
+    assert _frame(ws) == {"type": "sessions_result", "id": "d2", "op": "delete", "session_id": sid,
+                          "deleted": True}
+    ws.close()
+
+
+def test_a_connection_knows_whether_its_client_is_on_this_computer():
+    from agent.server.app import _peer_is_loopback
+
+    class _Ws:
+        def __init__(self, address):
+            self.remote_address = address
+
+    for address in (("127.0.0.1", 5), ("::1", 5, 0, 0), ("::ffff:127.0.0.1", 5, 0, 0)):
+        assert _peer_is_loopback(_Ws(address)), address
+    for address in (("10.0.0.2", 5), ("192.168.1.9", 5), None, ("not an address", 1)):
+        assert not _peer_is_loopback(_Ws(address)), address
