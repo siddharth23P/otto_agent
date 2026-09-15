@@ -509,3 +509,41 @@ def test_phone_look_refuses_any_screen_that_shows_a_secret():
     assert calls == []
     by_name, _ = _tools(FakePhone([SETTINGS_DISPLAY]), vision=vision)
     assert by_name["phone_look"]('{"question": "ok?"}').ok
+
+
+def test_every_phone_call_is_logged_without_the_words_typed(caplog):
+    """otto serve prints these: the record of a run that went back and forth (2026-09-16)."""
+    import logging
+
+    phone = FakePhone([BLINKIT_SEARCH] * 4)
+    by_name, _ = _tools(phone)
+    with caplog.at_level(logging.INFO, logger="agent.phone.tools"):
+        by_name["phone_screen"]("{}")
+        by_name["phone_act"]('{"op": "type", "target": "Search for products", "text": "my secret shopping list"}')
+        by_name["phone_act"]('{"op": "tap", "target": "Nothing like this"}')
+    lines = [r.getMessage() for r in caplog.records if r.name == "agent.phone.tools"]
+    assert any(line.startswith("phone_screen ") and "-> ok: app: Blinkit" in line for line in lines)
+    typed = next(line for line in lines if "op=type" in line)
+    assert "text=<23 chars>" in typed and "secret" not in typed
+    assert any("op=tap" in line and "-> failed: phone_act: nothing on screen reads" in line for line in lines)
+
+
+def test_an_enter_that_changed_nothing_says_so_to_the_model():
+    """The phone checks the screen moved after Enter; when it did not, the model must read that, not
+    "pressed enter", or it types the same query again."""
+    class Unmoved(FakePhone):
+        def press(self, key):
+            self.calls.append(("press", key))
+            return self._reply("press", {"done": "pressed enter, but nothing on screen changed -- tap the "
+                                                 "suggestion or the button you mean instead of typing again",
+                                         "after": self._next()})
+
+    box = snapshot("q", "in.amazon.mShop.android.shopping", "Amazon",
+                   [node(1, "ball pen", r="edit-field", e=True, f=True, c=True, v="rs_search_src_text")])
+    by_name, _ = _tools(Unmoved([box] * 4))
+    assert by_name["phone_screen"]("{}").ok
+    result = by_name["phone_act"]('{"op": "press", "key": "enter"}')
+    assert result.ok and result.stdout.startswith("pressed enter, but nothing on screen changed")
+    by_name, _ = _tools(FakePhone([box] * 4))
+    by_name["phone_screen"]("{}")
+    assert by_name["phone_act"]('{"op": "press", "key": "enter"}').stdout.startswith("pressed enter\n")
