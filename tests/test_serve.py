@@ -962,3 +962,57 @@ def test_the_lesson_bank_and_the_app_notes_agree_on_what_a_package_is():
     for package in (AMAZON, "com.android.settings", "a.b", "../x", "a/b", "x", "", "a..b", "1a.b", "a.b_c.D9"):
         assert L.valid_kind(L.APP_NOTE_PREFIX + package) == N.valid_package(package), package
     assert "in.amazon.mShop.android.shopping" in N.seeded_packages()
+
+
+# --------------------------------------------------------------------------
+# files: a research document from the session's workspace (protocol 2)
+# --------------------------------------------------------------------------
+
+def test_a_research_document_is_fetched_from_the_sessions_workspace_and_nowhere_else(server, monkeypatch, tmp_path):
+    import base64
+    import os
+    import time
+
+    sid = "d" * 32
+    root = embed.session_workspace(sid)
+    older = root / "otto_research" / "first-draft"
+    newer = root / "otto_research" / "tides"
+    for folder in (older, newer):
+        folder.mkdir(parents=True)
+        (folder / "document.md").write_text(f"# {folder.name}\n")
+    (newer / "document.docx").write_bytes(b"PK\x03\x04docx")
+    past = time.time() - 60
+    os.utime(older / "document.md", (past, past))
+
+    ws, _ = _hello(server)
+    docx = _request(ws, type="files", session_id=sid, name="document.docx", id="f")
+    assert {k: docx[k] for k in ("type", "id", "op", "session_id", "name", "path", "format", "mime", "size")} == {
+        "type": "files_result", "id": "f", "op": "get", "session_id": sid, "name": "document.docx",
+        "path": "otto_research/tides/document.docx", "format": "docx",
+        "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "size": 8}
+    assert base64.b64decode(docx["data"]) == b"PK\x03\x04docx"
+    newest = _request(ws, type="files", session_id=sid, name="document.md", id="m")
+    assert newest["path"] == "otto_research/tides/document.md"
+    named = _request(ws, type="files", op="get", session_id=sid, name="otto_research/first-draft/document.md", id="n")
+    assert base64.b64decode(named["data"]) == b"# first-draft\n"
+
+    for bad in ("../document.md", "otto_research/../../document.md", "notes.txt", "otto_research/.x/document.md",
+                "/etc/document.md", None):
+        assert _request(ws, type="files", session_id=sid, name=bad, id="bad")["code"] == "invalid", bad
+    assert _request(ws, type="files", session_id=sid, name="document.pdf", id="p")["code"] == "not_found"
+    assert _request(ws, type="files", session_id="e" * 32, name="document.md", id="e")["code"] == "not_found"
+    assert _request(ws, type="files", session_id="../x", name="document.md", id="s")["code"] == "invalid_session"
+    assert _request(ws, type="files", op="put", session_id=sid, name="document.md", id="u")["code"] == "unknown"
+
+    if os.name != "nt":
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "document.pdf").write_bytes(b"%PDF secret")
+        (root / "otto_research" / "escape").symlink_to(outside, target_is_directory=True)
+        for name in ("document.pdf", "otto_research/escape/document.pdf"):
+            assert _request(ws, type="files", session_id=sid, name=name, id="l")["code"] == "not_found", name
+
+    monkeypatch.setattr(embed, "FILE_MAX_BYTES", 4)
+    too_big = _request(ws, type="files", session_id=sid, name="document.docx", id="t")
+    assert too_big["type"] == "error" and too_big["code"] == "too_large"
+    ws.close()
