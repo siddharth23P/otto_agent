@@ -312,6 +312,99 @@ def apply(routes: dict[Task, tuple[Candidate, ...]] = TASK_ROUTES,
     return problems
 
 
+# --------------------------------------------------------------------------
+# Seats: a pin for one run, not for the installation
+# --------------------------------------------------------------------------
+#
+# A pin in routes.json is this machine's choice for every run. A seat is a
+# HOST's choice for the runs it drives: the phone host wants its judge fast,
+# because a phone turn is a person holding their phone waiting, while a
+# coding run on the same machine must keep the judge routes.json pinned. So a
+# seat is bound with a context manager (agent/embed.py binds it around one
+# turn), leads that task's chain exactly as a pin would, keeps the live chain
+# -- pin included -- behind it as the fallback, and is never
+# evidence-reordered, for the same reason a pin is not.
+
+#: Task -> the seat Candidate bound for this context. Empty outside a binding.
+_SEATS: ContextVar[Mapping[Task, Candidate]] = ContextVar("otto_route_seats", default={})
+#: Providers already reported as having no key, so a seat bound on every turn
+#: of a long session says so once rather than once per turn.
+_SEAT_UNCONFIGURED_LOGGED: set[str] = set()
+
+
+def _seat_candidate(task: Task, spec: str) -> Candidate:
+    """The Candidate a seat on `task` becomes -- built exactly as `apply()`
+    builds a pin, against the live chain, and validated the same way."""
+    validate_pin(task, spec)
+    chain = TASK_ROUTES[task]
+    provider, _, _ = spec.partition(":")
+    seat = Candidate(
+        spec=spec,
+        requires=_pin_requires(chain[0]),
+        endpoint=chain[0].endpoint,
+        params=_pin_params(provider, chain),
+    )
+    mapping.validate({**TASK_ROUTES, task: (seat, *[c for c in chain if c.spec != spec])})
+    return seat
+
+
+def _provider_configured(provider: str) -> bool:
+    try:
+        from agent.router.llm_provider import provider_class
+
+        return bool(provider_class(provider).is_configured())
+    except Exception:  # SDK not installed, unknown custom name
+        return False
+
+
+@contextmanager
+def bind_seats(seats: Mapping[Task | str, str] | None) -> Iterator[dict[Task, str]]:
+    """Put each `task -> "provider:model"` at the head of that task's chain
+    for the duration. Never raises: a seat that cannot work is logged and
+    skipped, and the task keeps the chain it had. A seat whose provider has
+    no key is still bound -- resolution skips it legibly ("GEMINI_API_KEY not
+    set") and falls back, which is what a person reading a trace should see.
+    Yields what was bound."""
+    bound: dict[Task, Candidate] = {}
+    for key, spec in (seats or {}).items():
+        try:
+            task = key if isinstance(key, Task) else Task(str(key))
+        except ValueError:
+            log.warning("seats: unknown task %r, skipped", key)
+            continue
+        spec = str(spec or "").strip()
+        try:
+            seat = _seat_candidate(task, spec)
+        except (PinError, MappingError) as exc:
+            log.warning("seats: %s -> %s: %s, skipped", task.value, spec, exc)
+            continue
+        provider = spec.partition(":")[0]
+        if provider not in _SEAT_UNCONFIGURED_LOGGED and not _provider_configured(provider):
+            _SEAT_UNCONFIGURED_LOGGED.add(provider)
+            log.warning("seats: %s -> %s has no %s key; %s falls back to its usual chain",
+                        task.value, spec, provider, task.value)
+        bound[task] = seat
+    token = _SEATS.set({**_SEATS.get(), **bound})
+    try:
+        yield {task: c.spec for task, c in bound.items()}
+    finally:
+        _SEATS.reset(token)
+
+
+def bound_chain(task: Task) -> tuple[Candidate, ...] | None:
+    """The chain a bound seat makes for `task`, or None when none is bound.
+    Computed at resolve time, not at bind time, so a pin changed mid-turn
+    (the setup screen) is still the fallback behind the seat."""
+    seat = _SEATS.get().get(task)
+    if seat is None:
+        return None
+    return (seat, *[c for c in TASK_ROUTES[task] if c.spec != seat.spec])
+
+
+def is_bound(task: Task, c: Candidate) -> bool:
+    return _SEATS.get().get(task) is c
+
+
 def apply_at_startup() -> None:
     """Called by agent/cli/main.py before the pipeline imports. Swallows
     everything: a preferences file can degrade routing, never prevent it."""

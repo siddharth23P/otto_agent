@@ -153,15 +153,17 @@ class Connection:
             frame = protocol.encode("event", session_id=session_id, event=event)
             self.loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self.send(frame)))
 
-        tools, guidance, disabled = [], "", ()
+        tools, guidance, disabled, seats = [], "", (), {}
         if self.phone is not None:
-            from agent.phone import PHONE_DISABLED_STANDING_TOOLS, PHONE_GUIDANCE, JsonBackend, phone_tools
+            from agent.phone import (PHONE_DISABLED_STANDING_TOOLS, PHONE_GUIDANCE, PHONE_SEATS,
+                                     JsonBackend, phone_tools)
 
             tools = phone_tools(JsonBackend(self.phone))
-            guidance, disabled = PHONE_GUIDANCE, PHONE_DISABLED_STANDING_TOOLS
+            guidance, disabled, seats = PHONE_GUIDANCE, PHONE_DISABLED_STANDING_TOOLS, PHONE_SEATS
 
         def run() -> None:
-            handle.run(text, events=events, tools=tools, guidance=guidance, disabled_tools=disabled)
+            handle.run(text, events=events, tools=tools, guidance=guidance, disabled_tools=disabled,
+                       seats=seats)
 
         self.turns[session_id] = self.loop.run_in_executor(self.executor, run)
 
