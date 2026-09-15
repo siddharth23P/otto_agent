@@ -28,6 +28,9 @@ client -> server
                     {op: import, data}                                   protocol 2
     setup           {op: status | set_key | probe, name?, value?}        protocol 2
     routing         {op: list | options | pin | clear, task?, spec?}     protocol 2
+    lessons         {op: list | delete | clear, kind, lesson_id?}        protocol 2
+                    kind: lesson | phone_lesson | app_note:<package>; lesson_id: 64 hex
+    notes           {op: list | get | delete, package?, lesson_id?}      protocol 2
     doctor          {}                                                   protocol 2
     models          {}                                                   protocol 2
     ping            {}
@@ -46,6 +49,11 @@ server -> client
     routing_result  list    {routes: [{task, pin, default, provider_only: {provider, reason}?, phone_seat}]}
                     options {task, pin, options: [{label, spec}]}   ("" spec is no pin)
                     pin / clear {task, pin, problems}
+    lessons_result  list   {kind, lessons: [{lesson_id, cue, action, outcome, text}]}
+                    delete {kind, lesson_id, deleted}    clear {kind, removed}
+    notes_result    list   {notes: [{package, seeded, learned}]}
+                    get    {package, seeded, learned: [{lesson_id, cue, action, outcome, text}], shown: [...]}
+                    delete {package, lesson_id, deleted}
     doctor_result   {providers: [{provider, status, models, detail}], ready, required, also_configured}
     models_result   {models: [{spec, provider, id, display_name, capabilities, context_window,
                                max_output_tokens}]}
@@ -67,7 +75,7 @@ MIN_PROTOCOL = 1
 FEATURES: tuple[str, ...] = (
     "ids", "turn.phone",
     "sessions.close", "sessions.rename", "sessions.export", "sessions.import", "sessions.usage",
-    "setup", "doctor", "models", "routing",
+    "setup", "doctor", "models", "routing", "lessons", "notes",
 )
 
 #: The longest string request id echoed back.
@@ -82,11 +90,12 @@ INSTALL_TIMEOUT_S = 180.0
 MAX_FRAME_BYTES = 12 * 1024 * 1024
 
 
-def encode(kind: str, **fields: Any) -> str:
+def encode(kind: str, /, **fields: Any) -> str:
+    # Positional-only: a frame may carry a field called `kind` (lessons).
     return json.dumps({"type": kind, **fields}, ensure_ascii=False)
 
 
-def reply(kind: str, request_id: str | int | None = None, **fields: Any) -> str:
+def reply(kind: str, request_id: str | int | None = None, /, **fields: Any) -> str:
     """`encode`, with the request's id when it had one -- and exactly
     `encode` when it did not, which is what keeps protocol 1 unchanged."""
     if request_id is None:

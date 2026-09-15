@@ -859,3 +859,106 @@ def test_routing_is_not_changed_from_elsewhere_or_under_a_turn(server, routes_fi
     assert not routes_file.exists()
     ws.close()
     remote.close()
+
+
+# --------------------------------------------------------------------------
+# lessons and app notes (protocol 2)
+# --------------------------------------------------------------------------
+
+AMAZON = "in.amazon.mShop.android.shopping"
+
+
+@pytest.fixture
+def lesson_bank(tmp_path, monkeypatch):
+    """A bank in tmp_path for every thread (bind_bank is a contextvar the
+    server's threads cannot see), seeded with rows written straight to the
+    store: two workspace lessons, one phone lesson, one Amazon note."""
+    from agent.memory import lessons as L
+    from agent.memory.store import MemoryStore
+
+    monkeypatch.setattr(L, "DB_DIR", tmp_path / "bank")
+    store = MemoryStore(L.bank_path())
+    seeded = {}
+    for kind, lesson in ((L.KIND, L.Lesson("a test fails on import", "check the path first")),
+                         (L.KIND, L.Lesson("a build is slow", "cache the wheel", "failed")),
+                         (L.PHONE_KIND, L.Lesson("a list will not scroll", "name it by its number")),
+                         (L.APP_NOTE_PREFIX + AMAZON, L.Lesson("the results page", "sponsored items are marked ad"))):
+        with L.bind_kind(kind):
+            text = lesson.rendered()
+            store.add_chunk(kind, L._hash(text), text)
+            seeded.setdefault(kind, []).append(L._hash(text))
+    store.close()
+    return seeded
+
+
+def test_lessons_are_listed_deleted_and_cleared_by_kind(server, lesson_bank):
+    ws, _ = _hello(server)
+    listed = _request(ws, type="lessons", op="list", kind="lesson", id="l")
+    assert listed["type"] == "lessons_result" and listed["kind"] == "lesson"
+    assert [row["lesson_id"] for row in listed["lessons"]] == lesson_bank["lesson"]
+    assert listed["lessons"][1] == {"lesson_id": lesson_bank["lesson"][1], "cue": "a build is slow",
+                                    "action": "cache the wheel", "outcome": "failed",
+                                    "text": "When a build is slow: cache the wheel [failed]"}
+    gone = lesson_bank["lesson"][0]
+    assert _request(ws, type="lessons", op="delete", kind="lesson", lesson_id=gone, id="d") == {
+        "type": "lessons_result", "id": "d", "op": "delete", "kind": "lesson", "lesson_id": gone, "deleted": True}
+    assert _request(ws, type="lessons", op="delete", kind="lesson", lesson_id=gone, id="d2")["deleted"] is False
+    assert len(_request(ws, type="lessons", op="list", kind="lesson", id="l2")["lessons"]) == 1
+    assert _request(ws, type="lessons", op="clear", kind="phone_lesson", id="c") == {
+        "type": "lessons_result", "id": "c", "op": "clear", "kind": "phone_lesson", "removed": 1}
+    assert _request(ws, type="lessons", op="list", kind="phone_lesson", id="l3")["lessons"] == []
+    for bad in ({"kind": "app_note:../x"}, {"kind": "nope"}, {"kind": "app_note:"}, {"kind": None},
+                {"kind": "lesson", "op": "delete", "lesson_id": "abc"},
+                {"kind": "lesson", "op": "delete", "lesson_id": gone.upper()}):
+        reply = _request(ws, type="lessons", **{"op": "list", **bad, "id": "bad"})
+        assert reply["type"] == "error" and reply["code"] == "invalid", bad
+    assert _request(ws, type="lessons", op="list", kind="lesson", id="l4")["lessons"][0]["cue"] == "a build is slow"
+    ws.close()
+
+
+def test_app_notes_list_shipped_and_learned_and_only_learned_ones_go(server, lesson_bank):
+    ws, _ = _hello(server)
+    listed = {row["package"]: row for row in _request(ws, type="notes", op="list", id="n")["notes"]}
+    assert listed[AMAZON] == {"package": AMAZON, "seeded": True, "learned": 1}
+    assert listed["com.android.settings"]["seeded"] is True
+    got = _request(ws, type="notes", op="get", package=AMAZON, id="g")
+    assert got["type"] == "notes_result" and got["package"] == AMAZON and "Sort" in got["seeded"]
+    note_id = lesson_bank["app_note:" + AMAZON][0]
+    assert [row["lesson_id"] for row in got["learned"]] == [note_id]
+    assert any("sponsored items are marked ad" in line for line in got["shown"])
+    assert _request(ws, type="notes", op="delete", package=AMAZON, lesson_id=note_id, id="d") == {
+        "type": "notes_result", "id": "d", "op": "delete", "package": AMAZON, "lesson_id": note_id, "deleted": True}
+    assert _request(ws, type="notes", op="get", package=AMAZON, id="g2")["learned"] == []
+    for bad in ({"op": "get", "package": "../x"}, {"op": "delete", "package": "a/b", "lesson_id": note_id},
+                {"op": "delete", "package": AMAZON, "lesson_id": "x"}):
+        assert _request(ws, type="notes", **bad, id="bad")["code"] == "invalid", bad
+    ws.close()
+
+
+def test_learned_things_are_not_deleted_under_a_running_turn(server, lesson_bank, monkeypatch):
+    gate = threading.Event()
+
+    def fake_run(text, **kwargs):
+        gate.wait(5)
+        yield {"__final__": {"final_output": "ok"}, "__trace_id__": None}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    ws, _ = _hello(server)
+    ws.send(protocol.encode("turn", text="one"))
+    assert _frame(ws)["event"]["type"] == "started"
+    note_id = lesson_bank["app_note:" + AMAZON][0]
+    assert _request(ws, type="lessons", op="clear", kind="lesson", id="c")["code"] == "busy"
+    assert _request(ws, type="notes", op="delete", package=AMAZON, lesson_id=note_id, id="d")["code"] == "busy"
+    assert _request(ws, type="lessons", op="list", kind="lesson", id="l")["type"] == "lessons_result"
+    gate.set()
+    _recv_until(ws, "event")
+    ws.close()
+
+
+def test_the_lesson_bank_and_the_app_notes_agree_on_what_a_package_is():
+    from agent.memory import lessons as L
+    from agent.phone import notes as N
+
+    for package in (AMAZON, "com.android.settings", "a.b", "../x", "a/b", "x", "", "a..b", "1a.b", "a.b_c.D9"):
+        assert L.valid_kind(L.APP_NOTE_PREFIX + package) == N.valid_package(package), package
+    assert "in.amazon.mShop.android.shopping" in N.seeded_packages()

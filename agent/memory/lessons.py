@@ -518,6 +518,97 @@ class ImportReport:
         return ", ".join(bits)
 
 
+# --------------------------------------------------------------------------
+# Looking after a bank from outside a run: a host's lessons screen
+# --------------------------------------------------------------------------
+
+#: The kind prefix agent/phone/notes.py stores an app's learned notes under.
+APP_NOTE_PREFIX = "app_note:"
+#: An Android package name, as agent/phone/notes.py `valid_package` checks it
+#: (tests/test_serve.py keeps the two in step): this package may not import
+#: agent.phone, which imports it.
+_PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
+#: A lesson's id is its chunk hash (agent/memory/hashing.py): sha256 hex.
+_LESSON_ID = re.compile(r"[0-9a-f]{64}")
+
+
+def valid_kind(kind: object) -> bool:
+    """`lesson`, `phone_lesson`, or `app_note:<package>` -- the kinds a host
+    may name. Anything else never reaches a query."""
+    if kind in (KIND, PHONE_KIND):
+        return True
+    return (isinstance(kind, str) and kind.startswith(APP_NOTE_PREFIX)
+            and bool(_PACKAGE.fullmatch(kind[len(APP_NOTE_PREFIX):])))
+
+
+def valid_lesson_id(lesson_id: object) -> bool:
+    return isinstance(lesson_id, str) and bool(_LESSON_ID.fullmatch(lesson_id))
+
+
+@contextmanager
+def bank_session():
+    """The bank for the duration, for a caller outside a run -- a host's
+    request thread, where nothing is bound and `_bank()` would open the file
+    again on every call and never close it. A bank already bound (a test's,
+    or None for off) is used as it is; otherwise the default one is opened,
+    bound, and closed afterwards. Yields the store, or None."""
+    bound = _BANK.get()
+    if bound is not _UNSET:
+        yield bound
+        return
+    try:
+        store = MemoryStore(bank_path())
+    except (OSError, ValueError) as exc:
+        log.warning("lesson bank unavailable: %s", exc)
+        store = None
+    try:
+        with bind_bank(store):
+            yield store
+    finally:
+        if store is not None:
+            store.close()
+
+
+def list_kind(kind: str) -> list[dict]:
+    """Every stored item of `kind`, oldest first, with the id `delete_lesson`
+    takes as `lesson_id` -- not `id`, which a host's protocol already uses for
+    its own requests (agent/server/protocol.py). A row that does not parse is
+    listed with its text and no parts, so it can still be seen and deleted."""
+    store = _bank()
+    if store is None:
+        return []
+    rows = []
+    for row in store.get_chunk_rows(kind, store.chunk_hashes(kind)):
+        lesson = _parse(row.content)
+        rows.append({"lesson_id": row.hash, "cue": lesson.cue if lesson else None,
+                     "action": lesson.action if lesson else None,
+                     "outcome": lesson.outcome if lesson else None, "text": row.content})
+    return rows
+
+
+def delete_lesson(kind: str, lesson_id: str) -> bool:
+    """Forget one item of `kind`. A write, so a read-only run deletes
+    nothing. True when it was there."""
+    store = _bank()
+    if store is None or not _WRITES.get():
+        return False
+    removed = store._conn.execute("DELETE FROM chunks WHERE kind = ? AND hash = ?", (kind, lesson_id)).rowcount
+    store._conn.commit()
+    return removed > 0
+
+
+def note_kinds() -> list[str]:
+    """The `app_note:<package>` kinds the bank holds anything under."""
+    store = _bank()
+    if store is None:
+        return []
+    rows = store._conn.execute(
+        "SELECT DISTINCT kind FROM chunks WHERE substr(kind, 1, ?) = ? ORDER BY kind",
+        (len(APP_NOTE_PREFIX), APP_NOTE_PREFIX),
+    ).fetchall()
+    return [r[0] for r in rows if valid_kind(r[0])]
+
+
 def clear_bank() -> int:
     """Delete every lesson. Returns how many there were. Not undoable."""
     store = _bank()
