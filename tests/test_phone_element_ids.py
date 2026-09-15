@@ -66,9 +66,34 @@ def test_add_to_cart_is_reached_by_its_id_and_buy_now_is_refused_whatever_it_is_
         result = by_name["phone_commit"](f'{{"target": "{target}"}}')
         assert result.stderr.startswith("GUARD:") and "'Submit' #buy-now-button is a payment step" in result.stderr, target
     result = by_name["phone_act"]('{"op": "press", "key": "enter"}')
-    assert result.stderr.startswith("GUARD:") and "buy-now-button" in result.stderr
+    # Not a checkout, so not a hand-over: Enter is declined and the model is
+    # pointed at the button it means.
+    assert not result.ok and not result.stderr.startswith("GUARD:")
+    assert "buy-now-button" in result.stderr and "Add to Cart" in result.stderr
     assert not any(c[0] == "tap_node" and c[2] == 6 for c in phone.calls)
     assert not any(c[0] == "press" for c in phone.calls)
+
+
+def test_enter_is_judged_on_the_screen_as_it_is_now_not_as_it_was_last_read():
+    """2026-09-15, a Galaxy S23: a tapped Amazon search suggestion returned
+    before the results loaded, Enter was pressed on results carrying "Buy for
+    ₹71,549 with HDFC", and the phone's guard handed the whole run over."""
+    suggestions = snapshot("sg", "in.amazon.mShop.android.shopping", "Amazon", [
+        node(1, "samsung galaxy z flip6 5g 256gb", r="view", b=(0, 400, 1440, 520), c=True),
+    ])
+    results = snapshot("rs", "in.amazon.mShop.android.shopping", "Amazon", [
+        node(1, "Samsung Galaxy Z Flip6 5G (256GB)", r="view", b=(0, 900, 1440, 1000), c=True),
+        node(2, "₹71,599 M.R.P: ₹1,09,999 (35% off) Buy for ₹71,549 with HDFC Bank credit card", r="view",
+             b=(0, 1000, 1440, 1100), c=True),
+    ])
+    phone = FakePhone([suggestions, suggestions, results, results])
+    by_name = _tools(phone)
+    assert by_name["phone_screen"]("{}").ok
+    assert by_name["phone_act"]('{"op": "tap", "target": "samsung galaxy z flip6 5g 256gb"}').ok
+    result = by_name["phone_act"]('{"op": "press", "key": "enter"}')
+    assert not result.ok and not result.stderr.startswith("GUARD:")
+    assert "Buy for ₹71,549" in result.stderr and "Add to Cart" in result.stderr
+    assert not any(call[0] == "press" for call in phone.calls)
 
 
 def test_a_swipe_starts_where_asked_and_is_judged_by_what_is_under_it():
