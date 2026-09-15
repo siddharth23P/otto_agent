@@ -255,3 +255,28 @@ def test_turns_run_on_the_servers_own_bounded_pool(server, monkeypatch):
     _recv_until(ws, "event")
     ws.close()
     assert names and names[0].startswith("otto-turn")
+
+
+def test_a_session_id_that_is_not_one_is_refused_and_touches_nothing(server):
+    """`sessions{op:"delete", session_id:"../lessons"}` used to reach
+    `sessions.delete` as a path (2026-09-15)."""
+    from agent.memory import store as store_module
+
+    store_module.DB_DIR.mkdir(parents=True, exist_ok=True)
+    planted = store_module.DB_DIR / "lessons.db"
+    planted.write_text("the bank")
+    ws, _ = _hello(server)
+    for frame in (protocol.encode("sessions", op="delete", session_id="../lessons"),
+                  protocol.encode("sessions", op="delete", session_id="lessons"),
+                  protocol.encode("sessions", op="open", ref="../x"),
+                  protocol.encode("sessions", op="transcript", ref="a/b"),
+                  protocol.encode("turn", session_id="../x", text="hi"),
+                  protocol.encode("answer", session_id="../x", thread_id="t", text="a"),
+                  protocol.encode("cancel", session_id="nope")):
+        ws.send(frame)
+        reply = json.loads(ws.recv(timeout=5))
+        assert reply["type"] == "error" and reply["code"] == "invalid_session", frame
+    assert planted.read_text() == "the bank"
+    ws.send(protocol.encode("ping"))
+    assert json.loads(ws.recv(timeout=5))["type"] == "pong"
+    ws.close()

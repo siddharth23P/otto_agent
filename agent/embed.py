@@ -260,9 +260,16 @@ class Runtime:
 
     def open_session(self, ref: str | None = None) -> "SessionHandle":
         """A fresh session, or a saved one by id, unique prefix or "last"
-        (LookupError with the reason, as `otto sessions` prints it)."""
-        from agent.cli.shell import Session
+        (LookupError with the reason, as `otto sessions` prints it).
 
+        `ref` must look like one: "last" or lower-case hex. Anything else
+        raises agent/memory/sessions.py's InvalidSessionId (a LookupError and
+        a ValueError) before it can reach a query or a file name."""
+        from agent.cli.shell import Session
+        from agent.memory.sessions import check_ref
+
+        if ref is not None:
+            check_ref(ref)
         session = Session(ctx=self._ctx, workspace=None)
         if ref is not None:
             session.load(ref)
@@ -275,17 +282,20 @@ class Runtime:
 
     def delete_session(self, session_id: str) -> bool:
         """Close the handle first if it is open: SQLite on Windows will not
-        delete a file a connection still holds."""
+        delete a file a connection still holds.
+
+        A full id only -- no prefix, no "last": deleting is not a place to
+        guess. InvalidSessionId for anything else."""
         from agent.memory import sessions as index
 
-        return index.delete(session_id)
+        return index.delete(index.check_id(session_id))
 
     def transcript(self, ref: str) -> dict[str, Any]:
         """What a resumed session would show: the compacted earlier part as
         text, and the recent turns as messages."""
         from langchain_core.messages import HumanMessage
 
-        handle = self.open_session(ref)
+        handle = self.open_session(ref)  # checks `ref`
         try:
             earlier, messages = handle._session.transcript()
             return {

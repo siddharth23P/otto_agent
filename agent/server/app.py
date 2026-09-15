@@ -30,6 +30,28 @@ class ProtocolError(Exception):
     pass
 
 
+class InvalidSession(Exception):
+    """A session id or ref from the client that is not one otto mints."""
+
+
+def _sid(value: Any, *, ref: bool = False, required: bool = True) -> str:
+    """The client's `session_id` (or `ref`, which may also be a hex prefix or
+    "last") once it is known to be one, else InvalidSession -- the error
+    frame `invalid_session`. Every id a client sends passes through here
+    before it reaches a handle, a query or a file name: a session id used to
+    go straight into `sessions.delete`, which made it a path. Empty is
+    returned as "" when `required` is False, for the messages where no id
+    has always meant "none"."""
+    from agent.memory.sessions import valid_id, valid_ref
+
+    text = value if isinstance(value, str) else ("" if value is None else str(value))
+    if not text and not required:
+        return ""
+    if (valid_ref if ref else valid_id)(text):
+        return text
+    raise InvalidSession(f"{text[:80]!r} is not a session id" + (", prefix or 'last'" if ref else ""))
+
+
 #: How many sessions one connection may hold open. A phone uses one or two;
 #: the cap bounds what a client holding the token can spend, which is the
 #: one thing the shared-token trust model does not otherwise limit.
@@ -109,6 +131,12 @@ class Connection:
 
     async def dispatch(self, raw: str | bytes) -> None:
         message = protocol.decode(raw)
+        try:
+            await self._dispatch(message)
+        except InvalidSession as exc:
+            await self.send_error("invalid_session", str(exc))
+
+    async def _dispatch(self, message: dict) -> None:
         kind = message["type"]
         if kind == "invalid":
             await self.send_error("invalid", message["reason"])
@@ -120,11 +148,11 @@ class Connection:
         elif kind == "turn":
             await self.start_turn(message)
         elif kind == "answer":
-            handle = self.handles.get(str(message.get("session_id") or ""))
+            handle = self.handles.get(_sid(message.get("session_id"), required=False))
             if handle is None or not handle.answer(str(message.get("thread_id") or ""), str(message.get("text") or "")):
                 await self.send_error("no_question", "no question is waiting for that answer")
         elif kind == "cancel":
-            handle = self.handles.get(str(message.get("session_id") or ""))
+            handle = self.handles.get(_sid(message.get("session_id"), required=False))
             if handle is not None:
                 handle.cancel()
         elif kind == "sessions":
@@ -137,8 +165,9 @@ class Connection:
         if not text:
             await self.send_error("empty", "turn needs text")
             return
+        session_ref = _sid(message.get("session_id"), required=False) or None
         try:
-            handle = self.handle_for(message.get("session_id"))
+            handle = self.handle_for(session_ref)
         except LookupError as exc:
             await self.send_error("no_session", str(exc))
             return
@@ -176,14 +205,15 @@ class Connection:
                 rows = runtime.list_sessions(limit=int(limit) if limit else 20)
                 await self.send(protocol.encode("sessions_result", op=op, sessions=rows))
             elif op == "open":
-                handle = self.handle_for(None, str(message.get("ref") or "") or None)
+                handle = self.handle_for(None, _sid(message.get("ref"), ref=True, required=False) or None)
                 await self.send(protocol.encode("sessions_result", op=op, session_id=handle.id,
                                                 title=handle.title, turns=handle.turns))
             elif op == "transcript":
                 await self.send(protocol.encode("sessions_result", op=op,
-                                                **runtime.transcript(str(message.get("ref") or "last"))))
+                                                **runtime.transcript(
+                                                    _sid(message.get("ref") or "last", ref=True))))
             elif op == "delete":
-                sid = str(message.get("session_id") or "")
+                sid = _sid(message.get("session_id"))
                 handle = self.handles.pop(sid, None)
                 if handle is not None:
                     handle.close()

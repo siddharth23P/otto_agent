@@ -584,3 +584,57 @@ def test_the_command_exports_and_imports(tmp_path, monkeypatch):
     assert imported.exit_code == 0 and "imported" in imported.output and "--resume" in imported.output
     assert len(index.list_sessions()) == 2
     assert run("--import", str(tmp_path / "missing.json")).exit_code == 1
+
+
+# --------------------------------------------------------------------------
+# A session id never becomes a path (2026-09-15)
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", ["", "../lessons", "a/b", "..", ".hidden", "a\\b", "a\x00b",
+                                 "/etc/passwd"])
+def test_a_session_id_that_is_not_a_file_name_is_refused(bad):
+    with pytest.raises(ValueError):
+        session_db_path(bad)
+
+
+def test_plain_test_and_benchmark_ids_still_name_files():
+    assert session_db_path("abc").name == "abc.db"
+    assert session_db_path("eval-1a2b3c4d").parent == store_module.DB_DIR
+
+
+def test_delete_is_confined_to_the_memory_directory_and_spares_the_lesson_bank(tmp_path):
+    memory = store_module.DB_DIR
+    MemoryStore(memory / "lessons.db").close()
+    outside = memory.parent / "planted.db"
+    outside.write_text("keep me")
+    with pytest.raises(ValueError):
+        index.delete("lessons")
+    with pytest.raises(ValueError):
+        index.delete("../planted")
+    assert (memory / "lessons.db").exists() and outside.read_text() == "keep me"
+
+
+def test_host_ids_are_strict_hex():
+    good = "0123456789abcdef0123456789abcdef"
+    assert index.valid_id(good) and not index.valid_id(good.upper())
+    assert not index.valid_id("abc") and not index.valid_id(good + "0") and not index.valid_id(None)
+    assert index.valid_ref("last") and index.valid_ref("abcd1234") and not index.valid_ref("../x")
+    with pytest.raises(LookupError):
+        index.check_id("../lessons")
+    with pytest.raises(ValueError):
+        index.check_ref("")
+
+
+def test_an_import_with_a_non_hex_id_gets_a_minted_one(tmp_path):
+    first = Session(ctx=FakeCtx(), workspace=None)
+    first.record_turn(HumanMessage("hi"), AIMessage("hello"))
+    path = index.export_session(first.session_id, tmp_path / "s.json")
+    first.close()
+    index.delete(first.session_id)
+    import json
+
+    payload = json.loads(path.read_text())
+    payload["session"]["id"] = "../../lessons"
+    path.write_text(json.dumps(payload))
+    info = index.import_session(path)
+    assert index.valid_id(info.id) and session_db_path(info.id).exists()

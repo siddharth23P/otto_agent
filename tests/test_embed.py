@@ -355,3 +355,24 @@ def test_configure_without_a_source_keeps_the_environment(tmp_path, monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ambient-0000")
     embed.configure(tmp_path / "home")
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ambient-0000"
+
+
+def test_the_runtime_takes_only_ids_otto_mints(configured):
+    """A host hands session ids from its UI (or a socket) straight to these;
+    `delete_session("../lessons")` used to unlink the lesson bank."""
+    from agent.memory import store as store_module
+    from agent.memory.sessions import InvalidSessionId
+
+    runtime = embed.Runtime()
+    store_module.DB_DIR.mkdir(parents=True, exist_ok=True)
+    bank = store_module.DB_DIR / "lessons.db"
+    bank.write_text("bank")
+    for bad in ("../lessons", "lessons", "abc", ""):
+        with pytest.raises(InvalidSessionId):
+            runtime.delete_session(bad)
+    with pytest.raises(LookupError):
+        runtime.open_session("../lessons")
+    with pytest.raises(ValueError):
+        runtime.transcript("a/b")
+    assert bank.read_text() == "bank"
+    assert runtime.delete_session("0" * 32) is False
