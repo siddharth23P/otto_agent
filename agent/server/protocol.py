@@ -6,7 +6,8 @@ an app pinned to an older otto keeps working across one bump.
 
 client -> server
     hello           {protocol_version, token, device?, capabilities?: ["phone"]}
-    turn            {session_id?, text}              start a turn (one at a time per session)
+    turn            {session_id?, text, phone?}      start a turn (one at a time per session);
+                                                     phone: auto (default) | on | off
     answer          {session_id, thread_id, text}    answer an `ask`
     cancel          {session_id}
     device_result   {id, ok, data?, error?}          the reply to a `device_call`
@@ -15,10 +16,12 @@ client -> server
 
 server -> client
     hello_ok        {otto_version, api_version, protocol_version, min_protocol}
-    event           {session_id, event}              an agent/embed.py event dict
+    event           {session_id, event}              an agent/embed.py event dict, after
+                                                     {type: started, session_id, budget_max}
     device_call     {id, method, args, timeout}      run a PhoneBackend method on the phone
     sessions_result {op, ...}
-    error           {code, message}
+    error           {code, message}                  codes include invalid_session, busy,
+                                                     no_session, invalid, no_phone
     pong            {}
 """
 from __future__ import annotations
