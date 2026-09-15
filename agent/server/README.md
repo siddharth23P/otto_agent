@@ -15,9 +15,21 @@ embedded runtime is unavailable. Optional: `pip install "otto-cli-agent[serve]"`
 
 ```bash
 uv run otto serve                 # loopback, port 8765, a token written to the env file
-uv run otto serve --host 0.0.0.0  # reachable on the network you are on
+adb reverse tcp:8765 tcp:8765     # the phone reaches that loopback port over USB
+uv run otto serve --no-exec       # no shell or Python for any turn
 uv run otto serve --qr            # a pairing code, with `pip install qrcode`
+uv run otto serve --host 0.0.0.0  # reachable on the network you are on -- read below first
 ```
+
+**What the token grants.** A turn decides first whether it needs the phone
+(agent/embed.py, one cheap call; `turn.phone` can say `on` or `off` instead).
+A turn that does not runs the way `otto tui` does: in a workspace of its own
+under `<OTTO_HOME>/workspaces/<session_id>`, with shell and Python on the
+computer running `otto serve`. So whoever holds the pairing token can run
+commands on that computer. Keep the server on `127.0.0.1` and connect the
+phone with `adb reverse tcp:8765 tcp:8765`; `otto serve` warns when bound
+anywhere wider. `--no-exec` takes the shell and Python away from every turn
+(file tools stay inside the workspace).
 
 A connection may hold at most eight sessions and runs one turn per session
 at a time, which bounds what a client holding the token can spend. The

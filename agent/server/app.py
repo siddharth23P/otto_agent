@@ -9,7 +9,11 @@ one message type (agent/server/protocol.py).
 
 Authentication is a shared token from `hello`, compared in constant time.
 The server binds loopback by default; anything wider is the operator's call
-(`otto serve --host 0.0.0.0` behind a network they trust).
+(`otto serve --host 0.0.0.0` behind a network they trust). What the token
+grants is a turn, and a turn that is not on the phone runs like `otto tui`:
+shell and Python on this computer included, unless `no_exec` (`--no-exec`)
+takes the subprocess tools away. The phone reaches a loopback server through
+`adb reverse tcp:8765 tcp:8765`.
 """
 from __future__ import annotations
 
@@ -63,14 +67,19 @@ MAX_SESSIONS_PER_CONNECTION = 8
 #: else the process runs in that default pool.
 MAX_TURN_WORKERS = 8
 
+#: `turn.phone`: decide per turn (agent/embed.py DECIDE_PHONE), or say.
+PHONE_MODES: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
+
 
 class Connection:
     """State for one client socket."""
 
     def __init__(self, websocket, token: str, loop: asyncio.AbstractEventLoop,
-                 executor: ThreadPoolExecutor | None = None) -> None:
+                 executor: ThreadPoolExecutor | None = None, *, no_exec: bool = False) -> None:
         self.ws = websocket
         self.token = token
+        #: The operator's --no-exec: no turn on this server starts a subprocess.
+        self.no_exec = no_exec
         self.loop = loop
         self.executor = executor
         self.phone: SocketPhone | None = None
@@ -165,6 +174,14 @@ class Connection:
         if not text:
             await self.send_error("empty", "turn needs text")
             return
+        mode = message.get("phone")
+        mode = "auto" if mode is None else mode
+        if not isinstance(mode, str) or mode not in PHONE_MODES:
+            await self.send_error("invalid", "turn.phone is one of auto, on, off")
+            return
+        if mode == "on" and self.phone is None:
+            await self.send_error("no_phone", "this connection did not offer the phone capability")
+            return
         session_ref = _sid(message.get("session_id"), required=False) or None
         try:
             handle = self.handle_for(session_ref)
@@ -175,14 +192,22 @@ class Connection:
             await self.send_error("busy", "a turn is already running in that session")
             return
         session_id = handle.id
+        from agent.pipeline.budget import default_budget
+
+        # The ceiling run.py binds when nobody bound one, which is this
+        # server's case: a client's "12 of 40 calls" needs the 40.
         await self.send(protocol.encode("event", session_id=session_id,
-                                        event={"type": "started", "session_id": session_id}))
+                                        event={"type": "started", "session_id": session_id,
+                                               "budget_max": default_budget().max_model_calls}))
 
         def events(event: dict) -> None:
             frame = protocol.encode("event", session_id=session_id, event=event)
             self.loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self.send(frame)))
 
-        tools, guidance, disabled, seats = [], "", (), {}
+        from agent.embed import SUBPROCESS_TOOLS
+
+        off_phone = SUBPROCESS_TOOLS if self.no_exec else ()
+        tools, guidance, disabled, seats = [], "", off_phone, {}
         if self.phone is not None:
             from agent.phone import (PHONE_DISABLED_STANDING_TOOLS, PHONE_GUIDANCE, PHONE_SEATS,
                                      JsonBackend, phone_tools)
@@ -192,7 +217,7 @@ class Connection:
 
         def run() -> None:
             handle.run(text, events=events, tools=tools, guidance=guidance, disabled_tools=disabled,
-                       seats=seats)
+                       seats=seats, phone=PHONE_MODES[mode], off_phone_disabled_tools=off_phone)
 
         self.turns[session_id] = self.loop.run_in_executor(self.executor, run)
 
@@ -248,8 +273,9 @@ class Connection:
 
 class OttoServer:
     def __init__(self, token: str, *, allowed_origins: tuple[str, ...] = (),
-                 max_workers: int = MAX_TURN_WORKERS) -> None:
+                 max_workers: int = MAX_TURN_WORKERS, no_exec: bool = False) -> None:
         self.token = token
+        self.no_exec = no_exec
         self.allowed_origins = tuple(o.rstrip("/").lower() for o in allowed_origins)
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="otto-turn")
 
@@ -266,7 +292,7 @@ class OttoServer:
 
     async def handler(self, websocket) -> None:
         loop = asyncio.get_running_loop()
-        connection = Connection(websocket, self.token, loop, self.executor)
+        connection = Connection(websocket, self.token, loop, self.executor, no_exec=self.no_exec)
         try:
             try:
                 first = await asyncio.wait_for(websocket.recv(), timeout=15)

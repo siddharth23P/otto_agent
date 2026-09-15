@@ -30,7 +30,10 @@ def configured(tmp_path, monkeypatch):
 @pytest.fixture
 def server(configured):
     """An OttoServer on a free loopback port, on its own loop and thread."""
-    srv = OttoServer(TOKEN)
+    yield from _serving(OttoServer(TOKEN))
+
+
+def _serving(srv):
     loop = asyncio.new_event_loop()
     ready = asyncio.Event()
     stop = loop.create_future()
@@ -280,3 +283,83 @@ def test_a_session_id_that_is_not_one_is_refused_and_touches_nothing(server):
     ws.send(protocol.encode("ping"))
     assert json.loads(ws.recv(timeout=5))["type"] == "pong"
     ws.close()
+
+
+
+# --------------------------------------------------------------------------
+# where a turn runs, and what the token grants (2026-09-15)
+# --------------------------------------------------------------------------
+
+def _spy_run(monkeypatch):
+    got: list[dict] = []
+    real = embed.SessionHandle.run
+
+    def spy(self, text, **kwargs):
+        got.append(kwargs)
+        return real(self, text, **kwargs)
+
+    monkeypatch.setattr(embed.SessionHandle, "run", spy)
+    monkeypatch.setattr(pipeline, "run_pipeline_stream",
+                        lambda text, **kw: iter([{"__final__": {"final_output": "ok"}, "__trace_id__": None}]))
+    return got
+
+
+def test_a_turn_can_say_whether_it_runs_on_the_phone_and_started_carries_the_budget(server, monkeypatch):
+    from agent.embed import SUBPROCESS_TOOLS
+    from agent.pipeline.budget import default_budget
+
+    got = _spy_run(monkeypatch)
+    ws, _ = _hello(server)
+    for mode, expected in (("off", False), ("on", True), ("auto", None), (None, None)):
+        fields = {"text": "hi"} if mode is None else {"text": "hi", "phone": mode}
+        ws.send(protocol.encode("turn", **fields))
+        started = json.loads(ws.recv(timeout=5))
+        assert started["event"] == {"type": "started", "session_id": started["session_id"],
+                                    "budget_max": default_budget().max_model_calls}
+        final, _ = _recv_until(ws, "event")
+        assert final["event"]["type"] == "final"
+        assert got[-1]["phone"] is expected and tuple(got[-1]["off_phone_disabled_tools"]) == ()
+    assert not set(SUBPROCESS_TOOLS) & set(got[0]["off_phone_disabled_tools"])
+    ws.send(protocol.encode("turn", text="hi", phone="maybe"))
+    reply = json.loads(ws.recv(timeout=5))
+    assert reply["type"] == "error" and reply["code"] == "invalid"
+    ws.close()
+    ws, _ = _hello(server, capabilities=())
+    ws.send(protocol.encode("turn", text="hi", phone="on"))
+    reply = json.loads(ws.recv(timeout=5))
+    assert reply["type"] == "error" and reply["code"] == "no_phone"
+    ws.close()
+
+
+@pytest.fixture
+def no_exec_server(configured):
+    yield from _serving(OttoServer(TOKEN, no_exec=True))
+
+
+def test_no_exec_takes_the_subprocess_tools_from_every_turn(no_exec_server, monkeypatch):
+    from agent.embed import SUBPROCESS_TOOLS
+
+    got = _spy_run(monkeypatch)
+    for capabilities in (("phone",), ()):
+        ws, _ = _hello(no_exec_server, capabilities=capabilities)
+        ws.send(protocol.encode("turn", text="hi", phone="off" if capabilities else "auto"))
+        _recv_until(ws, "event")
+        ws.close()
+        assert set(SUBPROCESS_TOOLS) <= set(got[-1]["off_phone_disabled_tools"])
+        assert set(SUBPROCESS_TOOLS) <= set(got[-1]["disabled_tools"])
+
+
+def test_listening_beyond_loopback_says_what_the_token_grants():
+    from agent.cli import serve as serve_cmd
+
+    for host in ("127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.2"):
+        assert serve_cmd.exposure_warning(host) is None, host
+    for host in ("0.0.0.0", "::", "", "192.168.1.5", "my-laptop.local"):
+        warning = serve_cmd.exposure_warning(host)
+        assert warning and "pairing token" in warning and "run commands" in warning, host
+        assert "adb reverse tcp:8765 tcp:8765" in warning and "--no-exec" in warning
+    quieter = serve_cmd.exposure_warning("0.0.0.0", no_exec=True)
+    assert "run commands" not in quieter and "pairing token" in quieter
+    import inspect
+
+    assert "no_exec" in inspect.signature(serve_cmd.serve).parameters

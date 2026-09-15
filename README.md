@@ -119,7 +119,7 @@ uv run otto chat        # the same pipeline at a prompt
 | --- | --- |
 | `otto tui` / `otto chat` | interactive sessions; `--workspace PATH`, `--no-workspace`, `--resume <id\|prefix\|last>` |
 | `otto sessions` | list, `--delete`, `--rename`, `--export`, `--import`, `--prune` |
-| `otto serve` | the agent behind a WebSocket for the phone app; `--host`, `--port`, `--token`, `--qr`, `--allow-origin` |
+| `otto serve` | the agent behind a WebSocket for the phone app; `--host`, `--port`, `--token`, `--qr`, `--allow-origin`, `--no-exec` |
 | `otto doctor` | provider and route health, exit 2 on a missing required key |
 | `otto models` | every model each configured vendor lists, with detected capabilities |
 | `otto route <task>` | the fallback chain for a seat, pins starred, observed outcomes shown |
