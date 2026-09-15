@@ -128,8 +128,20 @@ def _now() -> str:
 def session_db_path(session_id: str) -> Path:
     """Where a session's own file lives. Looked up at call time through the
     module global rather than at import time so a test (or agent/memory/
-    sessions.py's prune) that rebinds DB_DIR sees the rebinding."""
-    return DB_DIR / f"{session_id}.db"
+    sessions.py's prune) that rebinds DB_DIR sees the rebinding.
+
+    Refuses an id that is not one plain file name. The id reaches here from
+    `otto serve` (agent/server/app.py), where a client chose it, and
+    `sessions.delete` unlinks what this returns: before this check,
+    "../lessons" named the lesson bank and "../../x" anything the process
+    could write. Only the path is policed here -- tests and benchmarks name
+    their sessions "abc" and "eval-1a2b3c4d" -- and the hosts additionally
+    insist on a uuid4 hex id (agent/memory/sessions.py `valid_id`)."""
+    sid = str(session_id or "")
+    if (not sid or sid.startswith(".") or "/" in sid or "\\" in sid or "\x00" in sid
+            or Path(sid).name != sid):
+        raise ValueError(f"{session_id!r} is not a session id")
+    return DB_DIR / f"{sid}.db"
 
 
 def _to_blob(embedding: "np.ndarray | None") -> bytes | None:

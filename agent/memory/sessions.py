@@ -26,6 +26,7 @@ top of it, never the other way round.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -57,6 +58,49 @@ _INDEX: Path | None = None
 #: sessions apart in a list, short enough for a 32-column sidebar to show
 #: most of it.
 TITLE_LENGTH = 60
+
+#: What a session id a person's own otto mints looks like: `uuid4().hex`.
+#: The hosts (agent/embed.py, agent/server/app.py) accept nothing else from a
+#: caller; this module itself still takes the plain names tests and
+#: benchmarks use ("abc", "eval-1a2b3c4d"), which agent/memory/store.py's
+#: `session_db_path` keeps from ever naming a path.
+SESSION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+#: A reference a host accepts for `resolve`: "last" or a hex prefix of an id.
+_REF_RE = re.compile(r"^[0-9a-f]{1,32}$")
+
+
+class InvalidSessionId(ValueError, LookupError):
+    """A session id or reference that is not one otto could have minted.
+
+    Both a ValueError (it is a bad argument) and a LookupError (no session
+    can match it), so a host that already turns LookupError into "no such
+    session" keeps working, and one that wants to say "that is not an id"
+    can catch this first."""
+
+
+def valid_id(session_id: object) -> bool:
+    """Whether `session_id` is a full id in the shape `uuid4().hex` gives."""
+    return isinstance(session_id, str) and bool(SESSION_ID_RE.fullmatch(session_id))
+
+
+def valid_ref(ref: object) -> bool:
+    """Whether `ref` is something `resolve` may be asked for by a host:
+    "last", or a lower-case hex prefix of an id."""
+    return isinstance(ref, str) and (ref == "last" or bool(_REF_RE.fullmatch(ref)))
+
+
+def check_id(session_id: object) -> str:
+    """`session_id`, or InvalidSessionId -- the hosts' one gate."""
+    if not valid_id(session_id):
+        raise InvalidSessionId(f"{str(session_id)[:80]!r} is not a session id")
+    return session_id  # type: ignore[return-value]
+
+
+def check_ref(ref: object) -> str:
+    if not valid_ref(ref):
+        raise InvalidSessionId(f"{str(ref)[:80]!r} is not a session id, prefix or 'last'")
+    return ref  # type: ignore[return-value]
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -192,15 +236,27 @@ def rename(session_id: str, title: str, *, workspace: Path | str | None = None) 
         return _row(conn.execute(f"{_SELECT} WHERE id = ?", (session_id,)).fetchone())
 
 
+#: Files in the memory directory that are not sessions and must never be
+#: deleted or pruned as one.
+_NOT_SESSIONS = frozenset({"lessons.db"})
+
+
 def delete(session_id: str) -> bool:
     """Forget the session: its index row and its memory file. True if either
     existed. The file goes too because the row was the only thing that made
-    it findable; without one it is the orphan `prune()` would remove next."""
+    it findable; without one it is the orphan `prune()` would remove next.
+
+    Confined: only a file directly in the memory directory, and never the
+    lesson bank that shares it -- checked before anything is removed, so a
+    refused id leaves the row too. ValueError for anything else."""
+    path = session_db_path(session_id)
+    root = store_module.DB_DIR.resolve()
+    if path.name in _NOT_SESSIONS or path.resolve().parent != root:
+        raise ValueError(f"{session_id!r} does not name a session file")
     removed = False
     if not _absent():
         with _connect() as conn:
             removed = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,)).rowcount > 0
-    path = session_db_path(session_id)
     if path.exists():
         try:
             path.unlink()
@@ -247,9 +303,8 @@ def prune() -> PruneReport:
     with _connect() as conn:
         known = {r[0] for r in conn.execute("SELECT id FROM sessions")}
     removed = kept = 0
-    protected = {"lessons.db"}
     for path in sorted(store_module.DB_DIR.glob("*.db")):
-        if path.name in protected or path.stem in known:
+        if path.name in _NOT_SESSIONS or path.stem in known:
             continue
         store = MemoryStore(path)
         try:
@@ -264,7 +319,11 @@ def prune() -> PruneReport:
     dropped = 0
     with _connect() as conn:
         for sid in known:
-            if not session_db_path(sid).exists():
+            try:
+                gone = not session_db_path(sid).exists()
+            except ValueError:
+                gone = True  # a row no file could ever belong to
+            if gone:
                 conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
                 dropped += 1
     return PruneReport(removed_files=removed, dropped_rows=dropped, kept_orphans=kept)
@@ -398,8 +457,10 @@ def import_session(path: Path | str) -> SessionInfo:
     """Read a file `export_session` wrote into a session of this machine's
     own and return it. Keeps the exported id when nothing here has it, so
     a session moved once and moved back is the same session; mints a new
-    one otherwise, so importing never overwrites what is here. Raises
-    ValueError for a file that cannot be read or is not an export.
+    one otherwise, so importing never overwrites what is here -- and also
+    when the exported id is not a uuid hex id, since a file can say anything
+    and the id becomes a file name. Raises ValueError for a file that cannot
+    be read or is not an export.
     """
     path = Path(path).expanduser()
     try:
@@ -414,7 +475,7 @@ def import_session(path: Path | str) -> SessionInfo:
         raise ValueError(f"{path} was written by a newer otto (format {payload['version']})")
     meta = payload["session"]
     session_id = str(meta.get("id") or "")
-    if not session_id or get(session_id) is not None or session_db_path(session_id).exists():
+    if not valid_id(session_id) or get(session_id) is not None or session_db_path(session_id).exists():
         session_id = uuid.uuid4().hex
     store = MemoryStore(session_db_path(session_id))
     try:
