@@ -10,6 +10,8 @@ carries -- every call re-sends what came before it.
 BASELINE (2026-09-15, before the phone speed-ups): 12 loop calls, largest
 call 75518 characters, last call 75518 characters. The ceilings below are
 the baseline; each speed-up lowers them.
+
+after the phone's own agent prompt: 12 calls, largest 72808 chars.
 """
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
@@ -21,7 +23,7 @@ from agent.pipeline.toolkit import bind_extra_tools
 from tests.phone_fakes import FakePhone, node, snapshot
 
 MAX_LOOP_CALLS = 12
-MAX_LARGEST_CALL_CHARS = 75518
+MAX_LARGEST_CALL_CHARS = 72808
 
 SCRIPT = [
     "ACTION: phone_screen\nCODE:\n{}",

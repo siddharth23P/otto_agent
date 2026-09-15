@@ -738,11 +738,17 @@ PHONE_DISTIL_NOTE = (
 )
 
 
+def _phone_run() -> bool:
+    """Whether the host bound agent/phone's tools for this run. One test, so
+    the lesson bank, the prompt and the reminders cannot disagree about it."""
+    return "phone_screen" in current_extra_tools()
+
+
 def _lesson_kind() -> str:
     """The lessons this run reads and writes: a phone's own, when the host
     bound agent/phone's tools, else the workspace bank. See
     agent/memory/lessons.py PHONE_KIND for why the two are kept apart."""
-    return PHONE_KIND if "phone_screen" in current_extra_tools() else LESSON_KIND
+    return PHONE_KIND if _phone_run() else LESSON_KIND
 
 
 #: The whole agent, in one prompt.
@@ -811,6 +817,65 @@ def compose_agent_prompt(live=None, *, may_delegate: bool = True) -> str:
 #: character cap is measured against, and what a caller gets if it does not
 #: say which tools are live.
 AGENT_PROMPT = compose_agent_prompt()
+
+
+#: The standing tools a phone run is offered by name. Everything else a
+#: phone run could still reach (complete_code, predict_edit) is a code tool
+#: with nothing to act on; the dispatch table keeps serving it if named.
+_PHONE_STANDING_TOOLS = ("web_search", "recall_memory")
+
+
+def compose_phone_prompt(live_tool_names) -> str:
+    """The agent prompt for a run on a person's phone.
+
+    compose_agent_prompt is an engineer's prompt: four diagnostic habits, the
+    minimality ladder, modes, `exercise` before FINAL. On a phone none of it
+    applies -- there is no shell, nothing is written, the mode never changes
+    -- and all of it rides on every loop call, which on a phone is one call
+    per tap. Measured with the phone tools and PHONE_DISABLED_STANDING_TOOLS
+    bound: compose_agent_prompt(reachable_tools()) is 3107 characters, this is
+    851, and the phone guidance in render_note (the next system message) is
+    unchanged and still says how to use each tool. With the MODE message it
+    no longer needs, a scripted ten-action search's largest loop call went
+    from 75518 characters to 72808 (tests/test_phone_call_budget.py).
+
+    The same ACTION/CODE/FINAL protocol, in the same words, so
+    _parse_worker_reply needs nothing new. Composed once per run from what is
+    bound, like compose_agent_prompt, and for the same reason: the seed and
+    the resume must produce the same bytes.
+    """
+    names = list(dict.fromkeys(live_tool_names))
+    phone = [n for n in names if n.startswith("phone_")]
+    standing = [n for n in _PHONE_STANDING_TOOLS if n in names]
+    menu = "|".join((*phone, *standing, *(("ask_user",) if "ask_user" in names else ())))
+    hints = [_BODY_HINTS[n] for n in standing if n in _BODY_HINTS]
+    hints.append("phone_*: one JSON object on one line, as listed below.")
+    if "ask_user" in names:
+        hints.append(_ASK_HINT)
+    return (
+        "You are working on a person's Android phone for them through the "
+        "phone_* tools: read the screen, do what was asked, and check the "
+        "screen shows it done.\n\n"
+        "reply with exactly\nACTION: <" + menu + ">\nCODE:\n<" + " ".join(hints)
+        + ">\nand you will be shown the result, then you can continue. "
+        "One tool call per reply.\n\n"
+        "Before FINAL, the last screen you read must show the result. When it "
+        "does, reply with exactly\nFINAL:\n<the answer itself -- what is on "
+        "the screen now, or what the person has to do next. No recap of your "
+        "steps.>"
+    )
+
+
+def _system_prompt(*, may_delegate: bool = True) -> str:
+    """The first system message of an agent conversation, for what is bound.
+
+    Every place that builds one goes through here -- the seed, the resume and
+    a delegated child -- because the resume has to rebuild the seed's bytes
+    exactly, and two call sites choosing between two prompts is how they
+    drift apart. A coding run gets compose_agent_prompt exactly as before."""
+    if _phone_run():
+        return compose_phone_prompt([*current_extra_tools(), *reachable_tools(), "ask_user"])
+    return compose_agent_prompt(reachable_tools(), may_delegate=may_delegate)
 
 
 #: What a result is wrapped in when the tool that produced it went outside.
@@ -1572,7 +1637,9 @@ def _reminders(iteration: int, checklist: list[dict] | None) -> str:
     """
     if iteration == 0 or iteration % REMINDER_EVERY:
         return ""
-    parts = [TOOL_BUILDING_NOTE]
+    # Not on a phone: there is no script to write there, and the note asked
+    # a phone run to consider writing one every REMINDER_EVERY taps.
+    parts = [] if _phone_run() else [TOOL_BUILDING_NOTE]
     # `seen` is not open. Something has already been written for it, and
     # re-listing it is how a reminder turns into wallpaper.
     open_items = [i for i in (checklist or []) if i.get("status") == "pending"]
@@ -1672,12 +1739,16 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
     # never reaches this function. `_rubric` says so on the call that was
     # happening anyway, and the agent node answers it on the chat seat
     # without seeding a transcript at all -- see CHAT_PROMPT.
-    messages: list = [SystemMessage(compose_agent_prompt(reachable_tools()))]
+    messages: list = [SystemMessage(_system_prompt())]
     for extra in (workspace_note(), python_session_note(), render_note()):
         if extra:
             messages.append(SystemMessage(extra))
     messages.append(HumanMessage(body))
-    messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
+    # A phone run never changes mode and its prompt does not offer to, so the
+    # mode's guidance (written for engineering work) is not said to it. The
+    # mode itself is unchanged -- it still picks the model the loop runs on.
+    if not _phone_run():
+        messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
     return messages
 
 
@@ -2582,8 +2653,7 @@ def _delegate(state: AgentState, body: str, *, actions: list[str],
     # `may_delegate=False`, matching the loop this child actually runs in.
     # It was advertised `delegate` and then refused it at the dispatch -- a
     # tool it could name, could not use, and paid an exchange to discover.
-    child: list = [SystemMessage(compose_agent_prompt(reachable_tools(),
-                                                      may_delegate=False))]
+    child: list = [SystemMessage(_system_prompt(may_delegate=False))]
     # A delegate gets none of this conversation (DELEGATE_CONTRACT), so it
     # needs the workspace said to it directly -- it cannot infer the root from
     # a parent turn it never saw.
@@ -2845,7 +2915,7 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "resear
         # and the bindings do not change inside a run, so the rebuilt prompt
         # is byte-identical -- which is what the stored transcript assumes.
         messages = [
-            SystemMessage(compose_agent_prompt(reachable_tools())),
+            SystemMessage(_system_prompt()),
             *(SystemMessage(extra) for extra in (workspace_note(), python_session_note(), render_note()) if extra),
             *stored,
         ]
