@@ -15,6 +15,8 @@ After the Add to Cart guidance (2026-09-15): +240 characters on every call
 (12 calls / 39,887; batched 5 calls / 31,402) -- the price of telling a phone
 run to add a product from its page instead of pressing Enter.
 
+After telling a phone run to press enter to submit a typed search (2026-09-16): 39887 -> 40029, 31402 -> 31544 characters.
+
 after the phone's own agent prompt: 12 calls, largest 72808 chars.
 after folding old screens: 12 calls, largest 38370 chars.
 after phone_do: the one-action-per-call script is unchanged in calls, and
@@ -39,9 +41,9 @@ from agent.pipeline.toolkit import bind_extra_tools
 from tests.phone_fakes import FakePhone, node, snapshot
 
 MAX_LOOP_CALLS = 12
-MAX_LARGEST_CALL_CHARS = 39887
+MAX_LARGEST_CALL_CHARS = 40029
 MAX_BATCHED_LOOP_CALLS = 5
-MAX_BATCHED_LARGEST_CALL_CHARS = 31402
+MAX_BATCHED_LARGEST_CALL_CHARS = 31544
 
 SCRIPT = [
     "ACTION: phone_screen\nCODE:\n{}",
