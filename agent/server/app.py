@@ -106,7 +106,7 @@ PHONE_MODES: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
 
 #: The lanes (module docstring). Message types not named here are inline.
 ORDERED = frozenset({"turn", "sessions"})
-CONCURRENT: frozenset[str] = frozenset({"setup", "doctor", "models"})
+CONCURRENT: frozenset[str] = frozenset({"setup", "doctor", "models", "routing"})
 
 #: The longest key `setup set_key` takes. A vendor key is under 200.
 MAX_KEY_CHARS = 512
@@ -311,6 +311,8 @@ class Connection:
             await self.sessions(message, rid)
         elif kind == "setup":
             await self.setup(message, rid)
+        elif kind == "routing":
+            await self.routing(message, rid)
         elif kind == "doctor":
             from agent import embed
 
@@ -501,6 +503,50 @@ class Connection:
             await self.reply("setup_result", rid, op=op, **result)
         else:
             await self.send_error("unknown", f"unknown setup op {op!r}", rid)
+
+    async def routing(self, message: dict, rid: str | int | None = None) -> None:
+        from agent import embed
+        from agent.router.mapping import Task
+        from agent.router.overrides import PinError
+
+        op = str(message.get("op") or "list")
+        task = message.get("task")
+        if op == "list":
+            await self.reply("routing_result", rid, op=op, routes=await self.blocking(embed.routing))
+        elif op == "options":
+            try:
+                result = await self.blocking(embed.routing_options, task if isinstance(task, str) else "")
+            except ValueError as exc:
+                await self.send_error("invalid", str(exc), rid)
+                return
+            await self.reply("routing_result", rid, op=op, **result)
+        elif op in ("pin", "clear"):
+            spec = message.get("spec")
+            if not self.setup_write:
+                await self.send_error("forbidden", "routing is only changed from this computer "
+                                                  "(or with otto serve --allow-remote-setup)", rid)
+                return
+            if not isinstance(task, str) or task not in {t.value for t in Task}:
+                await self.send_error("invalid", f"task is one of {', '.join(t.value for t in Task)}", rid)
+                return
+            if op == "pin" and (not isinstance(spec, str) or not spec.strip() or len(spec) > 200):
+                await self.send_error("invalid", "spec is provider:model", rid)
+                return
+            if self.server_busy():
+                await self.send_error("busy", "a turn is running; change routing when it has finished", rid)
+                return
+            try:
+                if op == "pin":
+                    problems = await self.blocking(embed.set_pin, task, spec)
+                else:
+                    problems = await self.blocking(embed.clear_pin, task)
+            except PinError as exc:
+                await self.send_error("invalid_pin", str(exc), rid)
+                return
+            await self.reply("routing_result", rid, op=op, task=task,
+                             pin=spec.strip() if op == "pin" else None, problems=list(problems))
+        else:
+            await self.send_error("unknown", f"unknown routing op {op!r}", rid)
 
     async def close(self) -> None:
         """Best-effort teardown: nothing here may raise, but everything that

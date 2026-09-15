@@ -27,6 +27,7 @@ client -> server
                     {op: close|rename|export|usage, session_id, title?}   protocol 2
                     {op: import, data}                                   protocol 2
     setup           {op: status | set_key | probe, name?, value?}        protocol 2
+    routing         {op: list | options | pin | clear, task?, spec?}     protocol 2
     doctor          {}                                                   protocol 2
     models          {}                                                   protocol 2
     ping            {}
@@ -42,11 +43,15 @@ server -> client
                     usage  {session_id, usage, turn_tokens, turn, title, turns}
     setup_result    status  {ready, keys: {VAR: masked}, vendors: [...], version, setup_write}
                     set_key {name, masked, ready}     probe {name, ok, status, detail, model_count, models}
+    routing_result  list    {routes: [{task, pin, default, provider_only: {provider, reason}?, phone_seat}]}
+                    options {task, pin, options: [{label, spec}]}   ("" spec is no pin)
+                    pin / clear {task, pin, problems}
     doctor_result   {providers: [{provider, status, models, detail}], ready, required, also_configured}
     models_result   {models: [{spec, provider, id, display_name, capabilities, context_window,
                                max_output_tokens}]}
     error           {code, message}                  codes include invalid_session, busy,
-                                                     no_session, invalid, no_phone, forbidden
+                                                     no_session, invalid, no_phone, forbidden,
+                                                     invalid_pin
     pong            {}
 """
 from __future__ import annotations
@@ -62,7 +67,7 @@ MIN_PROTOCOL = 1
 FEATURES: tuple[str, ...] = (
     "ids", "turn.phone",
     "sessions.close", "sessions.rename", "sessions.export", "sessions.import", "sessions.usage",
-    "setup", "doctor", "models",
+    "setup", "doctor", "models", "routing",
 )
 
 #: The longest string request id echoed back.

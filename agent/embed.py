@@ -15,6 +15,7 @@ these names are:
     configure(home, env_file=, environ=) where state and keys live -- FIRST
     set_key / key_status / ready / doctor / version
     setup_status / probe / doctor_report / models
+    routing / routing_options / set_pin / clear_pin
     Runtime.open_session / list_sessions / delete_session / transcript /
             rename_session / export_session / import_session
     SessionHandle.run / answer / cancel / rename / usage_report / close
@@ -300,6 +301,70 @@ def models() -> list[dict[str, Any]]:
     from agent.router.llm_provider import all_models
 
     return [_model_row(m) for m in sorted(all_models(None), key=lambda m: (m.provider, m.id))]
+
+
+def routing() -> list[dict[str, Any]]:
+    """One row per task, as the TUI's mapping tab and sidebar read it: the
+    pin routes.json holds (None: the shipped route), the shipped head
+    (a model spec, or the vendor a query is scoped to), the vendor a task is
+    bound to whatever the pin and why, and the seat a phone turn binds over
+    it (agent/phone PHONE_SEATS)."""
+    from agent.phone import PHONE_SEATS
+    from agent.router import overrides
+    from agent.router.mapping import Task
+
+    pins = overrides.pins()
+    rows = []
+    for task in Task:
+        head = overrides.shipped(task)[0]
+        bound = overrides.PROVIDER_ONLY.get(task)
+        rows.append({"task": task.value, "pin": pins.get(task), "default": head.spec or head.provider_name,
+                     "provider_only": {"provider": bound[0], "reason": bound[1]} if bound else None,
+                     "phone_seat": PHONE_SEATS.get(task.value)})
+    return rows
+
+
+def _task(name: Any):
+    from agent.router.mapping import Task
+
+    try:
+        return Task(str(name))
+    except ValueError:
+        raise ValueError(f"{str(name)[:40]!r} is not a task; one of {', '.join(t.value for t in Task)}") from None
+
+
+def routing_options(task: str) -> dict[str, Any]:
+    """The pins one task could take -- agent/router/setup.py `pin_options`
+    over every model the configured vendors list, exactly the TUI's picker.
+    Network. ValueError for a name that is not a task."""
+    from agent.router import overrides
+    from agent.router.llm_provider import all_models
+    from agent.router.mapping import TASK_ROUTES
+    from agent.router.setup import pin_options
+
+    seat = _task(task)
+    found = sorted(all_models(None), key=lambda m: (m.provider, m.id))
+    return {"task": seat.value, "pin": overrides.pins().get(seat),
+            "options": [{"label": label, "spec": spec} for label, spec in pin_options(seat, found, TASK_ROUTES)]}
+
+
+def set_pin(task: str, spec: str) -> list[str]:
+    """Pin `spec` on `task` in routes.json and make every live router see it.
+    agent/router/overrides.py's PinError (a ValueError) for a pin that can be
+    seen to be wrong; returns the problems re-applying the table reported."""
+    from agent.router import overrides
+    from agent.router.reload import reload_everything
+
+    overrides.set_pin(_task(task), str(spec).strip())
+    return reload_everything()
+
+
+def clear_pin(task: str) -> list[str]:
+    from agent.router import overrides
+    from agent.router.reload import reload_everything
+
+    overrides.clear_pin(_task(task))
+    return reload_everything()
 
 
 def _model_row(m) -> dict[str, Any]:

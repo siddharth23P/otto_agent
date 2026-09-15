@@ -751,3 +751,111 @@ def test_pin_options_live_with_the_setup_data_layer():
     from agent.router import setup as router_setup
 
     assert setup_screen.pin_options is router_setup.pin_options and setup_screen.NO_PIN == router_setup.NO_PIN
+
+
+# --------------------------------------------------------------------------
+# routing (protocol 2)
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def routes_file(tmp_path):
+    """routes.json in tmp_path for every thread: bind_routes is a contextvar,
+    and the server applies pins on its own threads. The live table is
+    re-applied from the usual file afterwards."""
+    import os
+
+    from agent.router.reload import reload_everything
+
+    path = tmp_path / "routes.json"
+    before = os.environ.get("OTTO_ROUTES")
+    os.environ["OTTO_ROUTES"] = str(path)
+    try:
+        yield path
+    finally:
+        if before is None:
+            os.environ.pop("OTTO_ROUTES", None)
+        else:
+            os.environ["OTTO_ROUTES"] = before
+        reload_everything()
+
+
+def test_routing_lists_every_task_with_its_pin_default_binding_and_phone_seat(server, routes_file):
+    from agent.phone import PHONE_SEATS
+    from agent.router import overrides
+    from agent.router.mapping import Task
+
+    ws, _ = _hello(server)
+    reply = _request(ws, type="routing", op="list", id="r")
+    assert reply["type"] == "routing_result" and reply["op"] == "list"
+    by = {row["task"]: row for row in reply["routes"]}
+    assert set(by) == {t.value for t in Task}
+    assert set(by["reason"]) == {"task", "pin", "default", "provider_only", "phone_seat"}
+    assert by["web"]["provider_only"]["provider"] == "anthropic" and by["reason"]["provider_only"] is None
+    assert by["evaluate"]["phone_seat"] == PHONE_SEATS["evaluate"] and by["reason"]["phone_seat"] is None
+    assert by["reason"]["default"] == (overrides.shipped(Task.REASON)[0].spec
+                                       or overrides.shipped(Task.REASON)[0].provider_name)
+    assert all(row["pin"] is None for row in reply["routes"])
+    ws.close()
+
+
+def test_routing_options_are_the_tuis_pin_choices(server, monkeypatch):
+    from agent.router import llm_provider
+    from agent.router.llm_provider.base import Capability, ModelInfo
+
+    monkeypatch.setattr(llm_provider, "all_models", lambda capability=None: [
+        ModelInfo("claude-x", "anthropic", capabilities=frozenset({Capability.CHAT, Capability.TOOLS})),
+        ModelInfo("gpt-5-mini", "openai", capabilities=frozenset({Capability.CHAT, Capability.TOOLS}))])
+    ws, _ = _hello(server)
+    reply = _request(ws, type="routing", op="options", task="web", id="o")
+    assert reply["type"] == "routing_result" and reply["task"] == "web"
+    assert reply["options"][0] == {"label": "(no pin — default route)", "spec": ""}
+    assert all(o["spec"].startswith("anthropic:") for o in reply["options"][1:]), "web is anthropic-only"
+    assert _request(ws, type="routing", op="options", task="../x", id="bad")["code"] == "invalid"
+    ws.close()
+
+
+def test_a_pin_is_set_and_cleared_from_this_computer_and_a_bad_one_is_named(server, routes_file):
+    ws, _ = _hello(server)
+    pinned = _request(ws, type="routing", op="pin", task="reason", spec="openai:gpt-5-mini", id="p")
+    assert pinned["type"] == "routing_result", pinned
+    assert {k: pinned[k] for k in ("id", "op", "task", "pin")} == {
+        "id": "p", "op": "pin", "task": "reason", "pin": "openai:gpt-5-mini"}
+    assert isinstance(pinned["problems"], list)
+    assert json.loads(routes_file.read_text())["pins"]["reason"] == "openai:gpt-5-mini"
+    rows = {r["task"]: r for r in _request(ws, type="routing", op="list", id="l")["routes"]}
+    assert rows["reason"]["pin"] == "openai:gpt-5-mini"
+    wrong = _request(ws, type="routing", op="pin", task="web", spec="openai:gpt-5-mini", id="w")
+    assert wrong["type"] == "error" and wrong["code"] == "invalid_pin" and "anthropic" in wrong["message"]
+    assert _request(ws, type="routing", op="pin", task="reason", spec="nocolon", id="n")["code"] == "invalid_pin"
+    assert _request(ws, type="routing", op="pin", task="nope", spec="openai:x", id="t")["code"] == "invalid"
+    assert _request(ws, type="routing", op="pin", task="reason", id="s")["code"] == "invalid"
+    cleared = _request(ws, type="routing", op="clear", task="reason", id="c")
+    assert {k: cleared[k] for k in ("op", "task", "pin")} == {"op": "clear", "task": "reason", "pin": None}
+    assert "reason" not in json.loads(routes_file.read_text()).get("pins", {})
+    ws.close()
+
+
+def test_routing_is_not_changed_from_elsewhere_or_under_a_turn(server, routes_file, monkeypatch):
+    from agent.server import app as server_app
+
+    gate = threading.Event()
+
+    def fake_run(text, **kwargs):
+        gate.wait(5)
+        yield {"__final__": {"final_output": "ok"}, "__trace_id__": None}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    ws, _ = _hello(server)
+    ws.send(protocol.encode("turn", text="one"))
+    assert _frame(ws)["event"]["type"] == "started"
+    assert _request(ws, type="routing", op="clear", task="reason", id="b")["code"] == "busy"
+    gate.set()
+    _recv_until(ws, "event")
+    monkeypatch.setattr(server_app, "_peer_is_loopback", lambda websocket: False)
+    remote, _ = _hello(server)
+    assert _request(remote, type="routing", op="pin", task="reason", spec="openai:gpt-5-mini", id="f")["code"] \
+        == "forbidden"
+    assert _request(remote, type="routing", op="list", id="l")["type"] == "routing_result"
+    assert not routes_file.exists()
+    ws.close()
+    remote.close()
