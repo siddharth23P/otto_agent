@@ -106,7 +106,7 @@ PHONE_MODES: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
 
 #: The lanes (module docstring). Message types not named here are inline.
 ORDERED = frozenset({"turn", "sessions"})
-CONCURRENT: frozenset[str] = frozenset({"setup", "doctor", "models", "routing"})
+CONCURRENT: frozenset[str] = frozenset({"setup", "doctor", "models", "routing", "lessons", "notes"})
 
 #: The longest key `setup set_key` takes. A vendor key is under 200.
 MAX_KEY_CHARS = 512
@@ -151,8 +151,8 @@ class Connection:
     async def send(self, frame: str) -> None:
         await self.ws.send(frame)
 
-    async def reply(self, kind: str, rid: str | int | None, **fields: Any) -> None:
-        await self.send(protocol.reply(kind, rid, **fields))
+    async def reply(self, frame_type: str, rid: str | int | None, /, **fields: Any) -> None:
+        await self.send(protocol.reply(frame_type, rid, **fields))
 
     async def send_error(self, code: str, message: str, rid: str | int | None = None) -> None:
         await self.send(protocol.reply("error", rid, code=code, message=message))
@@ -313,6 +313,10 @@ class Connection:
             await self.setup(message, rid)
         elif kind == "routing":
             await self.routing(message, rid)
+        elif kind == "lessons":
+            await self.lessons(message, rid)
+        elif kind == "notes":
+            await self.notes(message, rid)
         elif kind == "doctor":
             from agent import embed
 
@@ -547,6 +551,69 @@ class Connection:
                              pin=spec.strip() if op == "pin" else None, problems=list(problems))
         else:
             await self.send_error("unknown", f"unknown routing op {op!r}", rid)
+
+    async def lessons(self, message: dict, rid: str | int | None = None) -> None:
+        """What Otto has learned, by kind: `lesson`, `phone_lesson`, or
+        `app_note:<package>`. Deleting waits for no turn to be running: a
+        run reads the bank as it goes and writes to it as it ends."""
+        from agent import embed
+        from agent.memory import lessons as L
+
+        op = str(message.get("op") or "list")
+        kind = message.get("kind")
+        if op not in ("list", "delete", "clear"):
+            await self.send_error("unknown", f"unknown lessons op {op!r}", rid)
+            return
+        if not L.valid_kind(kind):
+            await self.send_error("invalid", "kind is lesson, phone_lesson or app_note:<package>", rid)
+            return
+        if op == "list":
+            await self.reply("lessons_result", rid, op=op, **(await self.blocking(embed.lessons, kind)))
+            return
+        lesson_id = message.get("lesson_id")
+        if op == "delete" and not L.valid_lesson_id(lesson_id):
+            await self.send_error("invalid", "lesson_id is 64 hex characters", rid)
+            return
+        if self.server_busy():
+            await self.send_error("busy", "a turn is running; change what otto learned when it has finished", rid)
+            return
+        if op == "delete":
+            deleted = await self.blocking(embed.delete_lesson, kind, lesson_id)
+            await self.reply("lessons_result", rid, op=op, kind=kind, lesson_id=lesson_id, deleted=deleted)
+        else:
+            removed = await self.blocking(embed.clear_lessons, kind)
+            await self.reply("lessons_result", rid, op=op, kind=kind, removed=removed)
+
+    async def notes(self, message: dict, rid: str | int | None = None) -> None:
+        """How apps' screens work (agent/phone/notes.py): shipped notes are
+        read-only, learned ones can be deleted."""
+        from agent import embed
+        from agent.memory import lessons as L
+        from agent.phone.notes import valid_package
+
+        op = str(message.get("op") or "list")
+        if op == "list":
+            await self.reply("notes_result", rid, op=op, notes=await self.blocking(embed.notes))
+            return
+        if op not in ("get", "delete"):
+            await self.send_error("unknown", f"unknown notes op {op!r}", rid)
+            return
+        package = message.get("package")
+        if not valid_package(package):
+            await self.send_error("invalid", "package is an Android package name", rid)
+            return
+        if op == "get":
+            await self.reply("notes_result", rid, op=op, **(await self.blocking(embed.note, package)))
+            return
+        lesson_id = message.get("lesson_id")
+        if not L.valid_lesson_id(lesson_id):
+            await self.send_error("invalid", "lesson_id is 64 hex characters", rid)
+            return
+        if self.server_busy():
+            await self.send_error("busy", "a turn is running; change what otto learned when it has finished", rid)
+            return
+        deleted = await self.blocking(embed.delete_note, package, lesson_id)
+        await self.reply("notes_result", rid, op=op, package=package, lesson_id=lesson_id, deleted=deleted)
 
     async def close(self) -> None:
         """Best-effort teardown: nothing here may raise, but everything that

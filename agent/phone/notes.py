@@ -96,6 +96,16 @@ def seeded(package: str) -> str:
         return ""
 
 
+def seeded_packages() -> list[str]:
+    """The apps that ship notes, sorted: the package data's file names."""
+    try:
+        folder = resources.files(NOTES_RESOURCE[0]).joinpath(NOTES_RESOURCE[1])
+        names = [entry.name for entry in folder.iterdir()]
+    except (OSError, ValueError):
+        return []
+    return sorted(name[:-3] for name in names if name.endswith(".md") and valid_package(name[:-3]))
+
+
 def learned(package: str) -> list[L.Lesson]:
     """What earlier runs noted about `package`, newest first. Nothing when
     the bank is off (`bind_bank(None)`)."""

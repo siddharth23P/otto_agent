@@ -16,6 +16,7 @@ these names are:
     set_key / key_status / ready / doctor / version
     setup_status / probe / doctor_report / models
     routing / routing_options / set_pin / clear_pin
+    lessons / delete_lesson / clear_lessons / notes / note / delete_note
     Runtime.open_session / list_sessions / delete_session / transcript /
             rename_session / export_session / import_session
     SessionHandle.run / answer / cancel / rename / usage_report / close
@@ -365,6 +366,80 @@ def clear_pin(task: str) -> list[str]:
 
     overrides.clear_pin(_task(task))
     return reload_everything()
+
+
+def _checked_kind(kind: Any) -> str:
+    from agent.memory import lessons as L
+
+    if not L.valid_kind(kind):
+        raise ValueError("kind is lesson, phone_lesson or app_note:<package>")
+    return kind
+
+
+def lessons(kind: str) -> dict[str, Any]:
+    """What the bank holds under `kind` (agent/memory/lessons.py
+    `list_kind`): {"kind", "lessons": [{"lesson_id", "cue", "action",
+    "outcome", "text"}]}. ValueError for a kind a host may not name."""
+    from agent.memory import lessons as L
+
+    kind = _checked_kind(kind)
+    with L.bank_session():
+        return {"kind": kind, "lessons": L.list_kind(kind)}
+
+
+def delete_lesson(kind: str, lesson_id: str) -> bool:
+    from agent.memory import lessons as L
+
+    kind = _checked_kind(kind)
+    if not L.valid_lesson_id(lesson_id):
+        raise ValueError("a lesson id is 64 hex characters")
+    with L.bank_session():
+        return L.delete_lesson(kind, lesson_id)
+
+
+def clear_lessons(kind: str) -> int:
+    """Delete everything under `kind`; how many there were. Not undoable."""
+    from agent.memory import lessons as L
+
+    kind = _checked_kind(kind)
+    with L.bank_session(), L.bind_kind(kind):
+        return L.clear_bank()
+
+
+def notes() -> list[dict[str, Any]]:
+    """One row per app with notes, shipped or learned: {"package", "seeded",
+    "learned"} (how many learned notes)."""
+    from agent.memory import lessons as L
+    from agent.phone import notes as N
+
+    shipped = set(N.seeded_packages())
+    with L.bank_session():
+        learned = {kind[len(L.APP_NOTE_PREFIX):]: len(L.list_kind(kind)) for kind in L.note_kinds()}
+    return [{"package": package, "seeded": package in shipped, "learned": learned.get(package, 0)}
+            for package in sorted(shipped | set(learned))]
+
+
+def note(package: str) -> dict[str, Any]:
+    """One app's notes: the shipped text, the learned rows (deletable by id)
+    and the lines a phone run is actually shown (agent/phone/notes.py
+    `notes_for`: seeded first, learned ones not already said, capped)."""
+    from agent.memory import lessons as L
+    from agent.phone import notes as N
+
+    if not N.valid_package(package):
+        raise ValueError("package is an Android package name")
+    with L.bank_session():
+        return {"package": package, "seeded": N.seeded(package),
+                "learned": L.list_kind(N.note_kind(package)), "shown": N.notes_for(package)}
+
+
+def delete_note(package: str, lesson_id: str) -> bool:
+    """Forget one learned note. Shipped notes are package data and stay."""
+    from agent.phone import notes as N
+
+    if not N.valid_package(package):
+        raise ValueError("package is an Android package name")
+    return delete_lesson(N.note_kind(package), lesson_id)
 
 
 def _model_row(m) -> dict[str, Any]:
