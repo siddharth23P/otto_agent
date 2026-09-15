@@ -186,7 +186,7 @@ def test_an_entry_missing_its_cue_or_action_is_dropped():
             '{"cue": "when y", "action": "do y"}]'
     parsed = L.parse_distilled(reply)
 
-    assert [p.cue for p in parsed] == ["when y"]
+    assert [p.cue for p in parsed] == ["y"]  # the stored form adds its own "When"
 
 
 def test_the_outcome_defaults_to_how_the_run_went():
@@ -374,3 +374,94 @@ def test_parse_distilled_still_caps_at_three():
     reply = L.as_json([_lesson(f"s{i}") for i in range(6)])
     assert len(L.parse_distilled(reply)) == 3
     assert len(L.parse_lessons(reply)) == 6
+
+
+# --------------------------------------------------------------------------
+# A phone's lessons live apart from the workspace's (2026-09-15)
+# --------------------------------------------------------------------------
+
+def _phone_tools():
+    from agent.phone import JsonBackend, phone_tools
+    from tests.phone_fakes import FakePhone
+
+    return phone_tools(JsonBackend(FakePhone()))
+
+
+def test_phone_lessons_and_workspace_lessons_never_meet(bank, fake_embeddings):
+    """With TOP_K=1 over one namespace each kind could only displace the
+    other; a phone run was handed "switch browser, clear cache"."""
+    phone = "a results list opens sorted by relevance"
+    with L.bind_kind(L.PHONE_KIND):
+        L.record_lessons([_lesson(phone, "open the sort control before comparing")])
+    L.record_lessons([_lesson("a test fails on import", "check the virtualenv")])
+
+    assert [lesson.cue for lesson in L.all_lessons()] == ["a test fails on import"]
+    assert all(lesson.cue != phone for lesson in L.recall_lessons(phone, top_k=5))
+    with L.bind_kind(L.PHONE_KIND):
+        assert [lesson.cue for lesson in L.all_lessons()] == [phone]
+        assert [lesson.cue for lesson in L.recall_lessons(phone)] == [phone]
+
+
+def test_the_same_words_learned_in_both_places_are_two_lessons(bank, fake_embeddings):
+    same = _lesson("the screen did not change after a tap", "read the screen again before retrying")
+    L.record_lessons([same])
+    with L.bind_kind(L.PHONE_KIND):
+        assert L.record_lessons([same]) == [same]
+        assert len(L.all_lessons()) == 1
+    assert len(L.all_lessons()) == 1
+
+
+def test_clearing_the_phone_lessons_leaves_the_workspace_alone(bank, fake_embeddings):
+    L.record_lessons([_lesson("a build is slow", "cache the dependencies")])
+    with L.bind_kind(L.PHONE_KIND):
+        L.record_lessons([_lesson("an app opens on a splash screen", "wait for its home screen")])
+        assert L.clear_bank() == 1
+        assert L.all_lessons() == []
+    assert len(L.all_lessons()) == 1
+
+
+def test_a_cue_that_starts_with_when_is_not_stored_as_when_when():
+    parsed = L.parse_distilled('[{"cue": "When the list is long", "action": "scroll it", "outcome": "worked"}]')
+    assert parsed[0].rendered() == "When the list is long: scroll it [worked]"
+    assert L._parse("When When a page is slow: wait for it [worked]").cue == "a page is slow"
+
+
+def test_a_phone_run_is_distilled_as_one_and_banked_as_one(bank, fake_embeddings, monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    from agent.pipeline import nodes as pn
+    from agent.pipeline.toolkit import bind_extra_tools
+
+    seen = {}
+    reply = '[{"cue": "a results list opens sorted by relevance", "action": "open sort, pick price", "outcome": "worked"}]'
+    monkeypatch.setattr(pn, "_call", lambda llm, messages: seen.update(body=messages[-1].content) or reply)
+    monkeypatch.setattr(pn.ROUTER, "chat_model", lambda *a, **kw: object())
+    state = {
+        "messages": [HumanMessage("find the cheapest phone")], "actions": ["solve: phone_act tap ok"],
+        "transcript": [{"kind": "ai", "content": "FINAL:\ndone"}], "rejections": 0, "board": [],
+        "mode_log": [], "context": "",
+    }
+    with bind_extra_tools(_phone_tools()):
+        pn._distil(state, succeeded=True)
+    assert pn.PHONE_DISTIL_NOTE in seen["body"]
+    assert L.all_lessons() == []
+    with L.bind_kind(L.PHONE_KIND):
+        assert [lesson.cue for lesson in L.all_lessons()] == ["a results list opens sorted by relevance"]
+
+    seen.clear()
+    pn._distil(state, succeeded=True)
+    assert pn.PHONE_DISTIL_NOTE not in seen["body"]
+
+
+def test_a_phone_run_is_offered_only_phone_lessons(bank, fake_embeddings):
+    from agent.pipeline import nodes as pn
+    from agent.pipeline.toolkit import bind_extra_tools
+
+    task = "find the cheapest phone on a shopping app"
+    L.record_lessons([_lesson(task, "grep the logs")])
+    with bind_extra_tools(_phone_tools()):
+        assert pn._lessons_block(task) == ""
+        with L.bind_kind(L.PHONE_KIND):
+            L.record_lessons([_lesson(task, "sort by price")])
+        assert "sort by price" in pn._lessons_block(task)
+    assert "grep the logs" in pn._lessons_block(task)
