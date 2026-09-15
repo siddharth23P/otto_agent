@@ -397,6 +397,16 @@ class SessionHandle:
             self._answer_ready.set()
 
     def close(self) -> None:
+        # A phone turn distils its lesson after its answer is sent
+        # (agent/pipeline/nodes.py wait_for_learning). Give it a bounded
+        # moment to land before the stores it writes to close under it. Only
+        # if the pipeline was ever loaded: closing must not import it.
+        nodes = sys.modules.get("agent.pipeline.nodes")
+        if nodes is not None:
+            try:
+                nodes.wait_for_learning(10)
+            except Exception:  # noqa: BLE001 -- closing must not raise
+                logger.warning("waiting for a background lesson failed", exc_info=True)
         self._session.close()
 
     # -- the loop ----------------------------------------------------------

@@ -80,8 +80,11 @@ going badly.
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import re
+import threading
+import time
 from dataclasses import dataclass
 
 import json
@@ -112,7 +115,7 @@ from agent.pipeline.tools import (
     MUTATING, READ_ONLY, THIRD_PARTY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
 )
 from agent.pipeline.progress import (
-    check_cancelled, report as report_progress, watching as anyone_watching,
+    bind_progress, check_cancelled, report as report_progress, watching as anyone_watching,
 )
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
 from agent.pipeline.python_session import fresh_python_session, python_session_note
@@ -3479,6 +3482,68 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
         ))
 
 
+#: Phone runs still distilling their lesson after their answer went out.
+_LEARNING: set[threading.Thread] = set()
+_LEARNING_LOCK = threading.Lock()
+
+
+def _detach_from_trace() -> None:
+    """Forget the finished run's trace, in the learning thread's own copy of
+    its context: LangChain hands the parent runnable config (and with it the
+    Langfuse callback) to any model call made under it, and a span attached
+    to a trace that has already been scored and closed is noise at best."""
+    try:
+        from langchain_core.runnables.config import var_child_runnable_config
+
+        var_child_runnable_config.set(None)
+    except Exception:  # noqa: BLE001 -- tracing is never worth failing over
+        pass
+    try:
+        from opentelemetry import context as otel_context
+
+        otel_context.attach(otel_context.Context())
+    except Exception:  # noqa: BLE001 -- not installed
+        pass
+
+
+def _learn_in_background(state: AgentState, *, succeeded: bool) -> threading.Thread:
+    """`_distil` on a daemon thread, in a copy of this context -- so the bank,
+    read_only, the tools that make it a phone run (and so PHONE_KIND), the
+    budget and the usage ledger are the run's -- with nobody watching its
+    progress: the person has their answer, and a sink that already delivered
+    "final" must not hear from this run again."""
+    ctx = contextvars.copy_context()
+
+    def work() -> None:
+        _detach_from_trace()
+        try:
+            with bind_progress(None):
+                _distil(state, succeeded=succeeded)
+        except Exception:  # noqa: BLE001 -- a lesson is never worth a crash
+            logger.exception("learning from a finished phone run failed")
+        finally:
+            with _LEARNING_LOCK:
+                _LEARNING.discard(threading.current_thread())
+
+    thread = threading.Thread(target=ctx.run, args=(work,), name="otto-distil", daemon=True)
+    with _LEARNING_LOCK:
+        _LEARNING.add(thread)
+    thread.start()
+    return thread
+
+
+def wait_for_learning(timeout: float | None = None) -> bool:
+    """Wait for background lessons to land, at most `timeout` seconds in all.
+    Returns whether every one finished. A host calls this before it closes
+    the stores a lesson is written to (agent/embed.py SessionHandle.close)."""
+    deadline = None if timeout is None else time.monotonic() + timeout
+    with _LEARNING_LOCK:
+        threads = list(_LEARNING)
+    for thread in threads:
+        thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+    return not any(thread.is_alive() for thread in threads)
+
+
 def evaluator(state: AgentState) -> Command[Literal["agent", "research", "evaluator", "__end__", "ask_user"]]:
     task_text = state["messages"][-1].content
     node = state.get("node") or "agent"
@@ -3667,7 +3732,18 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "research", "evalua
         """Board lines for whatever the run leaves behind. The distilling call
         happens HERE, at a terminal edge, so a run that is going back to the
         agent for another attempt does not pay for a lesson about work that is
-        not finished."""
+        not finished.
+
+        On a phone it happens AFTER the answer goes out. The distil is one
+        more model call on the PLAN seat, and a person holding their phone
+        waited for it before seeing an answer that was already approved; no
+        part of the answer depends on it. A coding run keeps it synchronous,
+        where the lesson lines on the board are part of what a person reads."""
+        if _phone_run():
+            if not learning_enabled():
+                return []
+            _learn_in_background(dict(state), succeeded=succeeded)
+            return ["learning from this run in the background"]
         return [f"learned: {lesson.rendered()}"
                 for lesson in _distil(state, succeeded=succeeded)]
 
