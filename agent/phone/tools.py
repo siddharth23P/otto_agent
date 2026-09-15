@@ -337,7 +337,8 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                     # own guard handed the whole run over.
                     if failure := screen_now()[1]:
                         return "", failure
-                    if why := guard.submit_verdict(screen_texts(), screen_ids()):
+                    focused_search = guard.search_focused((state.get("snapshot") or {}).get("nodes"))
+                    if why := guard.submit_verdict(screen_texts(), screen_ids(), search_focused=focused_search):
                         if guard.checkout_context(screen_texts()):
                             return "", _refuse(name, why)
                         # A pay button somewhere on an ordinary page -- a

@@ -200,3 +200,19 @@ def test_denied_names_catch_an_app_asked_for_by_name():
     assert "payment or banking" in guard.package_verdict("", "Google Pay: Save and Pay")
     assert guard.package_verdict("", "Wikipedia") == ""
     assert guard.package_verdict("", "Otherwise Notes") == ""  # "wise" is a whole word only
+
+
+def test_enter_in_a_focused_search_box_is_a_search_not_a_purchase():
+    """Amazon's results page carries "Buy for ₹… with HDFC" on nearly every listing; refusing Enter
+    for it left phone runs unable to submit a typed query (2026-09-16). A checkout still refuses."""
+    offer = "Buy for ₹71,549 with HDFC Bank credit card"
+    box = node(1, "Search or ask a question", r="edit-field", e=True, f=True, v="rs_search_src_text")
+    assert guard.search_focused([box])
+    assert not guard.search_focused([dict(box, f=False)])
+    assert not guard.search_focused([dict(box, p=True)])
+    assert not guard.search_focused([node(1, "Quantity", r="edit-field", e=True, f=True)])
+    assert guard.search_focused([node(1, "", r="edit-field", e=True, f=True, v="com.app:id/searchQuery")])
+    assert not guard.search_focused([node(1, "Research notes", r="edit-field", e=True, f=True)])
+    assert guard.submit_verdict(["Search or ask a question", offer], search_focused=True) == ""
+    assert "payment step" in guard.submit_verdict(["Search or ask a question", offer])
+    assert "checkout" in guard.submit_verdict(["Order total ₹71,599", offer], search_focused=True)
