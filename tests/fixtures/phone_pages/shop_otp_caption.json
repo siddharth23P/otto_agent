@@ -1,0 +1,59 @@
+{
+ "snapshot_id": "shop_otp_caption",
+ "app": {
+  "package": "com.somestore.shop",
+  "label": "Store"
+ },
+ "screen": {
+  "w": 1080,
+  "h": 2400
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Enter your OTP",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    400,
+    700,
+    460
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Enter code",
+   "r": "edit-field",
+   "b": [
+    60,
+    480,
+    1020,
+    580
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 2,
+  "activity": "com.somestore.shop.VerifyActivity",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

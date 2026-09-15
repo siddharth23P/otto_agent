@@ -1,0 +1,147 @@
+{
+ "snapshot_id": "shop_otp_boxes",
+ "app": {
+  "package": "com.example.shop",
+  "label": "Shop"
+ },
+ "screen": {
+  "w": 1080,
+  "h": 2400
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    210,
+    600,
+    330,
+    720
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "n": "num",
+   "m": 1
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    360,
+    600,
+    480,
+    720
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "n": "num",
+   "m": 1
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    510,
+    600,
+    630,
+    720
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "n": "num",
+   "m": 1
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    660,
+    600,
+    780,
+    720
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "n": "num",
+   "m": 1
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    810,
+    600,
+    930,
+    720
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "n": "num",
+   "m": 1
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    960,
+    600,
+    1080,
+    720
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "n": "num",
+   "m": 1
+  }
+ ],
+ "page": {
+  "seq": 2,
+  "activity": "com.example.shop.OtpActivity",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

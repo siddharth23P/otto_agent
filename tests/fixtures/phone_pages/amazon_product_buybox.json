@@ -1,0 +1,1183 @@
+{
+ "snapshot_id": "amazon_product_buybox",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": [
+   "mobile_orderInformationGroup_feature_div",
+   "instantOrderUpdate_feature_div",
+   "oneTimePaymentPrice_feature_div",
+   "pointsInsideBuyBox_feature_div",
+   "deepCheckPromiseInsideBuyBox_feature_div",
+   "dsvDigitalBuyNow_feature_div",
+   "twisterPlusBuyBoxMessage_feature_div",
+   "shipToStoreBuyBox_feature_div",
+   "preAddToCartFramework_feature_div",
+   "addToCart_feature_div",
+   "buyNow_feature_div",
+   "PAY_ON_DELIVERY",
+   "buyItOnAB_feature_div",
+   "tax-id-submit-button",
+   "dpx-rex-nile-submit-button",
+   "dpx-rex-nile-submit-button-announce",
+   "dpx-rex-nile-search-submit-focus-container",
+   "postPurchaseSideSheet_MP_feature_div"
+  ]
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Back",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    165,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    165,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 3,
+   "t": "Search or ask a question",
+   "d": "",
+   "r": "text",
+   "b": [
+    368,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1441,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 8,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    350,
+    1441,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 9,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    350,
+    1441,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    350,
+    1398,
+    402
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 11,
+   "t": "Save ₹7 as cashback",
+   "d": "",
+   "r": "text",
+   "b": [
+    210,
+    350,
+    1350,
+    353
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    398,
+    1398,
+    522
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "",
+   "d": "See all offers",
+   "r": "view",
+   "b": [
+    45,
+    443,
+    431,
+    522
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "See all offers",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    443,
+    401,
+    522
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 15,
+   "t": "FREE delivery",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    631,
+    438,
+    706
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 16,
+   "t": "Today",
+   "d": "",
+   "r": "text",
+   "b": [
+    435,
+    631,
+    607,
+    706
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 17,
+   "t": ". Order within",
+   "d": "",
+   "r": "text",
+   "b": [
+    603,
+    631,
+    997,
+    706
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "10 hrs 51 mins",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    631,
+    1252,
+    781
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "ftCountdown"
+  },
+  {
+   "i": 19,
+   "t": ".",
+   "d": "",
+   "r": "text",
+   "b": [
+    180,
+    706,
+    217,
+    781
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "",
+   "d": "Details about delivery costs and shipping methods",
+   "r": "view",
+   "b": [
+    210,
+    706,
+    401,
+    781
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "Details",
+   "d": "",
+   "r": "text",
+   "b": [
+    210,
+    706,
+    401,
+    781
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "",
+   "d": "Deliver to Person - Person 000000‌",
+   "r": "button",
+   "b": [
+    48,
+    826,
+    1200,
+    908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "contextualIngressPtLink"
+  },
+  {
+   "i": 23,
+   "t": "May be available at a lower price from",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    942,
+    1102,
+    1017
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "",
+   "d": "other sellers",
+   "r": "view",
+   "b": [
+    48,
+    942,
+    1248,
+    1092
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "other sellers",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    942,
+    1248,
+    1092
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": ", potentially without free Prime shipping.",
+   "d": "",
+   "r": "text",
+   "b": [
+    221,
+    1017,
+    1342,
+    1092
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "In stock",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    1133,
+    1391,
+    1227
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "availability"
+  },
+  {
+   "i": 28,
+   "t": "Select quantity",
+   "d": "",
+   "r": "view",
+   "b": [
+    48,
+    1268,
+    1391,
+    1512
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "mobileQuantityDropDown"
+  },
+  {
+   "i": 29,
+   "t": "",
+   "d": "Minimum order quantity: 2",
+   "r": "view",
+   "b": [
+    48,
+    1493,
+    787,
+    1572
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "trigger_popover"
+  },
+  {
+   "i": 30,
+   "t": "Minimum order quantity: 2",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    1493,
+    787,
+    1572
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    52,
+    1651,
+    1387,
+    1812
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "add-to-cart-button"
+  },
+  {
+   "i": 32,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    52,
+    1857,
+    1387,
+    2022
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "buy-now-button"
+  },
+  {
+   "i": 33,
+   "t": "Ships from",
+   "d": "",
+   "r": "view",
+   "b": [
+    67,
+    2086,
+    592,
+    2157
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 34,
+   "t": "Amazon",
+   "d": "",
+   "r": "text",
+   "b": [
+    626,
+    2090,
+    825,
+    2157
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "Sold by",
+   "d": "",
+   "r": "view",
+   "b": [
+    67,
+    2168,
+    592,
+    2255
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 36,
+   "t": "Cocoblu Retail",
+   "d": "",
+   "r": "button",
+   "b": [
+    626,
+    2168,
+    971,
+    2243
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "Gift options",
+   "d": "",
+   "r": "view",
+   "b": [
+    67,
+    2266,
+    592,
+    2352
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 38,
+   "t": "Available at checkout",
+   "d": "",
+   "r": "button",
+   "b": [
+    626,
+    2266,
+    1136,
+    2337
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "Save this item",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    2427,
+    1391,
+    2506
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "",
+   "d": "Add to Wish List",
+   "r": "view",
+   "b": [
+    52,
+    2521,
+    1387,
+    2637
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "Add to Wish List",
+   "d": "",
+   "r": "text",
+   "b": [
+    525,
+    2543,
+    915,
+    2611
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    0,
+    2698,
+    240,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "",
+   "d": "Home Tab 1 of 6",
+   "r": "view",
+   "b": [
+    45,
+    2698,
+    195,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 44,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    57,
+    2821,
+    182,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    240,
+    2698,
+    480,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 46,
+   "t": "",
+   "d": "Your Amazon.com Tab 2 of 6",
+   "r": "view",
+   "b": [
+    285,
+    2698,
+    435,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 47,
+   "t": "You",
+   "d": "",
+   "r": "text",
+   "b": [
+    317,
+    2821,
+    403,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 48,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    480,
+    2698,
+    720,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 49,
+   "t": "",
+   "d": "Wallet Tab 3 of 6",
+   "r": "view",
+   "b": [
+    525,
+    2698,
+    675,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 50,
+   "t": "Wallet",
+   "d": "",
+   "r": "text",
+   "b": [
+    533,
+    2821,
+    667,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 51,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    720,
+    2698,
+    960,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 52,
+   "t": "",
+   "d": "Cart 0 item Tab 4 of 6",
+   "r": "view",
+   "b": [
+    765,
+    2698,
+    915,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 53,
+   "t": "0",
+   "d": "",
+   "r": "text",
+   "b": [
+    834,
+    2718,
+    865,
+    2788
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "cart_count"
+  },
+  {
+   "i": 54,
+   "t": "Cart",
+   "d": "",
+   "r": "text",
+   "b": [
+    790,
+    2821,
+    889,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 55,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    960,
+    2698,
+    1200,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 56,
+   "t": "",
+   "d": "Browse menu Tab 5 of 6",
+   "r": "view",
+   "b": [
+    1005,
+    2698,
+    1155,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 57,
+   "t": "Menu",
+   "d": "",
+   "r": "text",
+   "b": [
+    1021,
+    2821,
+    1139,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 58,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    1200,
+    2698,
+    1440,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 59,
+   "t": "",
+   "d": "Amazon Rufus Tab 6 of 6",
+   "r": "view",
+   "b": [
+    1245,
+    2698,
+    1395,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 60,
+   "t": "Rufus",
+   "d": "",
+   "r": "text",
+   "b": [
+    1256,
+    2821,
+    1383,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  }
+ ]
+}

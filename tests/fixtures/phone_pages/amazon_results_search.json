@@ -1,0 +1,1199 @@
+{
+ "snapshot_id": "amazon_results_search",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Back",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    165,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    165,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    248,
+    200,
+    338,
+    290
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_search_disabled"
+  },
+  {
+   "i": 4,
+   "t": "philips 65w usb c cable",
+   "d": "",
+   "r": "text",
+   "b": [
+    368,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 8,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    515,
+    1440,
+    2863
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 9,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    515,
+    1440,
+    848
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "All Filters Icon",
+   "r": "button",
+   "b": [
+    135,
+    560,
+    228,
+    650
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "s-all-filters-announce"
+  },
+  {
+   "i": 11,
+   "t": "",
+   "d": "Prime Filter, unselected",
+   "r": "button",
+   "b": [
+    30,
+    695,
+    345,
+    807
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "All Discounts",
+   "d": "",
+   "r": "text",
+   "b": [
+    926,
+    567,
+    1245,
+    642
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "Today's Deals",
+   "d": "",
+   "r": "text",
+   "b": [
+    1353,
+    567,
+    1440,
+    642
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "",
+   "d": "Popular",
+   "r": "button",
+   "b": [
+    378,
+    695,
+    690,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "attrib"
+  },
+  {
+   "i": 15,
+   "t": "",
+   "d": "Brands",
+   "r": "button",
+   "b": [
+    708,
+    695,
+    1001,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "91049095031"
+  },
+  {
+   "i": 16,
+   "t": "",
+   "d": "Computers & Accessories Brands",
+   "r": "button",
+   "b": [
+    1020,
+    695,
+    1440,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "30678571031"
+  },
+  {
+   "i": 17,
+   "t": "",
+   "d": "Sponsored video, click to navigate to featured page.",
+   "r": "view",
+   "b": [
+    15,
+    875,
+    1428,
+    1673
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "",
+   "d": "Pause Sponsored Video",
+   "r": "button",
+   "b": [
+    1263,
+    1370,
+    1398,
+    1516
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1263,
+    1512,
+    1398,
+    1658
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "",
+   "d": "Magnetic Coiled Type C to Type C Cable, 65W / 3.1A Magnetic Coiled MagCable® Nylon Braided for Laptops and Smartphones, O-MagCable® PD Technology, QC 3.0 Charging - 1.2 meter , Type C - Type C , Black",
+   "r": "view",
+   "b": [
+    30,
+    1718,
+    543,
+    2123
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "",
+   "d": "Magnetic Coiled Type C to Type C Cable, 65W / 3.1A Magnetic Coiled MagCable® Nylon Braided for Laptops and Smartphones, O-MagCable® PD Technology, QC 3.0 Charging - 1.2 meter , Type C - Type C , Black",
+   "r": "image",
+   "b": [
+    30,
+    1748,
+    543,
+    2093
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "",
+   "d": "Magnetic Coiled Type C to Type C Cable, 65W / 3.1A Magnetic Coiled MagCable® Nylon Braided for Laptops and Smartphones, O-MagCable® PD Technology, QC 3.0 Charging - 1.2 meter , Type C - Type C , Black",
+   "r": "view",
+   "b": [
+    600,
+    1737,
+    1357,
+    1981
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "Magnetic Coiled Type C to Type C Cable, 65W / 3.1A Magnetic Coiled MagCable® Nylon Braided for Laptops and Smartphones, O-MagCable® PD Technology, QC 3.0 Charging - 1.2 meter , Type C - Type C , Black",
+   "d": "",
+   "r": "text",
+   "b": [
+    607,
+    1760,
+    1342,
+    2352
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "",
+   "d": "Rated 4.3 out of 5 stars from 833 reviews",
+   "r": "view",
+   "b": [
+    600,
+    1992,
+    1357,
+    2086
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "4.3",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    2007,
+    678,
+    2075
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "833",
+   "d": "",
+   "r": "text",
+   "b": [
+    948,
+    2007,
+    1046,
+    2075
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "",
+   "d": "Leave feedback on Sponsored ad",
+   "r": "button",
+   "b": [
+    1166,
+    2138,
+    1428,
+    2258
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "Results",
+   "d": "",
+   "r": "text",
+   "b": [
+    0,
+    2393,
+    228,
+    2487
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 29,
+   "t": "",
+   "d": "ref=sr_1_1_sspa?ie=UTF8&psc=1&spc=MTo0MjAyNjgwMTUwMjQ1NDA2OjE3ODk0NzA5ODc6c3BfcGhvbmVhcHBfc2VhcmNoX2F0ZjozMDEwMzY5MDE2ODc5MzI6Ojo6&sp_csd=d2lkZ2V0TmFtZT1zcF9waG9uZWFwcF9zZWFyY2hfYXRm&aref=SXilFRJo88&keywords=philips+65w+usb+c+cable&dib_tag=se&sp_cr=ZAZ&dplnkId=3f0e9086-6e26-4167-b242-e3ef3c9ea5e8&ni=1&dib=eyJ2IjoiMSJ9.-wyHwJSh36Vh5mkAYq3CSWOUW25b0PYtTxblAoDmMz5MwU-lVo7IPbPWi7TVPgqNc8UzyHqHfcrn80PBwNOvbNvMTjc0ypV5lRywtgrsoyBHPEyDkAZNnqq0x1ZfFS5VlJv4F0DI6fpu7TKv8ectA3BKhL-wCvp90SarHlcS8tttDqIWX_9nTtg2Fdm0QwAwXQBjVWVzfA6aODlXUtDxXw",
+   "r": "view",
+   "b": [
+    15,
+    2393,
+    607,
+    2863
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "",
+   "d": "View Sponsored information or leave ad feedback",
+   "r": "view",
+   "b": [
+    618,
+    2423,
+    1383,
+    2540
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "View Sponsored information or leave ad feedback",
+   "d": "",
+   "r": "button",
+   "b": [
+    618,
+    2446,
+    821,
+    2498
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "",
+   "d": "Sponsored Ad - PHILIPS DLC7130CR/94 100W Magnetic Type-C to Type-C Fast Charging Cable (1m, Coral Reef) | Nylon Braided | Compatible with iPhone 15+ Series, USB-C iPad Models, Samsung Galaxy & All Type C Devices",
+   "r": "view",
+   "b": [
+    618,
+    2532,
+    1383,
+    2690
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "",
+   "d": "Sponsored Ad - PHILIPS DLC7130CR/94 100W Magnetic Type-C to Type-C Fast Charging Cable (1m, Coral Reef) | Nylon Braided | Compatible with iPhone 15+ Series, USB-C iPad Models, Samsung Galaxy & All Type C Devices",
+   "r": "view",
+   "b": [
+    618,
+    2532,
+    1383,
+    2690
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "",
+   "d": "Sponsored Ad - PHILIPS DLC7130CR/94 100W Magnetic Type-C to Type-C Fast Charging Cable (1m, Coral Reef) | Nylon Braided | Compatible with iPhone 15+ Series, USB-C iPad Models, Samsung Galaxy & All Type C Devices",
+   "r": "text",
+   "b": [
+    618,
+    2532,
+    1383,
+    2690
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "",
+   "d": "USB Type C",
+   "r": "view",
+   "b": [
+    618,
+    2682,
+    1383,
+    2768
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "USB Type C",
+   "d": "",
+   "r": "text",
+   "b": [
+    637,
+    2708,
+    836,
+    2761
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "5.0 out of 5 stars 23 ratings",
+   "r": "view",
+   "b": [
+    618,
+    2780,
+    1383,
+    2843
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "5.0 out of 5 stars",
+   "d": "",
+   "r": "text",
+   "b": [
+    690,
+    2783,
+    918,
+    2832
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "(23)",
+   "d": "",
+   "r": "text",
+   "b": [
+    926,
+    2783,
+    1012,
+    2843
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "",
+   "d": "Limited time deal ₹949 M.R.P: ₹1,398 (32% off)",
+   "r": "view",
+   "b": [
+    618,
+    2855,
+    1383,
+    2863
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "Limited time deal",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2855,
+    1042,
+    2863
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "DEAL_B0GPFZQ61V-label"
+  },
+  {
+   "i": 42,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    19,
+    350,
+    1421,
+    515
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "glow_subnav_ingress"
+  },
+  {
+   "i": 43,
+   "t": "Deliver to Person - Person 000000 ⌵",
+   "d": "",
+   "r": "text",
+   "b": [
+    132,
+    398,
+    1084,
+    466
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "glow_subnav_label"
+  },
+  {
+   "i": 44,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    0,
+    2698,
+    240,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "Home Tab 1 of 6",
+   "r": "view",
+   "b": [
+    45,
+    2698,
+    195,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 46,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    57,
+    2821,
+    182,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 47,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    240,
+    2698,
+    480,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 48,
+   "t": "",
+   "d": "Your Amazon.com Tab 2 of 6",
+   "r": "view",
+   "b": [
+    285,
+    2698,
+    435,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 49,
+   "t": "You",
+   "d": "",
+   "r": "text",
+   "b": [
+    317,
+    2821,
+    403,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 50,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    480,
+    2698,
+    720,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 51,
+   "t": "",
+   "d": "Wallet Tab 3 of 6",
+   "r": "view",
+   "b": [
+    525,
+    2698,
+    675,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 52,
+   "t": "Wallet",
+   "d": "",
+   "r": "text",
+   "b": [
+    533,
+    2821,
+    667,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 53,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    720,
+    2698,
+    960,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 54,
+   "t": "",
+   "d": "Cart 1 item Tab 4 of 6",
+   "r": "view",
+   "b": [
+    765,
+    2698,
+    915,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 55,
+   "t": "1",
+   "d": "",
+   "r": "text",
+   "b": [
+    839,
+    2718,
+    859,
+    2788
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "cart_count"
+  },
+  {
+   "i": 56,
+   "t": "Cart",
+   "d": "",
+   "r": "text",
+   "b": [
+    790,
+    2821,
+    889,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 57,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    960,
+    2698,
+    1200,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 58,
+   "t": "",
+   "d": "Browse menu Tab 5 of 6",
+   "r": "view",
+   "b": [
+    1005,
+    2698,
+    1155,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 59,
+   "t": "Menu",
+   "d": "",
+   "r": "text",
+   "b": [
+    1021,
+    2821,
+    1139,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 60,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    1200,
+    2698,
+    1440,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 61,
+   "t": "",
+   "d": "Amazon Rufus Tab 6 of 6",
+   "r": "view",
+   "b": [
+    1245,
+    2698,
+    1395,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 62,
+   "t": "Rufus",
+   "d": "",
+   "r": "text",
+   "b": [
+    1256,
+    2821,
+    1383,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  }
+ ]
+}

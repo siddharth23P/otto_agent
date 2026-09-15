@@ -1,0 +1,79 @@
+{
+ "snapshot_id": "settings_display",
+ "app": {
+  "package": "com.android.settings",
+  "label": "Settings"
+ },
+ "screen": {
+  "w": 1080,
+  "h": 2400
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Display",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    200,
+    700,
+    260
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 2,
+   "t": "Brightness level",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    700,
+    900,
+    760
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "Font size",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    900,
+    900,
+    960
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 1,
+  "activity": "com.android.settings.SubSettings",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

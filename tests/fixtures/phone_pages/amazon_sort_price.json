@@ -1,0 +1,800 @@
+{
+ "snapshot_id": "amazon_sort_price",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Back",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    165,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    165,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    248,
+    200,
+    338,
+    290
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_search_disabled"
+  },
+  {
+   "i": 4,
+   "t": "apple iphone",
+   "d": "",
+   "r": "text",
+   "b": [
+    368,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 8,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1440,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 9,
+   "t": "Filters",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    402,
+    225,
+    477
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "s?k=apple+iphone&s=price-asc-rank&dplnk=Y&dplnkId=3c03f9b3-3c2b-42c6-8c45-c05f316929c4&ni=1&ni_pt=SR&qid=1789474724&ref=sr_st&ds=v1%3A10XdLWXoqKQrO%2FugAeRZ5mNlyyjYfIEmatz5tTfiznU#",
+   "r": "view",
+   "b": [
+    1350,
+    387,
+    1398,
+    488
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 11,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    530,
+    453,
+    2678
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "Weight",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    350,
+    453,
+    526
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "Security Feature",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    526,
+    453,
+    725
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "Display Resolution",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    725,
+    453,
+    923
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 15,
+   "t": "Wireless Network Technology",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    920,
+    453,
+    1175
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 16,
+   "t": "Rear Camera Photo Sensor Resolution",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1171,
+    453,
+    1486
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 17,
+   "t": "Input",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1486,
+    453,
+    1685
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "Country of Origin",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1685,
+    453,
+    1883
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "Sim Card Size",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    1883,
+    453,
+    2082
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "GPS Navigation",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2078,
+    453,
+    2281
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "Battery Type",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2277,
+    453,
+    2476
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "Sort by",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2476,
+    453,
+    2675
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "Sort by",
+   "d": "",
+   "r": "text",
+   "b": [
+    495,
+    575,
+    701,
+    650
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "",
+   "d": "Remove the filter Price: Low to High to expand results",
+   "r": "view",
+   "b": [
+    510,
+    725,
+    1053,
+    845
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sort/price-asc-rank"
+  },
+  {
+   "i": 25,
+   "t": "Price: Low to High",
+   "d": "",
+   "r": "text",
+   "b": [
+    558,
+    747,
+    1001,
+    822
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "",
+   "d": "Apply the filter Featured to narrow results",
+   "r": "view",
+   "b": [
+    1072,
+    725,
+    1387,
+    845
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sort/relevanceblender"
+  },
+  {
+   "i": 27,
+   "t": "Featured",
+   "d": "",
+   "r": "text",
+   "b": [
+    1117,
+    747,
+    1338,
+    822
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "",
+   "d": "Apply the filter Price: High to Low to narrow results",
+   "r": "view",
+   "b": [
+    510,
+    875,
+    1046,
+    998
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sort/price-desc-rank"
+  },
+  {
+   "i": 29,
+   "t": "Price: High to Low",
+   "d": "",
+   "r": "text",
+   "b": [
+    555,
+    897,
+    997,
+    972
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "",
+   "d": "Apply the filter Avg. Customer Review to narrow results",
+   "r": "view",
+   "b": [
+    510,
+    1025,
+    1143,
+    1148
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sort/review-rank"
+  },
+  {
+   "i": 31,
+   "t": "Avg. Customer Review",
+   "d": "",
+   "r": "text",
+   "b": [
+    555,
+    1047,
+    1095,
+    1122
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "",
+   "d": "Apply the filter Newest Arrivals to narrow results",
+   "r": "view",
+   "b": [
+    510,
+    1175,
+    982,
+    1298
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sort/date-desc-rank"
+  },
+  {
+   "i": 33,
+   "t": "Newest Arrivals",
+   "d": "",
+   "r": "text",
+   "b": [
+    555,
+    1197,
+    933,
+    1272
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "",
+   "d": "Apply the filter Best Sellers to narrow results",
+   "r": "view",
+   "b": [
+    1001,
+    1175,
+    1380,
+    1298
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sort/exact-aware-popularity-rank"
+  },
+  {
+   "i": 35,
+   "t": "Best Sellers",
+   "d": "",
+   "r": "text",
+   "b": [
+    1050,
+    1197,
+    1331,
+    1272
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "Clear Filters",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2723,
+    558,
+    2858
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "Clear Filters",
+   "r": "view",
+   "b": [
+    45,
+    2723,
+    416,
+    2858
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "Clear Filters",
+   "d": "",
+   "r": "text",
+   "b": [
+    93,
+    2761,
+    360,
+    2825
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "Show 1,507 results",
+   "d": "",
+   "r": "view",
+   "b": [
+    551,
+    2723,
+    1398,
+    2858
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "",
+   "d": "Show 1,507 results",
+   "r": "view",
+   "b": [
+    783,
+    2727,
+    1398,
+    2858
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "Show 1,507 results",
+   "d": "",
+   "r": "text",
+   "b": [
+    877,
+    2765,
+    1301,
+    2828
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ]
+}

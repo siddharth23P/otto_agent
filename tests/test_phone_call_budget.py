@@ -17,6 +17,10 @@ run to add a product from its page instead of pressing Enter.
 
 After telling a phone run to press enter to submit a typed search (2026-09-16): 39887 -> 40029, 31402 -> 31544 characters.
 
+After judging pages whole (2026-09-16): the guidance says shopping goes through checkout to the payment
+page and what a declined control means: 40029 -> 40320, 31544 -> 31835 characters. The results screen
+is an ordinary page, so its digest is unchanged.
+
 after the phone's own agent prompt: 12 calls, largest 72808 chars.
 after folding old screens: 12 calls, largest 38370 chars.
 after phone_do: the one-action-per-call script is unchanged in calls, and
@@ -41,9 +45,9 @@ from agent.pipeline.toolkit import bind_extra_tools
 from tests.phone_fakes import FakePhone, node, snapshot
 
 MAX_LOOP_CALLS = 12
-MAX_LARGEST_CALL_CHARS = 40029
+MAX_LARGEST_CALL_CHARS = 40320
 MAX_BATCHED_LOOP_CALLS = 5
-MAX_BATCHED_LARGEST_CALL_CHARS = 31544
+MAX_BATCHED_LARGEST_CALL_CHARS = 31835
 
 SCRIPT = [
     "ACTION: phone_screen\nCODE:\n{}",

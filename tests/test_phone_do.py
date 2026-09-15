@@ -80,30 +80,32 @@ def test_an_ambiguous_step_stops_and_the_rest_never_reach_the_phone():
     assert _acted(phone) == [("tap_node", "s1", 2, False, False)]
 
 
-def test_a_pay_button_mid_sequence_is_refused_by_the_guard():
+def test_the_steps_stop_where_a_payment_page_opens():
     phone = FakePhone([BLINKIT_SEARCH, BLINKIT_CART])
     result = _do(phone, {"op": "tap", "target": "View cart"}, {"op": "tap", "target": "Proceed to Pay"},
                  {"op": "press", "key": "back"})
-    assert result.stderr.startswith("GUARD: phone_do: stopped at step 2 of 3: 'Proceed to Pay ₹28' is a payment step")
+    assert result.stderr.startswith("GUARD: phone_do: stopped at step 1 of 3: this is a payment page")
+    assert result.stderr.endswith("; steps 2-3 not run")
     assert _acted(phone) == [("tap_node", "s1", 5, False, False)]
     # The cart it stopped on is shown: what is in it is the answer.
     assert "Amul Taaza Toned Milk 500 ml x1" in result.stdout
 
 
-def test_buy_now_by_its_id_mid_sequence_is_refused_by_the_guard():
+def test_buy_now_by_its_id_mid_sequence_is_declined_without_a_hand_over():
     phone = FakePhone([AMAZON_RESULTS, AMAZON_PRODUCT])
     result = _do(phone, {"op": "tap", "target": "PHILIPS"}, {"op": "tap", "target": "#buy-now-button"})
-    assert result.stderr.startswith("GUARD: phone_do: stopped at step 2 of 2:")
-    assert "buy-now-button" in result.stderr
+    assert result.stderr.startswith("phone_do: stopped at step 2 of 2: 'Submit' #buy-now-button is a payment control")
     assert not any(call[0] == "tap_node" and call[1] == "s6" for call in phone.calls)
 
 
-def test_enter_after_typing_on_a_checkout_is_refused_mid_sequence():
+def test_typing_and_enter_on_a_payment_page_are_refused_mid_sequence():
+    """An order summary with its grand total is a payment page: its fields are not typed into
+    and Enter is not pressed, before a step reaches the phone."""
     phone = FakePhone([CHECKOUT, CHECKOUT])
     result = _do(phone, {"op": "type", "text": "ring the bell", "target": "Delivery instructions"},
                  {"op": "press", "key": "enter"})
-    assert result.stderr.startswith("GUARD: phone_do: stopped at step 2 of 2: this screen is a checkout")
-    assert _acted(phone) == [("type_text", "ring the bell", 2)]
+    assert result.stderr.startswith("GUARD: phone_do: stopped at step 1 of 2: this is a payment page")
+    assert _acted(phone) == []
 
 
 def test_a_change_of_app_stops_the_steps_written_for_the_one_before():

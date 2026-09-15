@@ -1,0 +1,97 @@
+{
+ "snapshot_id": "shop_order_summary_continue",
+ "app": {
+  "package": "com.grofers.customerapp",
+  "label": "Blinkit"
+ },
+ "screen": {
+  "w": 1080,
+  "h": 2400
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Order summary",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    200,
+    700,
+    260
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 2,
+   "t": "Amul Taaza Toned Milk 500 ml x1",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    300,
+    900,
+    360
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "Total ₹28",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    2080,
+    600,
+    2140
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 4,
+   "t": "Continue",
+   "d": "",
+   "r": "button",
+   "b": [
+    60,
+    2200,
+    1020,
+    2300
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 3,
+  "activity": "com.grofers.customerapp.CheckoutActivity",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

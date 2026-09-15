@@ -27,12 +27,14 @@ import base64
 import json
 from typing import Any, Protocol, runtime_checkable
 
-#: Error codes a backend may use. `guard` is the money guard; `stale` means
-#: the snapshot a node index came from is no longer on screen; `unsupported`
-#: is a capability the device lacks (no accessibility service running, no
+#: Error codes a backend may use. `guard` is the money guard handing the
+#: phone to the person; `refused` is the guard declining one action (a pay
+#: button on an ordinary page) and nothing more; `stale` means the snapshot
+#: a node index came from is no longer on screen; `unsupported` is a
+#: capability the device lacks (no accessibility service running, no
 #: screenshot permission); `timeout` a gesture or capture that never
 #: completed.
-ERROR_CODES = ("guard", "stale", "unsupported", "failed", "timeout")
+ERROR_CODES = ("guard", "refused", "stale", "unsupported", "failed", "timeout")
 
 
 class PhoneError(Exception):

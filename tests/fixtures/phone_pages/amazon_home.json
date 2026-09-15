@@ -1,0 +1,1427 @@
+{
+ "snapshot_id": "amazon_home",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "",
+   "r": "list",
+   "b": [
+    0,
+    762,
+    1440,
+    972
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "subnav_scrollable_container"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "For you",
+   "r": "view",
+   "b": [
+    45,
+    762,
+    222,
+    972
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_pill"
+  },
+  {
+   "i": 3,
+   "t": "For you",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    890,
+    207,
+    950
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_label"
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "Electronics",
+   "r": "view",
+   "b": [
+    252,
+    762,
+    496,
+    972
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_pill"
+  },
+  {
+   "i": 5,
+   "t": "Electronics",
+   "d": "",
+   "r": "text",
+   "b": [
+    267,
+    890,
+    481,
+    950
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_label"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "Mobiles",
+   "r": "view",
+   "b": [
+    526,
+    762,
+    708,
+    972
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_pill"
+  },
+  {
+   "i": 7,
+   "t": "Mobiles",
+   "d": "",
+   "r": "text",
+   "b": [
+    541,
+    890,
+    693,
+    950
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_label"
+  },
+  {
+   "i": 8,
+   "t": "",
+   "d": "Fashion",
+   "r": "view",
+   "b": [
+    738,
+    762,
+    918,
+    972
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_pill"
+  },
+  {
+   "i": 9,
+   "t": "Fashion",
+   "d": "",
+   "r": "text",
+   "b": [
+    753,
+    890,
+    903,
+    950
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_label"
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "Kids & Toys",
+   "r": "view",
+   "b": [
+    948,
+    762,
+    1204,
+    972
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_pill"
+  },
+  {
+   "i": 11,
+   "t": "Kids & Toys",
+   "d": "",
+   "r": "text",
+   "b": [
+    963,
+    890,
+    1189,
+    950
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_label"
+  },
+  {
+   "i": 12,
+   "t": "",
+   "d": "Home",
+   "r": "view",
+   "b": [
+    1234,
+    762,
+    1384,
+    972
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_pill"
+  },
+  {
+   "i": 13,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    1251,
+    890,
+    1367,
+    950
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_label"
+  },
+  {
+   "i": 14,
+   "t": "",
+   "d": "Beauty",
+   "r": "view",
+   "b": [
+    1414,
+    762,
+    1440,
+    972
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_pill"
+  },
+  {
+   "i": 15,
+   "t": "Beauty",
+   "d": "",
+   "r": "text",
+   "b": [
+    1429,
+    890,
+    1440,
+    950
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "icon_text_vsn_label"
+  },
+  {
+   "i": 16,
+   "t": "",
+   "d": "",
+   "r": "list",
+   "b": [
+    0,
+    112,
+    1440,
+    382
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_scrollable_container"
+  },
+  {
+   "i": 17,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    146,
+    322,
+    371
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_holder"
+  },
+  {
+   "i": 18,
+   "t": "Pay",
+   "d": "",
+   "r": "text",
+   "b": [
+    151,
+    296,
+    216,
+    356
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_text"
+  },
+  {
+   "i": 19,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    352,
+    146,
+    629,
+    371
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_holder"
+  },
+  {
+   "i": 20,
+   "t": "Fresh",
+   "d": "",
+   "r": "text",
+   "b": [
+    442,
+    296,
+    539,
+    356
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_text"
+  },
+  {
+   "i": 21,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    659,
+    146,
+    936,
+    371
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_holder"
+  },
+  {
+   "i": 22,
+   "t": "Bazaar",
+   "d": "",
+   "r": "text",
+   "b": [
+    736,
+    296,
+    858,
+    356
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_text"
+  },
+  {
+   "i": 23,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    966,
+    146,
+    1243,
+    371
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_holder"
+  },
+  {
+   "i": 24,
+   "t": "Video",
+   "d": "",
+   "r": "text",
+   "b": [
+    1053,
+    296,
+    1156,
+    356
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_text"
+  },
+  {
+   "i": 25,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    1273,
+    146,
+    1440,
+    371
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_holder"
+  },
+  {
+   "i": 26,
+   "t": "Pharmacy",
+   "d": "",
+   "r": "text",
+   "b": [
+    1322,
+    296,
+    1440,
+    356
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "tiles_nav_item_text"
+  },
+  {
+   "i": 27,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    0,
+    1440,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    982,
+    1440,
+    2632
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "gwm-window-container"
+  },
+  {
+   "i": 29,
+   "t": "",
+   "d": "Starting ₹33,999* Sale starts 17 Sep, 12 pm Redmi 17 Pro Redmi",
+   "r": "view",
+   "b": [
+    60,
+    1012,
+    1050,
+    2602
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "Starting ₹33,999*",
+   "d": "",
+   "r": "text",
+   "b": [
+    105,
+    1057,
+    1005,
+    1192
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "Sale starts 17 Sep, 12 pm",
+   "d": "",
+   "r": "text",
+   "b": [
+    105,
+    1200,
+    817,
+    1278
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "",
+   "d": "Redmi 17 Pro",
+   "r": "image",
+   "b": [
+    105,
+    1323,
+    1005,
+    1428
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "",
+   "d": "Redmi",
+   "r": "image",
+   "b": [
+    60,
+    1012,
+    1050,
+    2602
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "",
+   "d": "Mega Electronic Days Up to 50% off Best deals on Security Cameras CP Plus | 70mai Top *T&C apply",
+   "r": "view",
+   "b": [
+    1080,
+    1012,
+    1440,
+    2602
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "Mega Electronic Days Up to 50% off",
+   "d": "",
+   "r": "text",
+   "b": [
+    1125,
+    1057,
+    1440,
+    1308
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "Best deals on Security Cameras",
+   "d": "",
+   "r": "text",
+   "b": [
+    1125,
+    1316,
+    1440,
+    1395
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "CP Plus | 70mai",
+   "r": "image",
+   "b": [
+    1125,
+    1440,
+    1440,
+    1545
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "",
+   "d": "Top",
+   "r": "image",
+   "b": [
+    1080,
+    1012,
+    1440,
+    2602
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "*T&C apply",
+   "d": "",
+   "r": "text",
+   "b": [
+    1080,
+    2531,
+    1368,
+    2606
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2628,
+    1440,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "gwm-dashboard-container"
+  },
+  {
+   "i": 41,
+   "t": "",
+   "d": "For you",
+   "r": "view",
+   "b": [
+    105,
+    2662,
+    547,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "For you",
+   "d": "",
+   "r": "text",
+   "b": [
+    105,
+    2662,
+    318,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "",
+   "d": "Keep shopping for Belkin Braided USB-A to USB-C Cable (1 Meter, 15W) - Soft, Flexible Fast-Charging Cable, Type C Charger Cord for iPhone...",
+   "r": "view",
+   "b": [
+    667,
+    2662,
+    1110,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 44,
+   "t": "Keep shopping for",
+   "d": "",
+   "r": "text",
+   "b": [
+    667,
+    2662,
+    1110,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "Stuffcool Numen 65C, Smallest 65W GaN Charger with USB-C PD PPS, SFC 2.0 & 3.0, AVS Compatible, Fast Charging for MacBook Air, iPhone, Pixel & Samsung, Made in India",
+   "r": "view",
+   "b": [
+    1233,
+    2662,
+    1440,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 46,
+   "t": "Stuffcool Numen 65C, Smallest 65W GaN Charger with USB-C PD PPS, SFC 2.0 & 3.0, AVS Compatible, Fast Charging for MacBook Air, iPhone, Pixel & Samsung, Made in India",
+   "d": "",
+   "r": "text",
+   "b": [
+    1233,
+    2662,
+    1440,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 47,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    38,
+    601,
+    1402,
+    766
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "glow_subnav_ingress"
+  },
+  {
+   "i": 48,
+   "t": "Deliver to Person - Person 000000",
+   "d": "",
+   "r": "text",
+   "b": [
+    173,
+    645,
+    1293,
+    721
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "glow_subnav_label"
+  },
+  {
+   "i": 49,
+   "t": "⌵",
+   "d": "",
+   "r": "text",
+   "b": [
+    1293,
+    660,
+    1327,
+    707
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "down_arrow"
+  },
+  {
+   "i": 50,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    0,
+    382,
+    1440,
+    607
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 51,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    83,
+    457,
+    173,
+    547
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_search_disabled"
+  },
+  {
+   "i": 52,
+   "t": "Search or ask a question",
+   "d": "",
+   "r": "text",
+   "b": [
+    203,
+    420,
+    945,
+    585
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 53,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    420,
+    1110,
+    585
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 54,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    420,
+    1275,
+    585
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 55,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    382,
+    1440,
+    607
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 56,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    0,
+    2698,
+    240,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 57,
+   "t": "",
+   "d": "Home Tab 1 of 6",
+   "r": "view",
+   "b": [
+    45,
+    2698,
+    195,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 58,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    57,
+    2821,
+    182,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 59,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    240,
+    2698,
+    480,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 60,
+   "t": "",
+   "d": "Your Amazon.com Tab 2 of 6",
+   "r": "view",
+   "b": [
+    285,
+    2698,
+    435,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 61,
+   "t": "You",
+   "d": "",
+   "r": "text",
+   "b": [
+    317,
+    2821,
+    403,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 62,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    480,
+    2698,
+    720,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 63,
+   "t": "",
+   "d": "Wallet Tab 3 of 6",
+   "r": "view",
+   "b": [
+    525,
+    2698,
+    675,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 64,
+   "t": "Wallet",
+   "d": "",
+   "r": "text",
+   "b": [
+    533,
+    2821,
+    667,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 65,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    720,
+    2698,
+    960,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 66,
+   "t": "",
+   "d": "Cart 1 item Tab 4 of 6",
+   "r": "view",
+   "b": [
+    765,
+    2698,
+    915,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 67,
+   "t": "1",
+   "d": "",
+   "r": "text",
+   "b": [
+    839,
+    2718,
+    859,
+    2788
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "cart_count"
+  },
+  {
+   "i": 68,
+   "t": "Cart",
+   "d": "",
+   "r": "text",
+   "b": [
+    790,
+    2821,
+    889,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 69,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    960,
+    2698,
+    1200,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 70,
+   "t": "",
+   "d": "Browse menu Tab 5 of 6",
+   "r": "view",
+   "b": [
+    1005,
+    2698,
+    1155,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 71,
+   "t": "Menu",
+   "d": "",
+   "r": "text",
+   "b": [
+    1021,
+    2821,
+    1139,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 72,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    1200,
+    2698,
+    1440,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 73,
+   "t": "",
+   "d": "Amazon Rufus Tab 6 of 6",
+   "r": "view",
+   "b": [
+    1245,
+    2698,
+    1395,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 74,
+   "t": "Rufus",
+   "d": "",
+   "r": "text",
+   "b": [
+    1256,
+    2821,
+    1383,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  }
+ ]
+}
