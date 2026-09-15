@@ -127,17 +127,28 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         capture is what expires it: nothing to clear here."""
         state["snapshot"] = snapshot
 
-    def remember(snapshot: dict | None) -> str:
-        if isinstance(snapshot, dict) and snapshot.get("nodes") is not None:
-            keep(snapshot)
-            return _digest.render_digest(snapshot)
-        # No screen came back with the action: read it.
-        try:
-            fresh = backend.tree()
-        except PhoneError as exc:
-            return f"(could not read the screen after that: {exc})"
-        keep(fresh)
-        return _digest.render_digest(fresh)
+    def absorb(snapshot: dict | None) -> str:
+        """Keep the screen an action left: the one it handed back, else a
+        fresh read. "" when a screen is held, else what went wrong -- the
+        previous capture stays kept, and `render_current` says it could not
+        read the new one rather than showing the old one as if it were."""
+        if not (isinstance(snapshot, dict) and snapshot.get("nodes") is not None):
+            # No screen came back with the action: read it.
+            try:
+                snapshot = backend.tree()
+            except PhoneError as exc:
+                state["unread"] = f"(could not read the screen after that: {exc})"
+                return state["unread"]
+        keep(snapshot)
+        state["unread"] = ""
+        return ""
+
+    def render_current() -> str:
+        """The screen the last action left, as the model reads it."""
+        if state.get("unread"):
+            return state["unread"]
+        snapshot = state.get("snapshot")
+        return _digest.render_digest(snapshot) if snapshot else ""
 
     def screen_now() -> tuple[dict | None, ToolResult | None]:
         """A fresh snapshot, refused as a whole when the guard says so."""
@@ -217,7 +228,8 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
 
     def after(result: dict, done: str = "") -> ToolResult:
         text = done or str(result.get("done") or "done")
-        return ToolResult(stdout=f"{text}\n{remember(result.get('after'))}", stderr="", returncode=0)
+        absorb(result.get("after"))
+        return ToolResult(stdout=f"{text}\n{render_current()}", stderr="", returncode=0)
 
     # -- tools ------------------------------------------------------------
 
@@ -267,38 +279,40 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         "required": ["op"],
     }
 
-    def phone_act(body: str) -> ToolResult:
-        name = "phone_act"
-        parsed = json_body(name, body)
-        if isinstance(parsed, ToolResult):
-            return parsed
-        if problem := validate_against(act_schema, parsed):
-            return _bad(name, problem)
+    def acted(result: dict, done: str) -> tuple[str, ToolResult | None]:
+        absorb(result.get("after"))
+        return done, None
+
+    def _do(name: str, parsed: dict) -> tuple[str, ToolResult | None]:
+        """One validated phone_act step against the screen last kept: `(done
+        line, None)` once it ran and its screen is absorbed, or `("", the
+        failed result)`. Every verdict an action passes lives here, so
+        phone_act and phone_do cannot check a tap differently."""
         op = parsed["op"]
         try:
             if op == "press":
                 key = parsed.get("key")
                 if key not in KEYS:
-                    return _bad(name, f"press needs key: one of {', '.join(KEYS)}")
+                    return "", _bad(name, f"press needs key: one of {', '.join(KEYS)}")
                 # The way out is always allowed. Enter is not a way out: it
                 # is the keyboard's send/submit for the focused field, so it
                 # is judged like a tap on this screen.
                 if key not in EXIT_KEYS:
                     if failure := current_allowed(name):
-                        return failure
+                        return "", failure
                     # No label to judge: the screen is judged instead. A
                     # checkout, or any pay button on it, is what Enter
                     # would submit.
                     if why := guard.submit_verdict(screen_texts(), screen_ids()):
-                        return _refuse(name, why)
-                return after(backend.press(key), f"pressed {key}")
+                        return "", _refuse(name, why)
+                return acted(backend.press(key), f"pressed {key}")
             if op in ("swipe", "scroll"):
                 direction = parsed.get("direction")
                 if direction not in DIRECTIONS:
-                    return _bad(name, f"{op} needs direction: one of {', '.join(DIRECTIONS)}")
+                    return "", _bad(name, f"{op} needs direction: one of {', '.join(DIRECTIONS)}")
                 if op == "swipe":
                     if failure := current_allowed(name):
-                        return failure
+                        return "", failure
                     if "x" in parsed and "y" in parsed:
                         # A swipe that starts on an element acts on it: "Slide to
                         # pay" is a swipe. Judged like a tap on what is under the point.
@@ -308,63 +322,63 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                             label = _digest.label_of(under)
                             kind = verdict(label, _digest.view_id_of(under))
                             if kind == "pay":
-                                return _refuse(name, f"{named(label, _digest.view_id_of(under))} is a payment step -- the person does that")
+                                return "", _refuse(name, f"{named(label, _digest.view_id_of(under))} is a payment step -- the person does that")
                             if kind == "commit":
-                                return _bad(name, f"{named(label, _digest.view_id_of(under))} cannot be taken back; it is not swiped")
-                        return after(backend.swipe(direction, x, y), f"swiped {direction} from {x},{y}")
-                    return after(backend.swipe(direction), f"swiped {direction}")
+                                return "", _bad(name, f"{named(label, _digest.view_id_of(under))} cannot be taken back; it is not swiped")
+                        return acted(backend.swipe(direction, x, y), f"swiped {direction} from {x},{y}")
+                    return acted(backend.swipe(direction), f"swiped {direction}")
                 node = None
                 if parsed.get("target"):
                     node, failure, _ = resolve_target(name, parsed["target"])
                     if failure:
-                        return failure
+                        return "", failure
                 elif failure := current_allowed(name):
-                    return failure
-                return after(backend.scroll(direction, node), f"scrolled {direction}")
+                    return "", failure
+                return acted(backend.scroll(direction, node), f"scrolled {direction}")
             if op == "tap" and "x" in parsed and "y" in parsed:
                 if failure := current_allowed(name):
-                    return failure
+                    return "", failure
                 under = _digest.node_at(state["snapshot"], parsed["x"], parsed["y"]) if state.get("snapshot") else None
                 if under is not None:
                     label = _digest.label_of(under)
                     kind = verdict(label, _digest.view_id_of(under))
                     if kind == "pay":
-                        return _refuse(name, f"{named(label, _digest.view_id_of(under))} is a payment step -- the person does that")
+                        return "", _refuse(name, f"{named(label, _digest.view_id_of(under))} is a payment step -- the person does that")
                     if kind == "commit":
-                        return _bad(name, f"{named(label, _digest.view_id_of(under))} cannot be taken back; use phone_commit for it")
+                        return "", _bad(name, f"{named(label, _digest.view_id_of(under))} cannot be taken back; use phone_commit for it")
                     if under.get("p"):
-                        return _refuse(name, "that is a password field -- the person types there")
+                        return "", _refuse(name, "that is a password field -- the person types there")
                 elif failure := blind_tap_refused(name):
-                    return failure
-                return after(backend.tap(parsed["x"], parsed["y"]), f"tapped {parsed['x']},{parsed['y']}")
+                    return "", failure
+                return acted(backend.tap(parsed["x"], parsed["y"]), f"tapped {parsed['x']},{parsed['y']}")
             if op in ("tap", "tap_text", "long_press"):
                 target = parsed.get("target") or ""
                 if not target:
-                    return _bad(name, "tap needs target (the element's text) or x and y")
+                    return "", _bad(name, "tap needs target (the element's text) or x and y")
                 index, failure, label = resolve_target(name, target)
                 if failure:
-                    return failure
+                    return "", failure
                 kind = verdict(label, id_at(index))
                 if kind == "pay":
-                    return _refuse(name, f"{named(label, id_at(index))} is a payment step -- the person does that")
+                    return "", _refuse(name, f"{named(label, id_at(index))} is a payment step -- the person does that")
                 if kind == "commit":
-                    return _bad(name, f"{named(label, id_at(index))} cannot be taken back; use phone_commit for it")
+                    return "", _bad(name, f"{named(label, id_at(index))} cannot be taken back; use phone_commit for it")
                 result = backend.tap_node(state["snapshot"]["snapshot_id"], index, long=(op == "long_press"))
-                return after(result, f"{'long-pressed' if op == 'long_press' else 'tapped'} [{index}] {label!r}")
+                return acted(result, f"{'long-pressed' if op == 'long_press' else 'tapped'} [{index}] {label!r}")
             if op == "type":
                 text = parsed.get("text")
                 if text is None:
-                    return _bad(name, "type needs text")
+                    return "", _bad(name, "type needs text")
                 node = None
                 if parsed.get("target"):
                     node, failure, label = resolve_target(name, parsed["target"])
                     if failure:
-                        return failure
+                        return "", failure
                     picked = _digest.node_by_index(state["snapshot"], node) or {}
                     if picked.get("p"):
-                        return _refuse(name, "that is a password field -- the person types there")
+                        return "", _refuse(name, "that is a password field -- the person types there")
                 elif failure := current_allowed(name):
-                    return failure
+                    return "", failure
                 else:
                     # Typing into whatever has focus: the focused field must
                     # not be a password field, and with no known focus a
@@ -372,12 +386,24 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                     nodes = [n for n in (state["snapshot"].get("nodes") or []) if isinstance(n, dict)]
                     focused = [n for n in nodes if n.get("f")]
                     if any(n.get("p") for n in focused) or (not focused and any(n.get("p") for n in nodes)):
-                        return _refuse(name, "a password field is on this screen -- say which field, and "
-                                             "never a password one; the person types those")
-                return after(backend.type_text(text, node), f"typed {_digest.inert_text(text, 60)!r}")
-            return _bad(name, f"op must be one of {', '.join(ACT_OPS)}")
+                        return "", _refuse(name, "a password field is on this screen -- say which field, and "
+                                                 "never a password one; the person types those")
+                return acted(backend.type_text(text, node), f"typed {_digest.inert_text(text, 60)!r}")
+            return "", _bad(name, f"op must be one of {', '.join(ACT_OPS)}")
         except PhoneError as exc:
-            return _failed(name, exc)
+            return "", _failed(name, exc)
+
+    def phone_act(body: str) -> ToolResult:
+        name = "phone_act"
+        parsed = json_body(name, body)
+        if isinstance(parsed, ToolResult):
+            return parsed
+        if problem := validate_against(act_schema, parsed):
+            return _bad(name, problem)
+        done, failure = _do(name, parsed)
+        if failure:
+            return failure
+        return ToolResult(stdout=f"{done}\n{render_current()}", stderr="", returncode=0)
 
     def commit_target(body: str) -> str:
         """What a phone_commit call acts on, for the mutation gate: the
