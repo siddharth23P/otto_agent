@@ -58,7 +58,8 @@ class PhoneBackend(Protocol):
                  commit: bool = False) -> dict: ...   # {"done", "after"}
     def type_text(self, text: str, node: int | None = None) -> dict: ...
     def press(self, key: str) -> dict: ...            # back|home|recents|enter
-    def swipe(self, direction: str) -> dict: ...      # up|down|left|right
+    def swipe(self, direction: str, x: int | None = None,
+              y: int | None = None) -> dict: ...  # the way the finger moves, from x,y
     def scroll(self, direction: str, node: int | None = None) -> dict: ...
     def screenshot(self) -> bytes: ...                # PNG or JPEG bytes
     def apps(self) -> dict: ...                       # {"apps": [{"label", "package"}]}
@@ -110,8 +111,13 @@ class JsonBackend:
     def press(self, key: str) -> dict:
         return self._call("press", str(key))
 
-    def swipe(self, direction: str) -> dict:
-        return self._call("swipe", str(direction))
+    def swipe(self, direction: str, x: int | None = None, y: int | None = None) -> dict:
+        # The start point is sent only when there is one: an app built before
+        # it existed has a one-argument swipe, and a bridge that has both
+        # takes (direction, x, y).
+        if x is None or y is None:
+            return self._call("swipe", str(direction))
+        return self._call("swipe", str(direction), int(x), int(y))
 
     def scroll(self, direction: str, node: int | None = None) -> dict:
         return self._call("scroll", str(direction), -1 if node is None else int(node))

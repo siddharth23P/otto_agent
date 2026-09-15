@@ -41,6 +41,13 @@ this side. The phone shares the same lists and the same limit; the mutation
 gate and the person's own hand-over are what stand behind it, and the lists
 are meant to grow (guard_rules.json is data).
 
+The element's resource id is judged too (`id_words`). A web page inside an
+app hands its form buttons to accessibility by their HTML type: Amazon's
+product page has nineteen controls reading "Submit", among them Add to Cart
+(`add-to-cart-button`) and Buy Now (`buy-now-button`). By label alone Buy Now
+was a commit phone_commit could take; by its id it is a pay word. A verdict is
+the stricter of the two.
+
 `denied_names` are the labels of the denied apps, for an install asked for by
 name before any package is known, and for a listing whose package the phone
 cannot read. `package_word_exceptions` are substrings removed before the money words are
@@ -90,6 +97,19 @@ def normal(text: str) -> str:
     folded = unicodedata.normalize("NFKC", str(text or ""))
     lowered = _INVISIBLE.sub("", folded).lower().translate(_CONFUSABLES)
     return " ".join(lowered.split())
+
+
+def id_words(view_id: str) -> str:
+    """An element's resource id as words, in `normal` form: the app's
+    package prefix dropped ("com.app:id/buyNow" is "buyNow"), camelCase and
+    -_./: split. "buy-now-button" and "buyNowButton" both read "buy now
+    button". The Kotlin side splits the same way."""
+    text = str(view_id or "")
+    if ":id/" in text:
+        text = text.split(":id/", 1)[1]
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    return normal(re.sub(r"[-_./:#]+", " ", text))
+
 
 RULES_RESOURCE = ("agent.phone", "assets/guard_rules.json")
 
@@ -220,11 +240,12 @@ def checkout_context(texts: Iterable[str]) -> str:
     return ""
 
 
-def submit_verdict(texts: Iterable[str]) -> str:
+def submit_verdict(texts: Iterable[str], view_ids: Iterable[str] = ()) -> str:
     """Why the keyboard's Enter may not be pressed on this screen, or "".
     Enter submits whatever the focused field's form does, and there is no
     label to judge, so the screen is judged instead: a checkout signal, or
-    any control on it that is a pay word, means Enter is that button."""
+    any control on it that is a pay word -- by its text or by its id -- means
+    Enter is that button."""
     texts = list(texts)
     seen = checkout_context(texts)
     if seen:
@@ -232,14 +253,27 @@ def submit_verdict(texts: Iterable[str]) -> str:
     for text in texts:
         if target_verdict(text) == "pay":
             return f"this screen has a payment step ({text[:60]!r}); Enter would submit it -- the person does that"
+    for view_id in view_ids:
+        if target_verdict("", view_id=view_id) == "pay":
+            return f"this screen has a payment step (#{str(view_id)[:60]}); Enter would submit it -- the person does that"
     return ""
 
 
-def target_verdict(label: str, texts: Iterable[str] = ()) -> str:
+def target_verdict(label: str, texts: Iterable[str] = (), view_id: str = "") -> str:
     """'pay' for a button the model may never tap, 'commit' for one only
     phone_commit may tap, '' for anything else. `texts` are the other
     strings on the screen: a forward word ("Continue") is a pay word only
-    when one of them is a checkout signal."""
+    when one of them is a checkout signal. `view_id` is the element's
+    resource id, judged as words the same way; the stricter verdict wins."""
+    texts = list(texts)
+    verdicts = (_words_verdict(label, texts), _words_verdict(id_words(view_id), texts))
+    for kind in ("pay", "commit"):
+        if kind in verdicts:
+            return kind
+    return ""
+
+
+def _words_verdict(label: str, texts: list) -> str:
     c = _compiled()
     text = normal(label)
     if not text:

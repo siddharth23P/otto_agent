@@ -87,8 +87,10 @@ class SocketPhone:
     def press(self, key):
         return self._call("press", key)
 
-    def swipe(self, direction):
-        return self._call("swipe", direction)
+    def swipe(self, direction, *point):
+        # (direction) or (direction, x, y): JsonBackend sends the start point
+        # only when there is one, and the phone app takes either shape.
+        return self._call("swipe", direction, *point)
 
     def scroll(self, direction, node):
         return self._call("scroll", direction, node)

@@ -62,6 +62,11 @@ PHONE_GUIDANCE = (
     "cart and stop -- the person pays. Never tap Pay, Buy, Checkout, Place order or the Continue "
     "of a checkout, never type a PIN, "
     "OTP, CVV or password, and never act inside a payment or banking app. "
+    "Elements marked ad are sponsored placements. For the cheapest or best of something, use the "
+    "app's own sort and filters (often both behind one Filters button, Sort by sometimes last in a "
+    "long list), apply them, leave ads and accessories out of the comparison, scroll past the first "
+    "screen, and answer only with a product and price read on the screen, never from memory. "
+    "An element with no text, such as a list to scroll, is named by its [number]. "
     "A result that begins GUARD: means the phone refused and the person has taken over: stop "
     "acting and report what was done so far."
 )
@@ -162,16 +167,19 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                    for n in snapshot.get("nodes") or [] if isinstance(n, dict)):
                 return None, _refuse(name, "that is a password field -- the person types there"), ""
             if candidates:
-                shown = "; ".join(
-                    f"[{i}] {_digest.inert_text(_digest.label_of(_digest.node_by_index(snapshot, i) or {}), 40)!r}"
-                    for i in candidates[:MAX_CANDIDATES]
-                )
+                def shown_one(i: int) -> str:
+                    picked = _digest.node_by_index(snapshot, i) or {}
+                    ident = _digest.view_id_of(picked)
+                    tag = f" #{_digest.inert_text(ident, 48)}" if ident else ""
+                    return f"[{i}] {_digest.inert_text(_digest.label_of(picked), 40)!r}{tag}"
+                shown = "; ".join(shown_one(i) for i in candidates[:MAX_CANDIDATES])
                 return None, _bad(name, f"{target!r} matches more than one element: {shown}. "
-                                         "Say the exact text, or tap by x,y"), ""
+                                         "Say the exact text, its #id or its [number], or tap by x,y"), ""
             return None, _bad(name, f"nothing on screen reads {target!r} -- call phone_screen and "
                                     "use the text as shown"), ""
         node = _digest.node_by_index(snapshot, index) or {}
-        return index, None, _digest.label_of(node)
+        ident = _digest.view_id_of(node)
+        return index, None, _digest.label_of(node) or (f"#{ident}" if ident else "")
 
     def current_allowed(name: str) -> ToolResult | None:
         """For an action with no text target: the screen in front must be
@@ -188,10 +196,24 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         snap = state.get("snapshot") or {}
         return [_digest.label_of(n) for n in snap.get("nodes") or [] if isinstance(n, dict)]
 
-    def verdict(label: str) -> str:
+    def screen_ids() -> list[str]:
+        snap = state.get("snapshot") or {}
+        return [_digest.view_id_of(n) for n in snap.get("nodes") or [] if isinstance(n, dict) and n.get("v")]
+
+    def verdict(label: str, view_id: str = "") -> str:
         """target_verdict with the current screen as context, so "Continue"
-        under an order total is a pay button."""
-        return guard.target_verdict(label, screen_texts())
+        under an order total is a pay button, and with the element's id, so a
+        "Submit" whose id is buy-now-button is one too."""
+        return guard.target_verdict(label, screen_texts(), view_id)
+
+    def id_at(index: int | None) -> str:
+        return _digest.view_id_of(_digest.node_by_index(state.get("snapshot") or {}, index) or {}) if index else ""
+
+    def named(label: str, view_id: str = "") -> str:
+        """How a refusal names an element: its text, and its id when it has one,
+        so a "Submit" refused as a payment step says it is buy-now-button."""
+        tag = f" #{_digest.inert_text(view_id, 48)}" if view_id and not label.startswith("#") else ""
+        return f"{label!r}{tag}"
 
     def after(result: dict, done: str = "") -> ToolResult:
         text = done or str(result.get("done") or "done")
@@ -267,7 +289,7 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                     # No label to judge: the screen is judged instead. A
                     # checkout, or any pay button on it, is what Enter
                     # would submit.
-                    if why := guard.submit_verdict(screen_texts()):
+                    if why := guard.submit_verdict(screen_texts(), screen_ids()):
                         return _refuse(name, why)
                 return after(backend.press(key), f"pressed {key}")
             if op in ("swipe", "scroll"):
@@ -277,6 +299,19 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                 if op == "swipe":
                     if failure := current_allowed(name):
                         return failure
+                    if "x" in parsed and "y" in parsed:
+                        # A swipe that starts on an element acts on it: "Slide to
+                        # pay" is a swipe. Judged like a tap on what is under the point.
+                        x, y = parsed["x"], parsed["y"]
+                        under = _digest.node_at(state["snapshot"], x, y) if state.get("snapshot") else None
+                        if under is not None:
+                            label = _digest.label_of(under)
+                            kind = verdict(label, _digest.view_id_of(under))
+                            if kind == "pay":
+                                return _refuse(name, f"{named(label, _digest.view_id_of(under))} is a payment step -- the person does that")
+                            if kind == "commit":
+                                return _bad(name, f"{named(label, _digest.view_id_of(under))} cannot be taken back; it is not swiped")
+                        return after(backend.swipe(direction, x, y), f"swiped {direction} from {x},{y}")
                     return after(backend.swipe(direction), f"swiped {direction}")
                 node = None
                 if parsed.get("target"):
@@ -292,11 +327,11 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                 under = _digest.node_at(state["snapshot"], parsed["x"], parsed["y"]) if state.get("snapshot") else None
                 if under is not None:
                     label = _digest.label_of(under)
-                    kind = verdict(label)
+                    kind = verdict(label, _digest.view_id_of(under))
                     if kind == "pay":
-                        return _refuse(name, f"{label!r} is a payment step -- the person does that")
+                        return _refuse(name, f"{named(label, _digest.view_id_of(under))} is a payment step -- the person does that")
                     if kind == "commit":
-                        return _bad(name, f"{label!r} cannot be taken back; use phone_commit for it")
+                        return _bad(name, f"{named(label, _digest.view_id_of(under))} cannot be taken back; use phone_commit for it")
                     if under.get("p"):
                         return _refuse(name, "that is a password field -- the person types there")
                 elif failure := blind_tap_refused(name):
@@ -309,11 +344,11 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                 index, failure, label = resolve_target(name, target)
                 if failure:
                     return failure
-                kind = verdict(label)
+                kind = verdict(label, id_at(index))
                 if kind == "pay":
-                    return _refuse(name, f"{label!r} is a payment step -- the person does that")
+                    return _refuse(name, f"{named(label, id_at(index))} is a payment step -- the person does that")
                 if kind == "commit":
-                    return _bad(name, f"{label!r} cannot be taken back; use phone_commit for it")
+                    return _bad(name, f"{named(label, id_at(index))} cannot be taken back; use phone_commit for it")
                 result = backend.tap_node(state["snapshot"]["snapshot_id"], index, long=(op == "long_press"))
                 return after(result, f"{'long-pressed' if op == 'long_press' else 'tapped'} [{index}] {label!r}")
             if op == "type":
@@ -371,8 +406,8 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         index, failure, label = resolve_target(name, parsed["target"])
         if failure:
             return failure
-        if verdict(label) == "pay":
-            return _refuse(name, f"{label!r} is a payment step -- the person does that")
+        if verdict(label, id_at(index)) == "pay":
+            return _refuse(name, f"{named(label, id_at(index))} is a payment step -- the person does that")
         try:
             return after(backend.tap_node(state["snapshot"]["snapshot_id"], index, commit=True),
                          f"tapped [{index}] {label!r}")
@@ -519,7 +554,8 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                   mutates=False, schema={"type": "object", "properties": {}}),
         ExtraTool("phone_act", "One reversible action, then the screen after it. op: tap|tap_text|long_press "
                   "(target: element text, or x,y) | type (text, target?) | press (key: back|home|recents|enter) "
-                  "| swipe|scroll (direction: up|down|left|right).", phone_act, mutates=False, schema=act_schema),
+                  "| swipe (direction the finger moves, from x,y) | scroll (direction: down shows what is below; "
+                  "target: the list).", phone_act, mutates=False, schema=act_schema),
         ExtraTool("phone_commit", "Tap a button that cannot be taken back (Send, Delete, Confirm, Submit) by its "
                   "text. Never a payment step.", phone_commit, mutates=True,
                   schema={"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
