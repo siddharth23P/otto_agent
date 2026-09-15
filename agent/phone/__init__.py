@@ -15,7 +15,15 @@ from agent.phone.tools import (
     phone_tools,
 )
 
+#: The seats a phone run binds (agent/router/overrides.py bind_seats). Only
+#: the judge moves: a phone turn's evaluator is a check of a screen the agent
+#: already read, while a person holds the phone waiting, and an installation
+#: pin on a large reasoning model (routes.json pins opus there) makes it the
+#: slowest seat of the turn. Its prompt, tools and rejections are unchanged;
+#: a coding run never binds this, so it keeps whatever routes.json says.
+PHONE_SEATS: dict[str, str] = {"evaluate": "gemini:gemini-3.8-flash"}
+
 __all__ = [
     "JsonBackend", "PhoneBackend", "PhoneError",
-    "PHONE_DISABLED_STANDING_TOOLS", "PHONE_GUIDANCE", "phone_tools",
+    "PHONE_DISABLED_STANDING_TOOLS", "PHONE_GUIDANCE", "PHONE_SEATS", "phone_tools",
 ]

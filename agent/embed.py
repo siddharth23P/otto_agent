@@ -52,7 +52,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -341,13 +341,20 @@ class SessionHandle:
 
     def run(self, text: str, *, events: Events, tools: Sequence["ExtraTool"] = (),
             guidance: str = "", disabled_tools: Collection[str] | None = None,
-            cancel: threading.Event | None = None) -> None:
+            cancel: threading.Event | None = None,
+            seats: Mapping[str, str] | None = None) -> None:
         """One turn, to completion, on this thread.
 
         Every run-scoped binding happens here, on the thread that consumes
         the stream, because that is the only thread where a contextvar is
         visible to the graph. `tools` and `guidance` go to
-        agent/pipeline/toolkit.py, `disabled_tools` to agent/pipeline/profile.py.
+        agent/pipeline/toolkit.py, `disabled_tools` to agent/pipeline/profile.py,
+        `seats` to agent/router/overrides.py's bind_seats.
+
+        `seats` left as None means agent/phone's PHONE_SEATS when `tools`
+        include `phone_screen` and none otherwise, so a host that binds the
+        phone tools gets the phone's fast judge without having to know about
+        routing. Pass an explicit mapping (`{}` included) to decide.
 
         `disabled_tools` left as None means SUBPROCESS_TOOLS when the keys
         came in through `configure(environ=...)` and nothing otherwise: a
@@ -365,7 +372,7 @@ class SessionHandle:
             self._pending_thread = None
             self._answer_ready.clear()
         try:
-            self._drive(text, events, tools, guidance, disabled_tools)
+            self._drive(text, events, tools, guidance, disabled_tools, _seats_for(tools, seats))
         finally:
             with self._lock:
                 self._running = False
@@ -394,7 +401,8 @@ class SessionHandle:
 
     # -- the loop ----------------------------------------------------------
 
-    def _drive(self, text: str, events: Events, tools, guidance: str, disabled) -> None:
+    def _drive(self, text: str, events: Events, tools, guidance: str, disabled,
+               seats: Mapping[str, str] | None = None) -> None:
         from langchain_core.messages import AIMessage, HumanMessage
 
         from agent.pipeline import run as pipeline
@@ -402,6 +410,7 @@ class SessionHandle:
         from agent.pipeline.progress import Cancelled, bind_progress
         from agent.pipeline.toolkit import bind_extra_tools
         from agent.router.llm_provider.base import AuthError, ProviderError
+        from agent.router.overrides import bind_seats
 
         last_partial = 0.0
 
@@ -423,7 +432,11 @@ class SessionHandle:
         try:
             with bind_progress(sink, cancel=self._cancel), \
                  bind_extra_tools(list(tools), guidance=guidance), \
-                 bind_tool_profile(disabled):
+                 bind_tool_profile(disabled), \
+                 bind_seats(seats):
+                # One binding covers the resume below too: it is opened on
+                # this thread inside the same block, and LangGraph copies
+                # this context into whatever worker runs a node.
                 stream = pipeline.run_pipeline_stream(
                     text, session_id=session_id, history=history,
                     memory_context=memory_context, workspace=None, usage=self.usage,
@@ -484,6 +497,19 @@ class SessionHandle:
             if self._cancel is not None and self._cancel.is_set():
                 raise Cancelled("stopped while waiting for an answer")
             return self._answer or ""
+
+
+def _seats_for(tools: Sequence["ExtraTool"], seats: Mapping[str, str] | None) -> Mapping[str, str]:
+    """The seats a turn binds: the caller's when given, the phone's when the
+    turn carries the phone tools, none otherwise -- so a coding turn's routing
+    is exactly what routes.json says."""
+    if seats is not None:
+        return seats
+    if any(getattr(t, "name", None) == "phone_screen" for t in tools):
+        from agent.phone import PHONE_SEATS
+
+        return PHONE_SEATS
+    return {}
 
 
 def _plain(detail) -> dict[str, Any] | None:

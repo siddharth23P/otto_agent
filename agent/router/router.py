@@ -322,7 +322,9 @@ class Router:
     def _resolve(self, task: Task, *, only: str | None,
                  honour_cooldowns: bool) -> RoutingDecision:
         skips: list[Skip] = []
-        declared = TASK_ROUTES[task]
+        # A seat a host bound for this run (overrides.bind_seats -- the phone
+        # host's fast judge) leads the live chain; otherwise the live chain.
+        declared = route_overrides.bound_chain(task) or TASK_ROUTES[task]
         # Declared order, re-ordered by what this installation has actually
         # observed each seat's model achieve. A no-op until a (task, model)
         # pair has enough runs behind it to be trusted, which is most of the
@@ -330,7 +332,9 @@ class Router:
         # A pin the person set (agent/router/overrides.py) is never reordered
         # or explored away: "use this model" means this model, and an
         # evidence-based swap behind their back would make the pin a lie.
-        if declared and route_overrides.is_pin(task, declared[0]):
+        # A bound seat is the host's explicit choice and is held the same way.
+        if declared and (route_overrides.is_pin(task, declared[0])
+                         or route_overrides.is_bound(task, declared[0])):
             chain = list(declared)
         else:
             chain = seat_outcomes.reorder(task.value, declared)
