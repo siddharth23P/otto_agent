@@ -98,6 +98,9 @@ MAX_TURN_WORKERS = 8
 #: catalogue cannot take a turn's thread.
 MAX_OP_WORKERS = 4
 
+#: The longest title `sessions rename` takes.
+MAX_TITLE_CHARS = 200
+
 #: `turn.phone`: decide per turn (agent/embed.py DECIDE_PHONE), or say.
 PHONE_MODES: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
 
@@ -382,6 +385,56 @@ class Connection:
                 runtime = await self.runtime_async()
                 deleted = await self.blocking(runtime.delete_session, sid)
                 await self.reply("sessions_result", rid, op=op, session_id=sid, deleted=deleted)
+            elif op == "close":
+                sid = _sid(message.get("session_id"))
+                if self.busy(sid):
+                    await self.send_error("busy", "that session is running a turn; stop it first", rid)
+                    return
+                handle = self.handles.pop(sid, None)
+                self.turns.pop(sid, None)
+                if handle is not None:
+                    await self.blocking(handle.close)
+                await self.reply("sessions_result", rid, op=op, session_id=sid, closed=handle is not None)
+            elif op == "rename":
+                sid = _sid(message.get("session_id"))
+                title = message.get("title")
+                if not isinstance(title, str) or not title.strip() or len(title) > MAX_TITLE_CHARS:
+                    await self.send_error("invalid", f"title is 1-{MAX_TITLE_CHARS} characters", rid)
+                    return
+                handle = self.handles.get(sid)
+                if handle is not None:
+                    title = await self.blocking(handle.rename, title)
+                else:
+                    runtime = await self.runtime_async()
+                    title = await self.blocking(runtime.rename_session, sid, title)
+                await self.reply("sessions_result", rid, op=op, session_id=sid, title=title)
+            elif op == "export":
+                sid = _sid(message.get("session_id"))
+                runtime = await self.runtime_async()
+                exported = await self.blocking(runtime.export_session, sid)
+                await self.reply("sessions_result", rid, op=op, session_id=sid, **exported)
+            elif op == "import":
+                data = message.get("data")
+                if not isinstance(data, dict):
+                    await self.send_error("invalid", "data is the object a sessions export returned", rid)
+                    return
+                runtime = await self.runtime_async()
+                try:
+                    # keep_workspace=False (the default): the path came from
+                    # a client, and a resume would open it as the workspace.
+                    row = await self.blocking(runtime.import_session, data)
+                except ValueError as exc:
+                    await self.send_error("invalid", str(exc), rid)
+                    return
+                await self.reply("sessions_result", rid, op=op, session_id=row["id"], title=row["title"],
+                                 turns=row["turns"])
+            elif op == "usage":
+                sid = _sid(message.get("session_id"))
+                handle = self.handles.get(sid)
+                if handle is None:
+                    await self.send_error("no_session", "that session is not open on this connection", rid)
+                    return
+                await self.reply("sessions_result", rid, op=op, session_id=sid, **handle.usage_report())
             else:
                 await self.send_error("unknown", f"unknown sessions op {op!r}", rid)
         except LookupError as exc:

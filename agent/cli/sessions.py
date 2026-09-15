@@ -7,7 +7,6 @@ index from outside a session. Resuming is `otto chat --resume` / `otto tui
 """
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -39,10 +38,9 @@ def sessions_table(rows: list[SessionInfo], current: str | None = None) -> Table
 
 
 def default_export_path(info: SessionInfo, directory: Path | None = None) -> Path:
-    """`otto-session-<id>-<date>.json`, in `directory` (the current one by
-    default; the TUI proposes the home directory) -- the shape agent/cli/
-    lessons.py's export uses, with the id so two exports do not collide."""
-    return (directory or Path.cwd()) / f"otto-session-{info.short_id}-{date.today():%Y-%m-%d}.json"
+    """agent/memory/sessions.py's `export_filename`, in `directory` (the
+    current one by default; the TUI proposes the home directory)."""
+    return (directory or Path.cwd()) / session_index.export_filename(info)
 
 
 def sessions_cmd(

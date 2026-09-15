@@ -24,6 +24,8 @@ client -> server
     cancel          {session_id}
     device_result   {id, ok, data?, error?}          the reply to a `device_call`
     sessions        {op: list|open|delete|transcript, ref?, session_id?, limit?}
+                    {op: close|rename|export|usage, session_id, title?}   protocol 2
+                    {op: import, data}                                   protocol 2
     ping            {}
 
 server -> client
@@ -32,6 +34,9 @@ server -> client
                                                      {type: started, session_id, budget_max}
     device_call     {id, method, args, timeout}      run a PhoneBackend method on the phone
     sessions_result {op, ...}
+                    close  {session_id, closed}      rename {session_id, title}
+                    export {session_id, filename, data}   import {session_id, title, turns}
+                    usage  {session_id, usage, turn_tokens, turn, title, turns}
     error           {code, message}                  codes include invalid_session, busy,
                                                      no_session, invalid, no_phone
     pong            {}
@@ -46,7 +51,10 @@ MIN_PROTOCOL = 1
 
 #: `hello_ok.features`. A client checks for a name before offering what it
 #: unlocks; a server older than a name simply does not send it.
-FEATURES: tuple[str, ...] = ("ids", "turn.phone")
+FEATURES: tuple[str, ...] = (
+    "ids", "turn.phone",
+    "sessions.close", "sessions.rename", "sessions.export", "sessions.import", "sessions.usage",
+)
 
 #: The longest string request id echoed back.
 MAX_REQUEST_ID_CHARS = 64

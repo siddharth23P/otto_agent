@@ -31,7 +31,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -166,6 +166,13 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.commit()
     finally:
         conn.close()
+
+
+def _count(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _now() -> str:
@@ -412,10 +419,29 @@ def describe_age(iso: str, now: datetime | None = None) -> str:
 EXPORT_VERSION = 1
 
 
+def export_filename(info: SessionInfo, today: date | None = None) -> str:
+    """`otto-session-<id>-<date>.json` -- the shape agent/cli/lessons.py's
+    export uses, with the id so two exports do not collide. A name, never a
+    path: `otto serve` hands it to a phone that decides where it goes."""
+    return f"otto-session-{info.short_id}-{(today or date.today()):%Y-%m-%d}.json"
+
+
 def export_session(session_id: str, path: Path | str) -> Path:
-    """Write one session -- its index row and everything in its memory file
-    that a restore reads: the live tiers, the current bullets, the retired
-    chunks they cite -- to `path` as JSON, and return the path.
+    """Write `export_payload(session_id)` to `path` as JSON, and return the
+    path."""
+    payload = export_payload(session_id)
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    return path
+
+
+def export_payload(session_id: str, *, include_workspace: bool = True) -> dict:
+    """One session as plain data -- its index row and everything in its
+    memory file that a restore reads: the live tiers, the current bullets,
+    the retired chunks they cite. `include_workspace=False` leaves out the
+    directory it worked in, which is a path on this computer and means
+    nothing to whoever receives it over a socket.
 
     Vectors are not exported: they belong to whichever embedding model made
     them (agent/memory/store.py's `embedding_model`), which the machine
@@ -435,10 +461,11 @@ def export_session(session_id: str, path: Path | str) -> Path:
         pending = store.pending("history")
     finally:
         store.close()
-    payload = {
+    return {
         "version": EXPORT_VERSION,
         "session": {
-            "id": info.id, "title": info.title, "workspace": info.workspace,
+            "id": info.id, "title": info.title,
+            "workspace": info.workspace if include_workspace else None,
             "created_at": info.created_at, "last_active_at": info.last_active_at,
             "turns": info.turns,
         },
@@ -447,10 +474,6 @@ def export_session(session_id: str, path: Path | str) -> Path:
                     for b in bullets],
         "pending": [{"tier": tier, "text": text} for tier, text in pending],
     }
-    path = Path(path).expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-    return path
 
 
 def import_session(path: Path | str) -> SessionInfo:
@@ -469,10 +492,43 @@ def import_session(path: Path | str) -> SessionInfo:
         raise ValueError(f"cannot read {path}: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path} is not JSON: {exc}") from exc
-    if not isinstance(payload, dict) or "session" not in payload or "pending" not in payload:
-        raise ValueError(f"{path} is not an otto session export")
-    if payload.get("version", 1) > EXPORT_VERSION:
-        raise ValueError(f"{path} was written by a newer otto (format {payload['version']})")
+    return import_payload(payload, source=str(path))
+
+
+def _checked_export(payload: object, source: str) -> dict:
+    """`payload` once it has the shape `export_payload` writes, all of it,
+    before anything is written: an import that failed half way would leave a
+    memory file no row names. ValueError saying what is wrong otherwise."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("session"), dict) \
+            or not isinstance(payload.get("pending"), list):
+        raise ValueError(f"{source} is not an otto session export")
+    version = payload.get("version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise ValueError(f"{source} is not an otto session export")
+    if version > EXPORT_VERSION:
+        raise ValueError(f"{source} was written by a newer otto (format {version})")
+
+    def rows(key: str, fields: dict[str, type]) -> None:
+        items = payload.get(key, [])
+        if not isinstance(items, list) or not all(
+                isinstance(item, dict) and all(isinstance(item.get(f), t) for f, t in fields.items())
+                for item in items):
+            raise ValueError(f"{source} has a malformed {key} list")
+
+    rows("chunks", {"hash": str, "content": str})
+    rows("bullets", {"text": str, "hash_refs": list})
+    rows("pending", {"text": str})
+    if any(item.get("tier", "x") not in ("x", "y") for item in payload["pending"]):
+        raise ValueError(f"{source} has a malformed pending list")
+    return payload
+
+
+def import_payload(payload: object, *, keep_workspace: bool = True, source: str = "the import") -> SessionInfo:
+    """`import_session` for data already in hand -- what `otto serve` receives.
+    `keep_workspace=False` drops the directory the export names: a path from
+    another machine, and one a client could otherwise choose, which a later
+    resume would open as this session's workspace."""
+    payload = _checked_export(payload, source)
     meta = payload["session"]
     session_id = str(meta.get("id") or "")
     if not valid_id(session_id) or get(session_id) is not None or session_db_path(session_id).exists():
@@ -482,8 +538,12 @@ def import_session(path: Path | str) -> SessionInfo:
         for chunk in payload.get("chunks", []):
             store.add_chunk("history", chunk["hash"], chunk["content"], None)
         for bullet in payload.get("bullets", []):
-            store.add_bullet("history", int(bullet.get("generation", 1)), bullet["text"],
-                             list(bullet.get("hash_refs", [])), None)
+            try:
+                generation = int(bullet.get("generation", 1))
+            except (TypeError, ValueError):
+                generation = 1
+            store.add_bullet("history", generation, bullet["text"],
+                             [str(ref) for ref in bullet.get("hash_refs", [])], None)
         for item in payload["pending"]:
             store.add_pending("history", item["text"], item.get("tier", "x"))
     finally:
@@ -493,7 +553,8 @@ def import_session(path: Path | str) -> SessionInfo:
         conn.execute(
             "INSERT INTO sessions (id, title, workspace, created_at, last_active_at, turns) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, str(meta.get("title") or ""), meta.get("workspace"),
-             str(meta.get("created_at") or now), now, int(meta.get("turns") or 0)),
+            (session_id, str(meta.get("title") or "")[:200],
+             (str(meta["workspace"]) if keep_workspace and meta.get("workspace") else None),
+             str(meta.get("created_at") or now), now, _count(meta.get("turns"))),
         )
     return get(session_id)

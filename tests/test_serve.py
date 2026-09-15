@@ -478,3 +478,98 @@ def test_a_connection_knows_whether_its_client_is_on_this_computer():
         assert _peer_is_loopback(_Ws(address)), address
     for address in (("10.0.0.2", 5), ("192.168.1.9", 5), None, ("not an address", 1)):
         assert not _peer_is_loopback(_Ws(address)), address
+
+
+# --------------------------------------------------------------------------
+# sessions: close, rename, export, import, usage (protocol 2)
+# --------------------------------------------------------------------------
+
+def _request(ws, **message):
+    ws.send(json.dumps(message))
+    return _frame(ws)
+
+
+def _one_turn(ws, monkeypatch, text="hello there", tokens=(30, 12)):
+    def fake_run(t, **kwargs):
+        kwargs["usage"].record("nobody:unpriced", {"input_tokens": tokens[0], "output_tokens": tokens[1]})
+        yield {"__final__": {"final_output": "hi back"}, "__trace_id__": None}
+
+    monkeypatch.setattr(pipeline, "run_pipeline_stream", fake_run)
+    ws.send(protocol.encode("turn", text=text))
+    final, _ = _recv_until(ws, "event")
+    assert final["event"]["type"] == "final"
+    return final["session_id"]
+
+
+def test_closing_a_session_frees_its_place_under_the_cap(server, monkeypatch):
+    from agent.server import app as server_app
+
+    monkeypatch.setattr(server_app, "MAX_SESSIONS_PER_CONNECTION", 2)
+    ws, _ = _hello(server)
+    first = _request(ws, type="sessions", op="open", id=1)["session_id"]
+    _request(ws, type="sessions", op="open", id=2)
+    assert _request(ws, type="sessions", op="open", id=3)["code"] == "no_session"
+    assert _request(ws, type="sessions", op="close", session_id=first, id=4) == {
+        "type": "sessions_result", "id": 4, "op": "close", "session_id": first, "closed": True}
+    assert _request(ws, type="sessions", op="open", id=5)["type"] == "sessions_result"
+    assert _request(ws, type="sessions", op="close", session_id=first, id=6)["closed"] is False
+    ws.close()
+
+
+def test_a_session_is_renamed_and_the_list_shows_it(server, monkeypatch):
+    ws, _ = _hello(server)
+    sid = _one_turn(ws, monkeypatch)
+    assert _request(ws, type="sessions", op="rename", session_id=sid, title="  tide   notes ", id="r") == {
+        "type": "sessions_result", "id": "r", "op": "rename", "session_id": sid, "title": "tide notes"}
+    rows = _request(ws, type="sessions", op="list", id="l")["sessions"]
+    assert rows[0]["id"] == sid and rows[0]["title"] == "tide notes"
+    assert _request(ws, type="sessions", op="close", session_id=sid, id="c")["closed"] is True
+    assert _request(ws, type="sessions", op="rename", session_id=sid, title="closed", id="r2")["title"] == "closed"
+    assert _request(ws, type="sessions", op="rename", session_id="f" * 32, title="x", id="r3")["code"] == "no_session"
+    assert _request(ws, type="sessions", op="rename", session_id=sid, title="   ", id="r4")["code"] == "invalid"
+    assert _request(ws, type="sessions", op="rename", session_id=sid, title="x" * 201, id="r5")["code"] == "invalid"
+    ws.close()
+
+
+def test_an_export_imports_back_as_a_session_and_carries_no_paths(server, monkeypatch):
+    import re
+
+    from agent.memory import sessions as index
+
+    ws, _ = _hello(server)
+    sid = _one_turn(ws, monkeypatch, text="what tides are")
+    index.touch(sid, title="", workspace="/Users/someone/private", turns=1)
+    exported = _request(ws, type="sessions", op="export", session_id=sid, id="e")
+    assert exported["op"] == "export" and exported["session_id"] == sid
+    assert re.fullmatch(r"otto-session-[0-9a-f]{8}-\d{4}-\d{2}-\d{2}\.json", exported["filename"])
+    assert exported["data"]["session"]["workspace"] is None and "/Users/" not in json.dumps(exported["data"])
+    imported = _request(ws, type="sessions", op="import", data=exported["data"], id="i")
+    assert imported["type"] == "sessions_result" and imported["op"] == "import"
+    assert imported["session_id"] != sid and imported["title"] == "what tides are" and imported["turns"] == 1
+    listed = {row["id"] for row in _request(ws, type="sessions", op="list", id="l")["sessions"]}
+    assert listed == {sid, imported["session_id"]}
+    transcript = _request(ws, type="sessions", op="transcript", ref=imported["session_id"], id="t")
+    assert [m["text"] for m in transcript["messages"]] == ["what tides are", "hi back"]
+    # A client-chosen workspace never comes in with an import.
+    planted = dict(exported["data"], session={**exported["data"]["session"], "id": "a" * 32, "workspace": "/"})
+    again = _request(ws, type="sessions", op="import", data=planted, id="i2")
+    assert again["session_id"] == "a" * 32 and index.get("a" * 32).workspace is None
+    for bad in ({}, {"session": {}, "pending": [{"tier": "z", "text": "x"}]}, "not an object"):
+        reply = _request(ws, type="sessions", op="import", data=bad, id="bad")
+        assert reply["type"] == "error" and reply["code"] == "invalid", bad
+    assert _request(ws, type="sessions", op="export", session_id="b" * 32, id="e2")["code"] == "no_session"
+    ws.close()
+
+
+def test_usage_reports_the_sessions_spend_turn_by_turn(server, monkeypatch):
+    ws, _ = _hello(server)
+    sid = _one_turn(ws, monkeypatch, tokens=(30, 12))
+    ws.send(protocol.encode("turn", session_id=sid, text="again"))
+    _recv_until(ws, "event")
+    usage = _request(ws, type="sessions", op="usage", session_id=sid, id="u")
+    assert usage["op"] == "usage" and usage["session_id"] == sid
+    assert usage["usage"]["total_tokens"] == 84 and usage["turn_tokens"] == [42, 42]
+    assert usage["turn"] == {"tokens": 42, "calls": 1, "cost": None}
+    assert usage["title"] == "hello there" and usage["turns"] == 2
+    assert _request(ws, type="sessions", op="usage", session_id="c" * 32, id="u2")["code"] == "no_session"
+    ws.close()

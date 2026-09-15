@@ -14,8 +14,9 @@ these names are:
     API_VERSION                          bumped on any incompatible change here
     configure(home, env_file=, environ=) where state and keys live -- FIRST
     set_key / key_status / ready / doctor / version
-    Runtime.open_session / list_sessions / delete_session / transcript
-    SessionHandle.run / answer / cancel / rename / close
+    Runtime.open_session / list_sessions / delete_session / transcript /
+            rename_session / export_session / import_session
+    SessionHandle.run / answer / cancel / rename / usage_report / close
 
 and, beside them, agent/phone/ (the phone tools) and agent/pipeline/toolkit.py's
 `ExtraTool`. A host pins the otto release it was tested against and reads
@@ -323,6 +324,40 @@ class Runtime:
 
         return index.delete(index.check_id(session_id))
 
+    def rename_session(self, session_id: str, title: str) -> str:
+        """Rename a saved session that is not open here; returns the title as
+        stored. Only one that exists: a host must not be able to create index
+        rows for ids it made up. An open one renames through its handle."""
+        from agent.memory import sessions as index
+
+        index.check_id(session_id)
+        if not " ".join(str(title or "").split()):
+            raise ValueError("a title needs some text")
+        if index.get(session_id) is None:
+            raise LookupError(f"no session {session_id[:8]!r}")
+        return index.rename(session_id, str(title)).title
+
+    def export_session(self, session_id: str) -> dict[str, Any]:
+        """{"filename", "data"}: a name to save it under and the export itself
+        (agent/memory/sessions.py `export_payload`), without the workspace --
+        a path on this computer is nobody else's business. LookupError for a
+        session that was never saved."""
+        from agent.memory import sessions as index
+
+        info = index.get(index.check_id(session_id))
+        if info is None:
+            raise LookupError(f"no session {session_id[:8]!r} to export")
+        return {"filename": index.export_filename(info),
+                "data": index.export_payload(session_id, include_workspace=False)}
+
+    def import_session(self, data: Any, *, keep_workspace: bool = False) -> dict[str, Any]:
+        """A session from `export_session` data, as a `list_sessions` row.
+        Keeps the exported id when nothing here has it; drops the workspace
+        unless told otherwise. ValueError for data that is not an export."""
+        from agent.memory import sessions as index
+
+        return _session_row(index.import_payload(data, keep_workspace=keep_workspace))
+
     def transcript(self, ref: str) -> dict[str, Any]:
         """What a resumed session would show: the compacted earlier part as
         text, and the recent turns as messages."""
@@ -368,6 +403,10 @@ class SessionHandle:
         #: Where the last turn ran: True on the phone, False off it, None for
         #: a turn that had no phone tools to decide about.
         self.phone: bool | None = None
+        #: Tokens each turn of this handle spent, oldest first (the TUI's
+        #: sparkline), and the last turn's totals.
+        self.turn_tokens: list[int] = []
+        self.last_turn: dict[str, Any] | None = None
 
     @property
     def id(self) -> str:
@@ -464,6 +503,13 @@ class SessionHandle:
             if self._cancel is not None:
                 self._cancel.set()
             self._answer_ready.set()
+
+    def usage_report(self) -> dict[str, Any]:
+        """What the TUI's sidebar shows about this session's spend, as data:
+        the running ledger, tokens per turn, the last turn's totals, the
+        title and how many turns it has."""
+        return {"usage": self.usage.snapshot(), "turn_tokens": list(self.turn_tokens),
+                "turn": self.last_turn, "title": self.title, "turns": self.turns}
 
     def rename(self, title: str) -> str:
         """Name the session, as `/rename` does; returns the title as stored
@@ -585,16 +631,16 @@ class SessionHandle:
                     stream = next_stream
         except Cancelled:
             events({"type": "error", "code": "cancelled", "message": "stopped",
-                    "turn": self._turn_totals(mark)})
+                    "turn": self._close_turn(mark)})
             return
         except (AuthError, ProviderError) as exc:
             events({"type": "error", "code": "provider", "message": str(exc),
-                    "turn": self._turn_totals(mark)})
+                    "turn": self._close_turn(mark)})
             return
         except Exception as exc:  # a provider's own exception must not kill the host
             logger.exception("turn failed")
             events({"type": "error", "code": "failed", "message": f"{type(exc).__name__}: {exc}",
-                    "turn": self._turn_totals(mark)})
+                    "turn": self._close_turn(mark)})
             return
 
         raw = ((final or {}).get("final_output") or "").strip()
@@ -602,7 +648,7 @@ class SessionHandle:
         # the document itself rides beside it on the event, never in memory.
         self._session.record_turn(human, AIMessage(raw) if raw else None)
         events({"type": "final", "text": raw, "usage": self.usage.snapshot(),
-                "trace_id": self._session.trace_id, "turn": self._turn_totals(mark),
+                "trace_id": self._session.trace_id, "turn": self._close_turn(mark),
                 "title": self.title, "turns": self.turns, "phone": self.phone,
                 "document": _document(workspace, (final or {}).get("document_path"))})
 
@@ -612,6 +658,12 @@ class SessionHandle:
         return {name: (m.calls, m.input_tokens, m.output_tokens, m.cached_input_tokens,
                        m.cache_write_tokens)
                 for name, m in list(self.usage.by_model.items())}
+
+    def _close_turn(self, mark: Mapping[str, tuple[int, int, int, int, int]]) -> dict[str, Any]:
+        turn = self._turn_totals(mark)
+        self.last_turn = turn
+        self.turn_tokens.append(turn["tokens"])
+        return turn
 
     def _turn_totals(self, mark: Mapping[str, tuple[int, int, int, int, int]]) -> dict[str, Any]:
         """This turn's tokens, calls and dollars: the ledger minus `mark`,
