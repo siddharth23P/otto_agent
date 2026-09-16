@@ -18,6 +18,8 @@ free and behave identically across vendors.
 
 from __future__ import annotations
 
+import logging
+
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -160,6 +162,8 @@ class HealthReport:
     def ok(self) -> bool:
         return self.status is ProviderStatus.OK
 
+
+logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------
 # Errors
@@ -434,15 +438,21 @@ class BaseProvider(ABC):
         Env-var presence proves nothing -- only a real call distinguishes a
         valid key from a revoked one. Never raises.
         """
+        # A report carries one line; the log carries the whole chain, which is what a person
+        # debugging a phone needs when that line is "Connection error." (2026-09-16).
         try:
             models = self.list_models(refresh=True)
         except AuthError as exc:
+            logger.warning("%s: key check failed: %s", self.name, exc)
             return HealthReport(self.name, ProviderStatus.AUTH_FAILED, detail=str(exc))
         except ProviderUnavailable as exc:
+            logger.warning("%s: unreachable: %s", self.name, exc, exc_info=True)
             return HealthReport(self.name, ProviderStatus.UNREACHABLE, detail=str(exc))
         except ProviderError as exc:
+            logger.warning("%s: check failed: %s", self.name, exc, exc_info=True)
             return HealthReport(self.name, ProviderStatus.ERROR, detail=str(exc))
         except Exception as exc:  # a subclass forgot to translate
+            logger.error("%s: untranslated %s", self.name, type(exc).__name__, exc_info=True)
             return HealthReport(
                 self.name,
                 ProviderStatus.ERROR,
