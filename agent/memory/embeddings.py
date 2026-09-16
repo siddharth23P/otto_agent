@@ -260,7 +260,7 @@ def _get_model():
         try:
             from fastembed import TextEmbedding
         except ImportError as exc:
-            # An optional extra since 0.2.0: fastembed pulls onnxruntime,
+            # An optional extra since 0.1.2: fastembed pulls onnxruntime,
             # which has no Android wheel, so an embedded Otto runs without
             # it. Name both ways forward, because a bare ImportError reads
             # as a broken install rather than a choice.
