@@ -74,7 +74,7 @@ def set_value(key: str, value: str, *, path: Path | None = None) -> str:
 def _private(path: Path) -> None:
     """Owner-only, on every write and not only on creation: the file may
     have been made by a host app or by hand with a wider mode, and since
-    0.2.0 it also carries the `otto serve` pairing token. Windows has no
+    0.1.2 it also carries the `otto serve` pairing token. Windows has no
     such mode; a failure to set it is not a failure to write."""
     try:
         os.chmod(path, 0o600)

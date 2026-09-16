@@ -1,0 +1,7 @@
+- Search results open with sponsored results first (marked ad); leave them out when comparing.
+- Tapping a search suggestion runs the search: don't press Enter after it.
+- Sort and filters are both behind the All Filters icon (#s-all-filters-announce), top left.
+- In that panel the category list scrolls (name it by its [number]); "Sort by" is the LAST category, with ids like #sort/price-asc-rank.
+- After choosing, tap "Show N results" to apply; it appears only once something is chosen.
+- Price low to high for "apple iphone" lists accessories first (a ₹99 adapter, ₹109 cases): add a category or brand filter, or check each result is the product.
+- To add to cart, open the product page and use phone_commit on #add-to-cart-button (it reads "Submit"). Buy Now is a payment step.

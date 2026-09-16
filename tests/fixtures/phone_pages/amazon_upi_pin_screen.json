@@ -1,0 +1,40 @@
+{
+ "snapshot_id": "amazon_upi_pin_screen",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    0,
+    1440,
+    3088
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 10,
+  "activity": "org.npci.upi.security.pinactivitycomponent.GetCredential",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

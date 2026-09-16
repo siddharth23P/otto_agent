@@ -1,0 +1,116 @@
+{
+ "snapshot_id": "amazon_order_review_scrolled",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Arriving tomorrow",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    380,
+    1395,
+    460
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 2,
+   "t": "Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+   "d": "",
+   "r": "view",
+   "b": [
+    300,
+    480,
+    1395,
+    600
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "₹150.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    300,
+    610,
+    600,
+    680
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 4,
+   "t": "Qty: 2",
+   "d": "",
+   "r": "text",
+   "b": [
+    300,
+    690,
+    600,
+    750
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 5,
+   "t": "Order Total: ₹305.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    2500,
+    1395,
+    2570
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 9,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

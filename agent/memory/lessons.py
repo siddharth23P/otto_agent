@@ -46,6 +46,24 @@ survives the session that learned it is not a lesson. Same `MemoryStore`
 schema, `kind="lesson"`, ranked by the same embeddings as everything else,
 and degrading the same way -- if the embedding backend is unreachable the
 bank falls back to most-recent rather than failing the run.
+
+A run that drives a phone keeps its own kind, `PHONE_KIND` (`bind_kind`). A
+phone run learns about screens, lists and filters, a workspace run about
+files and commands, and with TOP_K=1 over one namespace each can only
+displace the other. Measured 2026-09-15: ten lessons from phone runs ranked
+against 180 from workspace runs, and "the cheapest foldable phone on Amazon"
+was handed "switch browser, clear cache, use a direct URL" -- advice for a
+machine the phone run did not have.
+
+A phone run may also leave NOTES ON AN APP: how one app's screens work
+("Sort by is the last category behind All Filters"), stored as lessons of
+kind `app_note:<package>` and shown after that app's screen by
+agent/phone/notes.py rather than recalled by similarity. They come out of
+the same distilling call, as items carrying an "app" key: `parse_lessons`
+leaves those out and `parse_app_notes` reads only them, so a note never
+takes one of a run's three lesson slots. An app keeps its newest few
+(`prune_kind`): an app changes its screens, and the old note is the one
+most likely to have stopped being true.
 """
 from __future__ import annotations
 
@@ -72,6 +90,9 @@ log = logging.getLogger(__name__)
 #: The `kind` every lesson is stored under, so one bank file could later hold
 #: other cross-run material without the two ranking against each other.
 KIND = "lesson"
+
+#: The kind a phone run's lessons are stored and recalled under.
+PHONE_KIND = "phone_lesson"
 
 #: How many lessons one finished run may contribute. Three, per rule 2 above.
 #: A run that wants to write ten has not learned ten things, it has summarised
@@ -156,6 +177,39 @@ _BANK: ContextVar = ContextVar("otto_lesson_bank", default=_UNSET)
 _WRITES: ContextVar[bool] = ContextVar("otto_lesson_writes", default=True)
 
 
+#: Which kind of lesson reads and writes go to for the duration: `KIND` unless
+#: a run binds another (agent/pipeline/nodes.py binds PHONE_KIND for a run that
+#: has the phone's tools).
+_KIND: ContextVar[str] = ContextVar("otto_lesson_kind", default=KIND)
+
+
+@contextmanager
+def bind_kind(kind: str):
+    """Read and write lessons of `kind` for the duration."""
+    token = _KIND.set(kind)
+    try:
+        yield
+    finally:
+        _KIND.reset(token)
+
+
+def current_kind() -> str:
+    return _KIND.get()
+
+
+def _rows(store: MemoryStore) -> list:
+    kind = current_kind()
+    return store.get_chunk_rows(kind, store.chunk_hashes(kind))
+
+
+def _hash(text: str) -> str:
+    """A chunk's hash is unique across kinds, so the same words learned by a
+    phone run and a workspace run are two lessons, not one silently dropped.
+    The default kind keeps the plain content hash every existing bank has."""
+    kind = current_kind()
+    return content_hash(text if kind == KIND else f"{kind}\n{text}")
+
+
 def bank_path() -> Path:
     return DB_DIR / "lessons.db"
 
@@ -237,7 +291,7 @@ def recall_lessons(task: str, *, top_k: int = TOP_K) -> list[Lesson]:
     if store is None or not task.strip():
         return []
 
-    rows = store.get_chunk_rows(KIND, store.chunk_hashes(KIND))
+    rows = _rows(store)
     if not rows:
         return []
 
@@ -268,7 +322,7 @@ def all_lessons() -> list[Lesson]:
     store = _bank()
     if store is None:
         return []
-    parsed = [_parse(row.content) for row in store.get_chunk_rows(KIND, store.chunk_hashes(KIND))]
+    parsed = [_parse(row.content) for row in _rows(store)]
     return [lesson for lesson in parsed if lesson is not None]
 
 
@@ -288,17 +342,14 @@ def record_lessons(lessons, *, max_per_run: int = MAX_PER_RUN) -> list[Lesson]:
     if store is None or not _WRITES.get():
         return []
 
-    existing = [
-        (row.embedding, row.embedding_model)
-        for row in store.get_chunk_rows(KIND, store.chunk_hashes(KIND))
-    ]
+    existing = [(row.embedding, row.embedding_model) for row in _rows(store)]
     kept: list[Lesson] = []
     for lesson in list(lessons)[:max_per_run]:
         text = lesson.rendered()
         vector, model = _embed_one(text)
         if _is_duplicate(vector, model, existing):
             continue
-        store.add_chunk(KIND, content_hash(text), text, vector, model)
+        store.add_chunk(current_kind(), _hash(text), text, vector, model)
         existing.append((vector, model))
         kept.append(lesson)
     return kept
@@ -327,21 +378,24 @@ def _is_duplicate(vector, model, existing) -> bool:
 _RENDERED = re.compile(r"^When (?P<cue>.+?): (?P<action>.+?) \[(?P<outcome>\w+)\]$", re.S)
 
 
+def _cue(text: str) -> str:
+    """A cue without a leading "When": the stored form adds its own, and a
+    distiller asked for "the situation" routinely starts with the word, which
+    rendered every such lesson as "When When ..."."""
+    return re.sub(r"^when\s+", "", str(text or "").strip(), flags=re.IGNORECASE)
+
+
 def _parse(text: str) -> Lesson | None:
     match = _RENDERED.match(text.strip())
     if not match:
         return None
-    return Lesson(**match.groupdict())
+    parts = match.groupdict()
+    return Lesson(cue=_cue(parts["cue"]), action=parts["action"], outcome=parts["outcome"])
 
 
-def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]:
-    """Every lesson in `text`, uncapped. The one parser behind both the
-    distiller's reply and an imported file.
-
-    Tolerant on purpose: a bare JSON list, an object with a "lessons" key, a
-    fenced block, or prose around the array all yield their lessons. Entries
-    missing a cue or an action are dropped, not fatal.
-    """
+def _items(text: str) -> list:
+    """The JSON items in `text`: a bare list, an object with a "lessons"
+    key, a fenced block, or prose around the array. [] when there are none."""
     body = (text or "").strip()
     fenced = re.search(r"```(?:json)?\s*(.+?)```", body, re.S)
     if fenced:
@@ -361,21 +415,50 @@ def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]
             items = json.loads(body[start:end + 1])
         except (json.JSONDecodeError, ValueError):
             return []
+    return items if isinstance(items, list) else []
 
-    lessons: list[Lesson] = []
-    for item in items if isinstance(items, list) else []:
-        if not isinstance(item, dict):
+
+def _lesson(item, outcome_default: str) -> Lesson | None:
+    if not isinstance(item, dict):
+        return None
+    cue = _cue(item.get("cue"))
+    action = str(item.get("action") or "").strip()
+    if not cue or not action:
+        return None
+    outcome = str(item.get("outcome") or outcome_default).strip().lower()
+    return Lesson(
+        cue=cue[:MAX_LESSON_CHARS], action=action[:MAX_LESSON_CHARS],
+        outcome="failed" if outcome.startswith("fail") else "worked",
+    )
+
+
+def parse_lessons(text: str, *, outcome_default: str = "worked") -> list[Lesson]:
+    """Every lesson in `text`, uncapped. The one parser behind both the
+    distiller's reply and an imported file.
+
+    Tolerant on purpose: a bare JSON list, an object with a "lessons" key, a
+    fenced block, or prose around the array all yield their lessons. Entries
+    missing a cue or an action are dropped, not fatal. An entry with an "app"
+    key is a note on that app (`parse_app_notes`), not a lesson.
+    """
+    lessons = (_lesson(item, outcome_default) for item in _items(text)
+               if not (isinstance(item, dict) and "app" in item))
+    return [lesson for lesson in lessons if lesson is not None]
+
+
+def parse_app_notes(text: str) -> dict[str, list[Lesson]]:
+    """The notes on apps in a distiller's reply, by package, uncapped: the
+    entries carrying an "app" key. Which of them are kept is
+    agent/phone/notes.py `record_app_notes`'s call."""
+    notes: dict[str, list[Lesson]] = {}
+    for item in _items(text):
+        if not (isinstance(item, dict) and "app" in item):
             continue
-        cue = str(item.get("cue") or "").strip()
-        action = str(item.get("action") or "").strip()
-        if not cue or not action:
-            continue
-        outcome = str(item.get("outcome") or outcome_default).strip().lower()
-        lessons.append(Lesson(
-            cue=cue[:MAX_LESSON_CHARS], action=action[:MAX_LESSON_CHARS],
-            outcome="failed" if outcome.startswith("fail") else "worked",
-        ))
-    return lessons
+        package = str(item.get("app") or "").strip()
+        lesson = _lesson(item, "worked")
+        if package and lesson is not None:
+            notes.setdefault(package, []).append(lesson)
+    return notes
 
 
 def count_entries(text: str) -> int:
@@ -435,17 +518,125 @@ class ImportReport:
         return ", ".join(bits)
 
 
+# --------------------------------------------------------------------------
+# Looking after a bank from outside a run: a host's lessons screen
+# --------------------------------------------------------------------------
+
+#: The kind prefix agent/phone/notes.py stores an app's learned notes under.
+APP_NOTE_PREFIX = "app_note:"
+#: An Android package name, as agent/phone/notes.py `valid_package` checks it
+#: (tests/test_serve.py keeps the two in step): this package may not import
+#: agent.phone, which imports it.
+_PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
+#: A lesson's id is its chunk hash (agent/memory/hashing.py): sha256 hex.
+_LESSON_ID = re.compile(r"[0-9a-f]{64}")
+
+
+def valid_kind(kind: object) -> bool:
+    """`lesson`, `phone_lesson`, or `app_note:<package>` -- the kinds a host
+    may name. Anything else never reaches a query."""
+    if kind in (KIND, PHONE_KIND):
+        return True
+    return (isinstance(kind, str) and kind.startswith(APP_NOTE_PREFIX)
+            and bool(_PACKAGE.fullmatch(kind[len(APP_NOTE_PREFIX):])))
+
+
+def valid_lesson_id(lesson_id: object) -> bool:
+    return isinstance(lesson_id, str) and bool(_LESSON_ID.fullmatch(lesson_id))
+
+
+@contextmanager
+def bank_session():
+    """The bank for the duration, for a caller outside a run -- a host's
+    request thread, where nothing is bound and `_bank()` would open the file
+    again on every call and never close it. A bank already bound (a test's,
+    or None for off) is used as it is; otherwise the default one is opened,
+    bound, and closed afterwards. Yields the store, or None."""
+    bound = _BANK.get()
+    if bound is not _UNSET:
+        yield bound
+        return
+    try:
+        store = MemoryStore(bank_path())
+    except (OSError, ValueError) as exc:
+        log.warning("lesson bank unavailable: %s", exc)
+        store = None
+    try:
+        with bind_bank(store):
+            yield store
+    finally:
+        if store is not None:
+            store.close()
+
+
+def list_kind(kind: str) -> list[dict]:
+    """Every stored item of `kind`, oldest first, with the id `delete_lesson`
+    takes as `lesson_id` -- not `id`, which a host's protocol already uses for
+    its own requests (agent/server/protocol.py). A row that does not parse is
+    listed with its text and no parts, so it can still be seen and deleted."""
+    store = _bank()
+    if store is None:
+        return []
+    rows = []
+    for row in store.get_chunk_rows(kind, store.chunk_hashes(kind)):
+        lesson = _parse(row.content)
+        rows.append({"lesson_id": row.hash, "cue": lesson.cue if lesson else None,
+                     "action": lesson.action if lesson else None,
+                     "outcome": lesson.outcome if lesson else None, "text": row.content})
+    return rows
+
+
+def delete_lesson(kind: str, lesson_id: str) -> bool:
+    """Forget one item of `kind`. A write, so a read-only run deletes
+    nothing. True when it was there."""
+    store = _bank()
+    if store is None or not _WRITES.get():
+        return False
+    removed = store._conn.execute("DELETE FROM chunks WHERE kind = ? AND hash = ?", (kind, lesson_id)).rowcount
+    store._conn.commit()
+    return removed > 0
+
+
+def note_kinds() -> list[str]:
+    """The `app_note:<package>` kinds the bank holds anything under."""
+    store = _bank()
+    if store is None:
+        return []
+    rows = store._conn.execute(
+        "SELECT DISTINCT kind FROM chunks WHERE substr(kind, 1, ?) = ? ORDER BY kind",
+        (len(APP_NOTE_PREFIX), APP_NOTE_PREFIX),
+    ).fetchall()
+    return [r[0] for r in rows if valid_kind(r[0])]
+
+
 def clear_bank() -> int:
     """Delete every lesson. Returns how many there were. Not undoable."""
     store = _bank()
     if store is None:
         return 0
-    before = len(store.chunk_hashes(KIND))
+    before = len(store.chunk_hashes(current_kind()))
     # Straight to the table: lessons are chunks like any other, and the store
     # has no delete because nothing else in Otto ever needed one.
-    store._conn.execute("DELETE FROM chunks WHERE kind = ?", (KIND,))
+    store._conn.execute("DELETE FROM chunks WHERE kind = ?", (current_kind(),))
     store._conn.commit()
     return before
+
+
+def prune_kind(keep: int) -> int:
+    """Delete the oldest lessons of the current kind beyond the newest
+    `keep`. Returns how many went. A write, so a read-only run prunes
+    nothing."""
+    store = _bank()
+    if store is None or not _WRITES.get():
+        return 0
+    kind = current_kind()
+    hashes = store.chunk_hashes(kind)  # oldest first
+    doomed = hashes[: max(0, len(hashes) - max(0, keep))]
+    if doomed:
+        # Straight to the table, as clear_bank does.
+        store._conn.executemany("DELETE FROM chunks WHERE kind = ? AND hash = ?", [(kind, h) for h in doomed])
+        store._conn.commit()
+    return len(doomed)
 
 
 def export_lessons(path: Path) -> int:

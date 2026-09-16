@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import secrets
 from typing import Annotated, Optional
@@ -16,6 +17,35 @@ TOKEN_ENV = "OTTO_SERVE_TOKEN"
 def pairing_url(host: str, port: int) -> str:
     shown = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
     return f"ws://{shown}:{port}/"
+
+
+def is_loopback(host: str) -> bool:
+    """Whether `host` only accepts connections from this computer."""
+    host = (host or "").strip().strip("[]")
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def exposure_warning(host: str, *, no_exec: bool = False) -> str | None:
+    """What to print when the server listens beyond loopback, or None.
+
+    A turn the phone is not needed for runs like `otto tui` -- shell and
+    Python on this computer included (2026-09-15, decided with the person who
+    runs it) -- so the pairing token is no longer only "talk to the agent".
+    Whoever holds it on a network this reaches can run commands here. The
+    phone does not need the network for this: `adb reverse` carries a
+    loopback server over USB."""
+    if is_loopback(host):
+        return None
+    grants = ("read and write files in otto's workspaces on this computer" if no_exec
+              else "run commands and read and write files on this computer")
+    return (f"otto serve is listening on {host or 'every interface'}, beyond this computer: anyone "
+            f"with the pairing token can {grants}. Prefer --host 127.0.0.1 with "
+            "`adb reverse tcp:8765 tcp:8765`" + ("" if no_exec else ", or add --no-exec") + ".")
 
 
 def ensure_token(explicit: str | None) -> str:
@@ -33,6 +63,20 @@ def ensure_token(explicit: str | None) -> str:
     return token
 
 
+def _log_phone_actions() -> None:
+    """Each phone tool call and what came of it, on stderr (agent/phone/tools.py logs them): what a
+    person reads when a run went back and forth. Typed text is never logged."""
+    import logging
+
+    phone = logging.getLogger("agent.phone")
+    if not any(getattr(h, "_otto_serve", False) for h in phone.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s phone %(message)s", "%H:%M:%S"))
+        handler._otto_serve = True  # type: ignore[attr-defined]
+        phone.addHandler(handler)
+    phone.setLevel(logging.INFO)
+
+
 def serve(
     host: Annotated[str, typer.Option(help="Interface to listen on; loopback unless you mean otherwise.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port to listen on.")] = 8765,
@@ -40,6 +84,10 @@ def serve(
     qr: Annotated[bool, typer.Option("--qr", help="Print a pairing QR code (needs the qrcode package).")] = False,
     allow_origin: Annotated[Optional[list[str]], typer.Option(
         "--allow-origin", help="A browser origin allowed to connect (repeatable). Pages are refused otherwise.")] = None,
+    no_exec: Annotated[bool, typer.Option(
+        "--no-exec", help="No shell or Python for any turn: the app's answers stay in the workspace.")] = False,
+    allow_remote_setup: Annotated[bool, typer.Option(
+        "--allow-remote-setup", help="Take key and routing changes from a client not on this computer.")] = False,
 ) -> None:
     """Serve the agent over a WebSocket for the phone app."""
     try:
@@ -53,11 +101,14 @@ def serve(
     from agent.server.app import OttoServer
 
     embed.configure(otto_home(), env_file=ENV_PATH)
+    _log_phone_actions()
     secret = ensure_token(token)
     url = pairing_url(host, port)
     payload = f"{url}#{secret}"
     err.print(f"[muted]otto serve[/] listening on [bold]{url}[/]")
     err.print(f"[muted]pair the app with[/] {payload}")
+    if (warning := exposure_warning(host, no_exec=no_exec)) is not None:
+        err.print(f"[warn]{warning}[/]", soft_wrap=True)
     if qr:
         try:
             import qrcode
@@ -70,6 +121,7 @@ def serve(
     if not embed.ready():
         err.print("[warn]INCEPTION_API_KEY is not set; turns will fail until it is (otto tui -> Setup)[/]")
     try:
-        asyncio.run(OttoServer(secret, allowed_origins=tuple(allow_origin or ())).run(host, port))
+        asyncio.run(OttoServer(secret, allowed_origins=tuple(allow_origin or ()),
+                               no_exec=no_exec, allow_remote_setup=allow_remote_setup).run(host, port))
     except KeyboardInterrupt:
         out.print("[muted]bye[/]")

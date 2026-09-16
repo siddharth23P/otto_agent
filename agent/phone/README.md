@@ -11,7 +11,8 @@ and binds these through [agent/embed.py](../embed.py).
 | `backend.py` | `PhoneBackend`, the Protocol a host implements (tree, tap, type, press, swipe, scroll, screenshot, apps, launch, settings, install); `PhoneError` with a code and a hand-over flag; `JsonBackend`, the adapter over a bridge whose methods return JSON envelopes |
 | `digest.py` | the accessibility snapshot as bounded, inert text: one `[index] "label" role flags @x,y` line per element, password fields never shown; `find_node` resolves a text target (exact, then unique substring, else the candidates) |
 | `guard.py` + `assets/guard_rules.json` | the rules the phone enforces and this side pre-checks: denied packages, money words, sensitive-screen patterns (two signals required), pay words (never tappable), forward words that become pay words next to a checkout signal, commit words (only through `phone_commit`); a broken rules file is a `GuardRulesError` on every verdict |
-| `tools.py` | `phone_tools(backend)`: eight `ExtraTool`s, `PHONE_GUIDANCE`, and the standing tools a phone cannot run |
+| `tools.py` | `phone_tools(backend)`: nine `ExtraTool`s, `PHONE_GUIDANCE`, and the standing tools a phone cannot run |
+| `notes.py` + `assets/app_notes/` | per-app notes shown after an app's screen the first time it is in front in a run: seeded `<package>.md` files (facts checked on a real phone; Amazon and Settings only) and notes learned by earlier runs, 800 characters in all; guidance only, never read by the guard |
 
 ## The tools
 
@@ -19,12 +20,28 @@ and binds these through [agent/embed.py](../embed.py).
 | --- | --- | --- |
 | `phone_screen` | no | `{}` -- the app in front and every element with a number |
 | `phone_act` | no | `{op, ...}` -- `tap`/`tap_text`/`long_press` by text or `x,y`, `type`, `press` (`back`, `home`, `recents`, `enter`), `swipe`, `scroll`; the screen after |
+| `phone_do` | no | `{steps}` -- up to five `phone_act` bodies in one call; each is judged by the same checks against the screen the step before left, and it stops at the first that fails or is refused, when a screen cannot be read or is refused, or when the app in front changes before the last step; only the last screen is shown |
 | `phone_commit` | yes | `{target}` -- a Send/Delete/Confirm; held once by the mutation gate |
 | `phone_open` | no | `{app}` -- by label or package |
 | `phone_apps` | no | `{query?}` |
 | `phone_look` | no | `{question}` -- a screenshot through the vision seat, words back |
 | `phone_settings` | no | `{page, package?}` -- a Settings page by intent |
 | `phone_install` | yes | `{package?, query?}` -- the Play listing, Install tapped; free apps only |
+
+The first screen of an app in a run is followed by that app's notes, when it
+has any, under a `NOTES ON <app>` heading that says they are guidance only:
+the stop rules still apply and the screen wins where they disagree. They are
+shown once per app however often it comes back, never on a screen the guard
+refuses, and each note is one inert `- ` line. A folded screen keeps them.
+
+Learned notes come from the phone run's distilling call, which is told the
+packages whose screens the run read and may add up to two notes as
+`{"app", "cue", "action", "outcome"}` items -- facts about the app, never a
+product, a price or the person. `notes.record_app_notes` keeps at most two a
+run, only for those packages, drops any that names a payment step or matches
+a sensitive pattern, stores them as lessons of kind `app_note:<package>`
+(the bank's duplicate check and read-only switch apply) and keeps each app's
+newest six.
 
 Every result is third-party content to the loop, exactly as a web page is.
 The mutation gate keys on the first line of the body, so a one-line JSON

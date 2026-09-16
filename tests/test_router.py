@@ -623,6 +623,40 @@ def test_prewarm_reports_a_dead_provider_instead_of_raising():
     assert failures == {"inception": "inception is down"}
 
 
+@dataclass
+class SlowCatalogue(FakeCatalogue):
+    """Every catalogue fetch is a 0.2 s round trip, as a vendor's model list is."""
+
+    calls: Counter = field(default_factory=Counter)
+
+    def models(self, provider):
+        import time
+
+        time.sleep(0.2)
+        self.calls[provider] += 1
+        if provider == "openai":
+            raise ProviderError("openai is down")
+        return super().models(provider)
+
+
+def test_prewarm_fetches_every_provider_at_once():
+    """Four vendors fetched in turn made a process's first turn wait for the
+    sum of their round trips; at once, it waits for the slowest."""
+    import time
+
+    other = ModelInfo(id="m", provider="x", capabilities=frozenset({Capability.CHAT}))
+    cat = SlowCatalogue({"inception": [MERCURY_25], "anthropic": [other], "openai": [other]})
+    r = Router(catalogue=cat)
+
+    started = time.monotonic()
+    failures = r.prewarm()
+    took = time.monotonic() - started
+
+    assert took < 0.5, f"three 0.2 s fetches took {took:.2f} s"
+    assert cat.calls == Counter({"inception": 1, "anthropic": 1, "openai": 1})
+    assert failures == {"openai": "openai is down"}
+
+
 def test_usable_is_the_configured_snapshot():
     r = router()
     assert r.usable() == ("inception",)

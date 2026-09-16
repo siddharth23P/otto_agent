@@ -1,0 +1,1116 @@
+{
+ "snapshot_id": "amazon_product",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": [
+   "mobile_orderInformationGroup_feature_div",
+   "instantOrderUpdate_feature_div",
+   "oneTimePaymentPrice_feature_div",
+   "pointsInsideBuyBox_feature_div",
+   "smx-simple-see-all-pay-full",
+   "deepCheckPromiseInsideBuyBox_feature_div",
+   "promiseBasedBadgeInsideBuyBox_feature_div",
+   "availabilityInsideBuyBox_feature_div",
+   "dsvDigitalBuyNow_feature_div",
+   "addToCart_feature_div",
+   "addToCart",
+   "buybox.addToCart",
+   "add-to-cart-button",
+   "buyNow_feature_div",
+   "buyNow",
+   "buyNowCheckout",
+   "buy-now-button",
+   "twisterPlusBuyBoxMessage_feature_div",
+   "paymentOptionsDoDFeature_feature_div",
+   "dynamicPaymentOptionsDoDFeature_feature_div",
+   "shipToStoreBuyBox_feature_div",
+   "preAddToCartFramework_feature_div",
+   "add-to-wishlist-button-submit",
+   "PAY_ON_DELIVERY",
+   "buyItOnAB_feature_div",
+   "tax-id-submit-button",
+   "dpx-rex-nile-submit-button",
+   "dpx-rex-nile-submit-button-announce",
+   "dpx-rex-nile-search-submit-focus-container",
+   "postPurchaseSideSheet_MP_feature_div"
+  ]
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2413,
+    1440,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "appcx_bottom_sheet"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Button",
+   "r": "view",
+   "b": [
+    618,
+    2413,
+    821,
+    2518
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "appcx_bottom_sheet_handle_container"
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    2518,
+    1440,
+    2638
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "long-pressable"
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "carousel",
+   "r": "slider",
+   "b": [
+    0,
+    2518,
+    1440,
+    2638
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "",
+   "r": "list",
+   "b": [
+    0,
+    2518,
+    1440,
+    2638
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    60,
+    2518,
+    1024,
+    2638
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pill"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "Does it work with Android phones?",
+   "r": "button",
+   "b": [
+    105,
+    2541,
+    979,
+    2616
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 8,
+   "t": "Does it work with Android phones?",
+   "d": "",
+   "r": "text",
+   "b": [
+    105,
+    2541,
+    979,
+    2616
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 9,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    1047,
+    2518,
+    1440,
+    2638
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pill"
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "Does it support data transfer?",
+   "r": "button",
+   "b": [
+    1092,
+    2541,
+    1440,
+    2616
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 11,
+   "t": "Does it support data transfer?",
+   "d": "",
+   "r": "text",
+   "b": [
+    1092,
+    2541,
+    1440,
+    2616
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "",
+   "d": "Back",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    165,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon"
+  },
+  {
+   "i": 13,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    165,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 14,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    248,
+    200,
+    338,
+    290
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_search_disabled"
+  },
+  {
+   "i": 15,
+   "t": "Search or ask a question",
+   "d": "",
+   "r": "text",
+   "b": [
+    368,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 16,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 17,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 18,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 19,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1440,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "Product summary presents key product information",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2438,
+    1357,
+    2622
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pqv-ingress"
+  },
+  {
+   "i": 21,
+   "t": "Product summary presents key product information",
+   "d": "",
+   "r": "button",
+   "b": [
+    45,
+    2438,
+    1357,
+    2622
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pqv-trigger"
+  },
+  {
+   "i": 22,
+   "t": "",
+   "d": "Anker Nano USB C to USB C Cable Fast Charging Softline, 3ft 240W Flexible Braided Cord, Type C to Type C Cable Fast Charging for iPhone 17 Series/Samsung/iPad/MacBook Pro and More Anker Nano USB C to USB C Cable Fast Charging Softline, 3ft 240W Flexible Braided Cord, Type C to Type C Cable Fast Charging for iPhone 17 Series/Samsung/iPad/MacBook Pro and More ₹999.00 Amazon Prime",
+   "r": "view",
+   "b": [
+    0,
+    391,
+    1440,
+    586
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "",
+   "d": "Anker Nano USB C to USB C Cable Fast Charging Softline, 3ft 240W Flexible Braided Cord, Type C to Type C Cable Fast Charging for iPhone 17 Series/Samsung/iPad/MacBook Pro and More",
+   "r": "image",
+   "b": [
+    86,
+    395,
+    277,
+    586
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "Anker Nano USB C to USB C Cable Fast Charging Softline, 3ft 240W Flexible Braided Cord, Type C to Type C Cable Fast Charging for iPhone 17 Series/Samsung/iPad/MacBook Pro and More",
+   "d": "",
+   "r": "text",
+   "b": [
+    322,
+    413,
+    1372,
+    485
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "₹999.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    322,
+    488,
+    581,
+    575
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "",
+   "d": "Amazon Prime",
+   "r": "image",
+   "b": [
+    532,
+    503,
+    693,
+    552
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "Sponsored",
+   "d": "",
+   "r": "button",
+   "b": [
+    1125,
+    492,
+    1383,
+    586
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "",
+   "d": "Visit the store, PHILIPS",
+   "r": "view",
+   "b": [
+    48,
+    710,
+    622,
+    785
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 29,
+   "t": "Visit the store, PHILIPS",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    713,
+    622,
+    781
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "",
+   "d": "5.0 out of 5 stars 23 Reviews",
+   "r": "view",
+   "b": [
+    993,
+    713,
+    1391,
+    781
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "acrCustomerReviewLink"
+  },
+  {
+   "i": 31,
+   "t": "5.0 out of 5 stars",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    721,
+    1293,
+    770
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "(23)",
+   "d": "",
+   "r": "text",
+   "b": [
+    1305,
+    713,
+    1391,
+    781
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "PHILIPS DLC7130CR/94 100W Magnetic Type-C to Type-C Fast Charging Cable (1m, Coral Reef) | Nylon Braided | Compatible with iPhone 15+ Series, USB-C iPad Models, Samsung Galaxy & All Type C Devices",
+   "d": "",
+   "r": "view",
+   "b": [
+    48,
+    803,
+    1391,
+    1081
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "Amazon's Choice",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    1088,
+    1391,
+    1163
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "acBadge_feature_div"
+  },
+  {
+   "i": 35,
+   "t": "32%\noff",
+   "d": "",
+   "r": "text",
+   "b": [
+    48,
+    1235,
+    206,
+    1328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "",
+   "d": "PHILIPS DLC7130CR/94 100W Magnetic Type-C to Type-C Fast Charging Cable (1m, Coral Reef) | Nylon Braided | Compatible with iPhone 15+ Series, USB-C iPad Models, Samsung Galaxy &amp; All Type C Devices",
+   "r": "view",
+   "b": [
+    33,
+    1220,
+    1406,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "PHILIPS DLC7130CR/94 100W Magnetic Type-C to Type-C Fast Charging Cable (1m, Coral Reef) | Nylon Braided | Compatible with iPhone 15+ Series, USB-C iPad Models, Samsung Galaxy &amp; All Type C Devices",
+   "r": "image",
+   "b": [
+    71,
+    1347,
+    1368,
+    2596
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "main-image"
+  },
+  {
+   "i": 38,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    0,
+    2698,
+    240,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "",
+   "d": "Home Tab 1 of 6",
+   "r": "view",
+   "b": [
+    45,
+    2698,
+    195,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    57,
+    2821,
+    182,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 41,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    240,
+    2698,
+    480,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "",
+   "d": "Your Amazon.com Tab 2 of 6",
+   "r": "view",
+   "b": [
+    285,
+    2698,
+    435,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "You",
+   "d": "",
+   "r": "text",
+   "b": [
+    317,
+    2821,
+    403,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 44,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    480,
+    2698,
+    720,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "Wallet Tab 3 of 6",
+   "r": "view",
+   "b": [
+    525,
+    2698,
+    675,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 46,
+   "t": "Wallet",
+   "d": "",
+   "r": "text",
+   "b": [
+    533,
+    2821,
+    667,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 47,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    720,
+    2698,
+    960,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 48,
+   "t": "",
+   "d": "Cart 1 item Tab 4 of 6",
+   "r": "view",
+   "b": [
+    765,
+    2698,
+    915,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 49,
+   "t": "1",
+   "d": "",
+   "r": "text",
+   "b": [
+    839,
+    2718,
+    859,
+    2788
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "cart_count"
+  },
+  {
+   "i": 50,
+   "t": "Cart",
+   "d": "",
+   "r": "text",
+   "b": [
+    790,
+    2821,
+    889,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 51,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    960,
+    2698,
+    1200,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 52,
+   "t": "",
+   "d": "Browse menu Tab 5 of 6",
+   "r": "view",
+   "b": [
+    1005,
+    2698,
+    1155,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 53,
+   "t": "Menu",
+   "d": "",
+   "r": "text",
+   "b": [
+    1021,
+    2821,
+    1139,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 54,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    1200,
+    2698,
+    1440,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 55,
+   "t": "",
+   "d": "Amazon Rufus Tab 6 of 6",
+   "r": "view",
+   "b": [
+    1245,
+    2698,
+    1395,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 56,
+   "t": "Rufus",
+   "d": "",
+   "r": "text",
+   "b": [
+    1256,
+    2821,
+    1383,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  }
+ ]
+}

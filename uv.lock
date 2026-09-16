@@ -1842,7 +1842,7 @@ wheels = [
 
 [[package]]
 name = "otto-cli-agent"
-version = "0.2.0"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "emoji" },
@@ -1895,7 +1895,7 @@ requires-dist = [
     { name = "langfuse", specifier = ">=4.15.1" },
     { name = "langgraph", specifier = ">=1.2.11" },
     { name = "langgraph-cli", extras = ["inmem"], marker = "extra == 'dev-server'", specifier = ">=0.4.31" },
-    { name = "numpy", specifier = ">=2.5.3" },
+    { name = "numpy", specifier = ">=1.26.2" },
     { name = "openpyxl", marker = "sys_platform != 'android'", specifier = ">=3.1.5" },
     { name = "prompt-toolkit", specifier = ">=3.0.53" },
     { name = "python-docx", marker = "sys_platform != 'android'", specifier = ">=1.1.2" },

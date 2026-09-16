@@ -1,0 +1,1280 @@
+{
+ "snapshot_id": "amazon_cart_pens",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 1,
+  "activity": "androidx.appcompat.app.ActionBar$Tab",
+  "offscreen_ids": [
+   "cart-important-message-box",
+   "diamonds-cashback-cart-container",
+   "sc-delivery-message-below-buy-box",
+   "sc-buy-box-recs-container",
+   "value-on-cart-ingress-container",
+   "value-on-cart-saving-message",
+   "value-on-cart-save-extra-with-offers",
+   "value-on-cart-saving-ingress",
+   "value-on-cart-ingress-link",
+   "value-on-cart-ingress-link-text",
+   "sc-active-cart-trust-messaging",
+   "cart-atf-recommendations",
+   "cart-atf-recommendations_0",
+   "AddToCartLibrary-AddToCartButton-Personalization",
+   "sc-saved-cart",
+   "savedCartViewForm",
+   "sc-saved-cart-list-caption-text",
+   "mobile-action-move-to-cart",
+   "cart-bottom-recommendations_0",
+   "cart-bottom-recommendations_1",
+   "cart-bottom-recommendations_2"
+  ]
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 2,
+   "t": "Search or ask a question",
+   "d": "",
+   "r": "text",
+   "b": [
+    203,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1441,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    410,
+    1441,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 8,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    48,
+    410,
+    1391,
+    2698
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sc-page-content"
+  },
+  {
+   "i": 9,
+   "t": "Total ₹305.00 View details",
+   "d": "",
+   "r": "view",
+   "b": [
+    48,
+    410,
+    1391,
+    518
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "sc-subtotal-row",
+   "g": true
+  },
+  {
+   "i": 10,
+   "t": "Proceed to checkout",
+   "d": "",
+   "r": "button",
+   "b": [
+    52,
+    560,
+    1387,
+    721
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 11,
+   "t": "",
+   "d": "",
+   "r": "checkbox",
+   "b": [
+    63,
+    848,
+    157,
+    938
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "sc-buy-box-gift-checkbox"
+  },
+  {
+   "i": 12,
+   "t": "Send as a gift. Include custom message",
+   "d": "",
+   "r": "text",
+   "b": [
+    180,
+    856,
+    1252,
+    931
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "",
+   "d": "Deselect all items",
+   "r": "view",
+   "b": [
+    52,
+    1100,
+    536,
+    1175
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "deselect-all"
+  },
+  {
+   "i": 14,
+   "t": "Deselect all items",
+   "d": "",
+   "r": "text",
+   "b": [
+    52,
+    1100,
+    536,
+    1175
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 15,
+   "t": "",
+   "d": "Prime",
+   "r": "image",
+   "b": [
+    45,
+    1257,
+    247,
+    1321
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 16,
+   "t": "FREE delivery",
+   "d": "",
+   "r": "text",
+   "b": [
+    255,
+    1246,
+    641,
+    1321
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 17,
+   "t": "Today",
+   "d": "",
+   "r": "text",
+   "b": [
+    637,
+    1246,
+    810,
+    1321
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 18,
+   "t": "",
+   "d": "Select Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue) for checkout",
+   "r": "checkbox",
+   "b": [
+    75,
+    1373,
+    165,
+    1463
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": true,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "",
+   "d": "Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+   "r": "view",
+   "b": [
+    600,
+    1388,
+    1383,
+    1527
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1388,
+    1383,
+    1527
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 21,
+   "t": "400+ bought in past month",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1523,
+    1383,
+    1602
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "₹150.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1617,
+    918,
+    1722
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "(₹50.00 / count)",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1711,
+    1383,
+    1793
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "In stock",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1827,
+    791,
+    1895
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "Minimum quantity required: 2",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1902,
+    1316,
+    1970
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "",
+   "d": "10 days Returnable",
+   "r": "view",
+   "b": [
+    600,
+    1977,
+    1065,
+    2045
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "10 days Returnable",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    1977,
+    1065,
+    2045
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "10% Off on select cards",
+   "d": "",
+   "r": "text",
+   "b": [
+    600,
+    2112,
+    1188,
+    2180
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 29,
+   "t": "",
+   "d": "Terms",
+   "r": "view",
+   "b": [
+    1185,
+    2108,
+    1331,
+    2183
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "Terms",
+   "d": "",
+   "r": "text",
+   "b": [
+    1185,
+    2112,
+    1331,
+    2180
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "",
+   "d": "Delete Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+   "r": "button",
+   "b": [
+    67,
+    2221,
+    191,
+    2322
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "2",
+   "d": "",
+   "r": "text",
+   "b": [
+    277,
+    2240,
+    315,
+    2307
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "2",
+   "d": "",
+   "r": "text",
+   "b": [
+    67,
+    2247,
+    105,
+    2326
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "",
+   "d": "Increase quantity by one, Quantity is 2, Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+   "r": "button",
+   "b": [
+    397,
+    2221,
+    525,
+    2322
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "",
+   "d": "Delete Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+   "r": "button",
+   "b": [
+    603,
+    2213,
+    847,
+    2330
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "",
+   "d": "Save for later Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+   "r": "button",
+   "b": [
+    881,
+    2213,
+    1286,
+    2330
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "Share Pilot Hi-Techpoint 05 Super Value Pen - Pack of 3 (Blue)",
+   "d": "",
+   "r": "button",
+   "b": [
+    60,
+    2360,
+    285,
+    2483
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "a-autoid-4"
+  },
+  {
+   "i": 38,
+   "t": "Items:",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2540,
+    1173,
+    2618
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "Items:",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    2540,
+    1173,
+    2618
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "₹300.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    1166,
+    2540,
+    1398,
+    2618
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "Delivery:",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2615,
+    1020,
+    2693
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "Delivery:",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    2615,
+    1020,
+    2693
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "₹198.00 FREE",
+   "d": "",
+   "r": "text",
+   "b": [
+    1016,
+    2615,
+    1398,
+    2693
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 44,
+   "t": "Marketplace Fee:",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2690,
+    1241,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 45,
+   "t": "Marketplace Fee:",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    2690,
+    1241,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 46,
+   "t": "₹5.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    1237,
+    2690,
+    1398,
+    2698
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 47,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    0,
+    2698,
+    240,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 48,
+   "t": "",
+   "d": "Home Tab 1 of 6",
+   "r": "view",
+   "b": [
+    45,
+    2698,
+    195,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 49,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    57,
+    2821,
+    182,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 50,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    240,
+    2698,
+    480,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 51,
+   "t": "",
+   "d": "Your Amazon.com Tab 2 of 6",
+   "r": "view",
+   "b": [
+    285,
+    2698,
+    435,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 52,
+   "t": "You",
+   "d": "",
+   "r": "text",
+   "b": [
+    317,
+    2821,
+    403,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 53,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    480,
+    2698,
+    720,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 54,
+   "t": "",
+   "d": "Wallet Tab 3 of 6",
+   "r": "view",
+   "b": [
+    525,
+    2698,
+    675,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 55,
+   "t": "Wallet",
+   "d": "",
+   "r": "text",
+   "b": [
+    533,
+    2821,
+    667,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 56,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    720,
+    2698,
+    960,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 57,
+   "t": "",
+   "d": "Cart 2 items Tab 4 of 6",
+   "r": "view",
+   "b": [
+    765,
+    2698,
+    915,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 58,
+   "t": "2",
+   "d": "",
+   "r": "text",
+   "b": [
+    835,
+    2718,
+    863,
+    2788
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "cart_count"
+  },
+  {
+   "i": 59,
+   "t": "Cart",
+   "d": "",
+   "r": "text",
+   "b": [
+    790,
+    2821,
+    889,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 60,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    960,
+    2698,
+    1200,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 61,
+   "t": "",
+   "d": "Browse menu Tab 5 of 6",
+   "r": "view",
+   "b": [
+    1005,
+    2698,
+    1155,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 62,
+   "t": "Menu",
+   "d": "",
+   "r": "text",
+   "b": [
+    1021,
+    2821,
+    1139,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 63,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    1200,
+    2698,
+    1440,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 64,
+   "t": "",
+   "d": "Amazon Rufus Tab 6 of 6",
+   "r": "view",
+   "b": [
+    1245,
+    2698,
+    1395,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 65,
+   "t": "Rufus",
+   "d": "",
+   "r": "text",
+   "b": [
+    1256,
+    2821,
+    1383,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  }
+ ]
+}

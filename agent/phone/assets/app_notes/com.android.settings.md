@@ -1,0 +1,2 @@
+- Prefer a phone_settings page over tapping through menus: it opens the page directly.
+- The search field at the top of Settings finds a setting by its name.

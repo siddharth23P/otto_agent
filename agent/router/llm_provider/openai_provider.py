@@ -30,6 +30,7 @@ from agent.router.llm_provider.base import (
     ModelInfo,
     ProviderError,
     ProviderUnavailable,
+    connection_detail,
 )
 
 __all__ = ["OpenAIProvider"]
@@ -101,7 +102,7 @@ class OpenAIProvider(BaseProvider):
         except AuthenticationError as exc:
             raise AuthError(f"{self.name}: key rejected ({exc})") from exc
         except APIConnectionError as exc:
-            raise ProviderUnavailable(f"{self.name}: {exc}") from exc
+            raise ProviderUnavailable(f"{self.name}: {connection_detail(exc)}") from exc
         except APIStatusError as exc:
             if exc.status_code in (401, 403):
                 raise AuthError(f"{self.name}: HTTP {exc.status_code}") from exc

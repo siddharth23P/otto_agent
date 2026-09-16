@@ -1,0 +1,1037 @@
+{
+ "snapshot_id": "amazon_checkout_payment_scrolled",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": [
+   "checkout-progress-indicator",
+   "checkout-address-context",
+   "checkout-delivery-address-context",
+   "checkout-primary-continue-button-id",
+   "pagelet-inlined-purchase-level-messages",
+   "checkout-pagelet-container",
+   "checkout-psp-sticky-action-bar",
+   "checkout-snappy-registry"
+  ]
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "CANCEL",
+   "d": "Cancel",
+   "r": "button",
+   "b": [
+    1110,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "top_bar_cancel_text_button"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1441,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    350,
+    1395,
+    590
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-266"
+  },
+  {
+   "i": 4,
+   "t": "Previously used",
+   "d": "",
+   "r": "text",
+   "b": [
+    311,
+    350,
+    1327,
+    357
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 5,
+   "t": "Amazon Pay UPI",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    365,
+    783,
+    440
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 6,
+   "t": "State Bank of India •••• 0000",
+   "d": "",
+   "r": "text",
+   "b": [
+    397,
+    447,
+    1068,
+    515
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    353,
+    1365,
+    443
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-268"
+  },
+  {
+   "i": 8,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    578,
+    1395,
+    1055
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-301"
+  },
+  {
+   "i": 9,
+   "t": "Featured",
+   "d": "",
+   "r": "text",
+   "b": [
+    311,
+    631,
+    1327,
+    713
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "Amazon Pay Balance: ₹99.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    721,
+    1117,
+    796
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 11,
+   "t": "",
+   "d": "Details",
+   "r": "view",
+   "b": [
+    333,
+    803,
+    495,
+    875
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-303"
+  },
+  {
+   "i": 12,
+   "t": "Details",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    803,
+    495,
+    875
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    706,
+    1365,
+    800
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-305"
+  },
+  {
+   "i": 14,
+   "t": "Add ₹206.00 to proceed",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    871,
+    915,
+    995
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 15,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    911,
+    871,
+    1327,
+    995
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-306"
+  },
+  {
+   "i": 16,
+   "t": "Add Now",
+   "d": "",
+   "r": "button",
+   "b": [
+    915,
+    875,
+    1323,
+    991
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-306-announce"
+  },
+  {
+   "i": 17,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    1201,
+    1395,
+    1490
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-309"
+  },
+  {
+   "i": 18,
+   "t": "Amazon Pay UPI",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    1268,
+    783,
+    1343
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "HDFC Bank •••• 0000",
+   "d": "",
+   "r": "text",
+   "b": [
+    397,
+    1347,
+    881,
+    1415
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    1253,
+    1365,
+    1343
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-311"
+  },
+  {
+   "i": 21,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    1482,
+    1395,
+    1763
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-344"
+  },
+  {
+   "i": 22,
+   "t": "Pay by any UPI App",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    1550,
+    1177,
+    1625
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    1535,
+    1365,
+    1625
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-345"
+  },
+  {
+   "i": 24,
+   "t": "Google Pay, PhonePe, Paytm and more",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    1632,
+    1327,
+    1711
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    1756,
+    1395,
+    1940
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "apx-upi-container-div-id_sh_10"
+  },
+  {
+   "i": 26,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    82,
+    1805,
+    1327,
+    1887
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-361"
+  },
+  {
+   "i": 27,
+   "t": "+ Add account to Amazon Pay UPI",
+   "d": "",
+   "r": "text",
+   "b": [
+    82,
+    1805,
+    1327,
+    1887
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "CREDIT & DEBIT CARDS",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    1981,
+    1395,
+    2063
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 29,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2086,
+    1395,
+    2360
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-364"
+  },
+  {
+   "i": 30,
+   "t": "SBI Credit Card",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    2150,
+    1177,
+    2228
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-365"
+  },
+  {
+   "i": 31,
+   "t": "",
+   "d": "Visa",
+   "r": "image",
+   "b": [
+    322,
+    2236,
+    457,
+    2288
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "••••",
+   "d": "",
+   "r": "text",
+   "b": [
+    461,
+    2228,
+    547,
+    2296
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "0000",
+   "d": "",
+   "r": "text",
+   "b": [
+    543,
+    2228,
+    671,
+    2296
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "|",
+   "d": "",
+   "r": "text",
+   "b": [
+    690,
+    2228,
+    708,
+    2296
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "Cashback",
+   "d": "",
+   "r": "text",
+   "b": [
+    723,
+    2228,
+    952,
+    2296
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-366"
+  },
+  {
+   "i": 36,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    2138,
+    1365,
+    2228
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-367"
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2352,
+    1395,
+    2626
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-379"
+  },
+  {
+   "i": 38,
+   "t": "SBI Credit Card",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    2416,
+    1177,
+    2495
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-380"
+  },
+  {
+   "i": 39,
+   "t": "",
+   "d": "MasterCard",
+   "r": "image",
+   "b": [
+    322,
+    2498,
+    427,
+    2551
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "••••",
+   "d": "",
+   "r": "text",
+   "b": [
+    435,
+    2491,
+    521,
+    2558
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "0000",
+   "d": "",
+   "r": "text",
+   "b": [
+    513,
+    2491,
+    641,
+    2558
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "|",
+   "d": "",
+   "r": "text",
+   "b": [
+    660,
+    2491,
+    678,
+    2558
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "Person",
+   "d": "",
+   "r": "text",
+   "b": [
+    693,
+    2491,
+    862,
+    2558
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-381"
+  },
+  {
+   "i": 44,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    2405,
+    1365,
+    2495
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-382"
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2615,
+    1395,
+    2888
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-394"
+  },
+  {
+   "i": 46,
+   "t": "RuPay",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    2678,
+    1177,
+    2757
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-395"
+  },
+  {
+   "i": 47,
+   "t": "",
+   "d": "RuPay",
+   "r": "image",
+   "b": [
+    322,
+    2765,
+    506,
+    2817
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 48,
+   "t": "••••",
+   "d": "",
+   "r": "text",
+   "b": [
+    513,
+    2757,
+    600,
+    2825
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 49,
+   "t": "0000",
+   "d": "",
+   "r": "text",
+   "b": [
+    592,
+    2757,
+    723,
+    2825
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 50,
+   "t": "|",
+   "d": "",
+   "r": "text",
+   "b": [
+    738,
+    2757,
+    757,
+    2825
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 51,
+   "t": "Person Person",
+   "d": "",
+   "r": "text",
+   "b": [
+    772,
+    2757,
+    1293,
+    2825
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-396"
+  },
+  {
+   "i": 52,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    2667,
+    1365,
+    2757
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-397"
+  },
+  {
+   "i": 53,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2881,
+    1395,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-415"
+  }
+ ]
+}

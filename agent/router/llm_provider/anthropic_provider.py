@@ -32,6 +32,7 @@ from agent.router.llm_provider.base import (
     ModelInfo,
     ProviderError,
     ProviderUnavailable,
+    connection_detail,
 )
 
 __all__ = ["AnthropicProvider"]
@@ -43,7 +44,7 @@ def _translate(exc: Exception) -> ProviderError:
     if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
         return AuthError(f"anthropic: key rejected ({exc})")
     if isinstance(exc, APIConnectionError):  # APITimeoutError subclasses this
-        return ProviderUnavailable(f"anthropic: {exc}")
+        return ProviderUnavailable(f"anthropic: {connection_detail(exc)}")
     if isinstance(exc, APIStatusError):
         if exc.status_code in (401, 403):
             return AuthError(f"anthropic: HTTP {exc.status_code}")

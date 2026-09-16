@@ -8,13 +8,21 @@ import json
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
-def node(i, t="", *, d="", r="text", b=(0, 0, 100, 40), c=False, e=False, s=False, p=False, f=False, k=None):
-    return {"i": i, "t": t, "d": d, "r": r, "b": list(b), "c": c, "e": e, "s": s, "p": p, "f": f, "k": k}
+def node(i, t="", *, d="", r="text", b=(0, 0, 100, 40), c=False, e=False, s=False, p=False, f=False, k=None, v="",
+         h=None, n=None, m=None, g=None):
+    """A node as the app sends it; `h` (hint), `n` (input kind), `m` (max length) and `g` (heading)
+    only when given, as the app omits them."""
+    out = {"i": i, "t": t, "d": d, "r": r, "b": list(b), "c": c, "e": e, "s": s, "p": p, "f": f, "k": k, "v": v}
+    out.update({key: value for key, value in (("h", h), ("n", n), ("m", m), ("g", g)) if value is not None})
+    return out
 
 
-def snapshot(sid, package, label, nodes, *, keyboard=False, secure=False):
-    return {"snapshot_id": sid, "app": {"package": package, "label": label},
-            "screen": {"w": 1080, "h": 2400}, "keyboard": keyboard, "secure": secure, "nodes": nodes}
+def snapshot(sid, package, label, nodes, *, keyboard=False, secure=False, page=None):
+    out = {"snapshot_id": sid, "app": {"package": package, "label": label},
+           "screen": {"w": 1080, "h": 2400}, "keyboard": keyboard, "secure": secure, "nodes": nodes}
+    if page is not None:
+        out["page"] = page
+    return out
 
 
 BLINKIT_SEARCH = snapshot("s1", "com.grofers.customerapp", "Blinkit", [
@@ -41,6 +49,19 @@ SETTINGS_DISPLAY = snapshot("s3", "com.android.settings", "Settings", [
 PHONEPE = snapshot("s4", "com.phonepe.app", "PhonePe", [
     node(1, "Enter UPI PIN", r="text"),
     node(2, "", r="edit-field", e=True, p=True),
+])
+
+#: Amazon's product page as the phone reads it (2026-09-15, a Galaxy S23): a
+#: WebView whose form buttons all read "Submit", with what they do only in
+#: their HTML id.
+AMAZON_PRODUCT = snapshot("s6", "in.amazon.mShop.android.shopping", "Amazon", [
+    node(1, "PHILIPS 100W Magnetic Type-C to Type-C Fast Charging Cable", r="text"),
+    node(2, "Submit", r="radio", b=(56, 1200, 517, 1500), c=True, k=True),
+    node(3, "Submit", r="radio", b=(577, 1200, 1031, 1500), c=True, k=False),
+    node(4, "₹559", r="text"),
+    node(5, "Submit", r="button", b=(52, 2000, 1387, 2140), c=True, v="add-to-cart-button"),
+    node(6, "Submit", r="button", b=(52, 2180, 1387, 2320), c=True, v="buy-now-button"),
+    node(7, "", r="web", b=(0, 350, 1440, 2698), s=True),
 ])
 
 CHAT_WITH_OTP = snapshot("s5", "com.whatsapp", "WhatsApp", [
@@ -98,8 +119,8 @@ class FakePhone:
         self.calls.append(("press", key))
         return self._reply("press", {"done": key, "after": self._next()})
 
-    def swipe(self, direction):
-        self.calls.append(("swipe", direction))
+    def swipe(self, direction, x=None, y=None):
+        self.calls.append(("swipe", direction) if x is None else ("swipe", direction, x, y))
         return self._reply("swipe", {"done": direction, "after": self._next()})
 
     def scroll(self, direction, i):

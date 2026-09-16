@@ -1,0 +1,1522 @@
+{
+ "snapshot_id": "amazon_results_offers",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Back",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    165,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    165,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    248,
+    200,
+    338,
+    290
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_search_disabled"
+  },
+  {
+   "i": 4,
+   "t": "apple iphone",
+   "d": "",
+   "r": "text",
+   "b": [
+    368,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 8,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    515,
+    1440,
+    2863
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 9,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    515,
+    1440,
+    848
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "All Filters Icon",
+   "r": "button",
+   "b": [
+    135,
+    560,
+    228,
+    650
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "s-all-filters-announce"
+  },
+  {
+   "i": 11,
+   "t": "",
+   "d": "Prime Filter, unselected",
+   "r": "button",
+   "b": [
+    30,
+    695,
+    345,
+    807
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "Up to ₹150",
+   "d": "",
+   "r": "text",
+   "b": [
+    926,
+    567,
+    1200,
+    642
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "₹150 - ₹60,000",
+   "d": "",
+   "r": "text",
+   "b": [
+    1308,
+    567,
+    1440,
+    642
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "",
+   "d": "Popular",
+   "r": "button",
+   "b": [
+    378,
+    695,
+    690,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "multipt"
+  },
+  {
+   "i": 15,
+   "t": "",
+   "d": "Brands",
+   "r": "button",
+   "b": [
+    708,
+    695,
+    1001,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "91049095031"
+  },
+  {
+   "i": 16,
+   "t": "",
+   "d": "Storage Capacity",
+   "r": "button",
+   "b": [
+    1020,
+    695,
+    1440,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "44349045031"
+  },
+  {
+   "i": 17,
+   "t": "Results",
+   "d": "",
+   "r": "text",
+   "b": [
+    0,
+    875,
+    228,
+    972
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "",
+   "d": "More like this",
+   "r": "button",
+   "b": [
+    60,
+    1947,
+    183,
+    2071
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "",
+   "d": "ref=sr_1_1_sspa?ie=UTF8&psc=1&spc=MToxOTExNDI2Mzg1MjU1MDcyOjE3ODk0NzQ3MjQ6c3BfcGhvbmVhcHBfc2VhcmNoX2F0ZjozMDA0ODgxMTc2NjU1MzI6Ojo6&sp_csd=d2lkZ2V0TmFtZT1zcF9waG9uZWFwcF9zZWFyY2hfYXRm&aref=cemexVnpkH&keywords=apple+iphone&dib_tag=se&ni_pt=SR&sp_cr=ZAZ&dplnkId=3c03f9b3-3c2b-42c6-8c45-c05f316929c4&ni=1&dib=eyJ2IjoiMSJ9.lAaWsKVTwxt5QYFrukLkOdksoQijmgE6J8dorUjgAhHD5YpswSUhdKu5s511KRViotW-xlFKHpp4058Hkkf5pmIiRvoCbdita-KIRQiqpQPQ7EAQnz_HzEvf8uQqTXrJ0IiUBe56UWkzSjinT_m44N8-kMO_1_4iYeo1I806SAY9QK9JZ347Y3P7MYCcsCfPNwBbSFa8bp0s3HMBUpaB3Q",
+   "r": "view",
+   "b": [
+    15,
+    893,
+    607,
+    2097
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "",
+   "d": "View Sponsored information or leave ad feedback",
+   "r": "view",
+   "b": [
+    618,
+    923,
+    1383,
+    1036
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "View Sponsored information or leave ad feedback",
+   "d": "",
+   "r": "button",
+   "b": [
+    618,
+    942,
+    821,
+    998
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "",
+   "d": "Apple",
+   "r": "view",
+   "b": [
+    618,
+    1032,
+    1383,
+    1111
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "Apple",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1032,
+    1383,
+    1111
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "",
+   "d": "Sponsored Ad - iPhone 16e 128 GB: Built for Apple Intelligence, A18 Chip, Supersized Battery Life, 48MP Fusion. Camera, 15.40 cm (6.1″) Super Retina XDR Display; Black",
+   "r": "view",
+   "b": [
+    618,
+    1107,
+    1383,
+    1261
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "",
+   "d": "Sponsored Ad - iPhone 16e 128 GB: Built for Apple Intelligence, A18 Chip, Supersized Battery Life, 48MP Fusion. Camera, 15.40 cm (6.1″) Super Retina XDR Display; Black",
+   "r": "view",
+   "b": [
+    618,
+    1107,
+    1383,
+    1261
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "",
+   "d": "Sponsored Ad - iPhone 16e 128 GB: Built for Apple Intelligence, A18 Chip, Supersized Battery Life, 48MP Fusion. Camera, 15.40 cm (6.1″) Super Retina XDR Display; Black",
+   "r": "text",
+   "b": [
+    618,
+    1107,
+    1383,
+    1261
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "",
+   "d": "4.5 out of 5 stars 1,300 ratings 200+ bought in past month",
+   "r": "view",
+   "b": [
+    618,
+    1272,
+    1383,
+    1396
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "4.5 out of 5 stars",
+   "d": "",
+   "r": "text",
+   "b": [
+    690,
+    1280,
+    918,
+    1328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 29,
+   "t": "(1.3K)",
+   "d": "",
+   "r": "text",
+   "b": [
+    926,
+    1276,
+    1050,
+    1336
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "200+ bought in past month",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1336,
+    1185,
+    1396
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "",
+   "d": "₹59,900 M.R.P: ₹69,900 (14% off) Buy for ₹59,850 with HDFC Bank credit card",
+   "r": "view",
+   "b": [
+    618,
+    1407,
+    1383,
+    1733
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "₹59,900",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1411,
+    933,
+    1516
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "M.R.P: ₹69,900",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1677,
+    930,
+    1737
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "(14% off)",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1445,
+    1357,
+    1610
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "Buy for ₹59,850",
+   "d": "",
+   "r": "text",
+   "b": [
+    641,
+    1613,
+    975,
+    1673
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "with HDFC Bank credit card",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1613,
+    1338,
+    1733
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "FREE delivery 28 Sept - 2 Oct for Prime members",
+   "r": "view",
+   "b": [
+    618,
+    1745,
+    1383,
+    1887
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "FREE delivery",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1767,
+    911,
+    1827
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "28 Sept - 2 Oct",
+   "d": "",
+   "r": "text",
+   "b": [
+    903,
+    1767,
+    1226,
+    1827
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 40,
+   "t": "for Prime members",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1767,
+    1297,
+    1887
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    622,
+    1947,
+    1383,
+    2063
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "",
+   "d": "ref=sr_1_2_sspa?ie=UTF8&psc=1&spc=MToxOTExNDI2Mzg1MjU1MDcyOjE3ODk0NzQ3MjQ6c3BfcGhvbmVhcHBfc2VhcmNoX2F0ZjozMDA3MTQxMjkwMjE2MzI6Ojo6&sp_csd=d2lkZ2V0TmFtZT1zcF9waG9uZWFwcF9zZWFyY2hfYXRm&aref=pmVX5S0nlx&keywords=apple+iphone&dib_tag=se&ni_pt=SR&sp_cr=ZAZ&dplnkId=3c03f9b3-3c2b-42c6-8c45-c05f316929c4&ni=1&dib=eyJ2IjoiMSJ9.lAaWsKVTwxt5QYFrukLkOdksoQijmgE6J8dorUjgAhHD5YpswSUhdKu5s511KRViotW-xlFKHpp4058Hkkf5pmIiRvoCbdita-KIRQiqpQPQ7EAQnz_HzEvf8uQqTXrJ0IiUBe56UWkzSjinT_m44N8-kMO_1_4iYeo1I806SAY9QK9JZ347Y3P7MYCcsCfPNwBbSFa8bp0s3HMBUpaB3Q",
+   "r": "view",
+   "b": [
+    15,
+    2127,
+    607,
+    2863
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "",
+   "d": "View Sponsored information or leave ad feedback",
+   "r": "view",
+   "b": [
+    618,
+    2157,
+    1383,
+    2273
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 44,
+   "t": "View Sponsored information or leave ad feedback",
+   "d": "",
+   "r": "button",
+   "b": [
+    618,
+    2180,
+    821,
+    2232
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "Apple",
+   "r": "view",
+   "b": [
+    618,
+    2266,
+    1383,
+    2348
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 46,
+   "t": "Apple",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2266,
+    1383,
+    2348
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 47,
+   "t": "",
+   "d": "Sponsored Ad - iPhone Air 256 GB: Thinnest iPhone Ever, 16.63 cm (6.5″) Display with Promotion up to 120Hz, Powerful A19 Pro Chip, Center Stage Front Camera, All-Day Battery Life; Light Gold",
+   "r": "view",
+   "b": [
+    618,
+    2341,
+    1383,
+    2495
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 48,
+   "t": "",
+   "d": "Sponsored Ad - iPhone Air 256 GB: Thinnest iPhone Ever, 16.63 cm (6.5″) Display with Promotion up to 120Hz, Powerful A19 Pro Chip, Center Stage Front Camera, All-Day Battery Life; Light Gold",
+   "r": "view",
+   "b": [
+    618,
+    2341,
+    1383,
+    2495
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 49,
+   "t": "",
+   "d": "Sponsored Ad - iPhone Air 256 GB: Thinnest iPhone Ever, 16.63 cm (6.5″) Display with Promotion up to 120Hz, Powerful A19 Pro Chip, Center Stage Front Camera, All-Day Battery Life; Light Gold",
+   "r": "text",
+   "b": [
+    618,
+    2341,
+    1383,
+    2495
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 50,
+   "t": "",
+   "d": "4.5 out of 5 stars 363 ratings 300+ bought in past month",
+   "r": "view",
+   "b": [
+    618,
+    2506,
+    1383,
+    2630
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 51,
+   "t": "4.5 out of 5 stars",
+   "d": "",
+   "r": "text",
+   "b": [
+    690,
+    2513,
+    918,
+    2562
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 52,
+   "t": "(363)",
+   "d": "",
+   "r": "text",
+   "b": [
+    926,
+    2510,
+    1038,
+    2570
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 53,
+   "t": "300+ bought in past month",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2570,
+    1185,
+    2630
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 54,
+   "t": "",
+   "d": "₹1,01,900 M.R.P: ₹1,49,900 (32% off) Buy for ₹1,01,850 with HDFC Bank credit card",
+   "r": "view",
+   "b": [
+    618,
+    2641,
+    1383,
+    2863
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 55,
+   "t": "₹1,01,900",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2645,
+    1001,
+    2750
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 56,
+   "t": "(32% off)",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2787,
+    813,
+    2847
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 57,
+   "t": "Buy for ₹1,01,850",
+   "d": "",
+   "r": "text",
+   "b": [
+    641,
+    2847,
+    1012,
+    2863
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 58,
+   "t": "with HDFC Bank credit card",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2847,
+    1376,
+    2863
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 59,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    19,
+    350,
+    1421,
+    515
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "glow_subnav_ingress"
+  },
+  {
+   "i": 60,
+   "t": "Deliver to Person - Person 000000 ⌵",
+   "d": "",
+   "r": "text",
+   "b": [
+    132,
+    398,
+    1084,
+    466
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "glow_subnav_label"
+  },
+  {
+   "i": 61,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    0,
+    2698,
+    240,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 62,
+   "t": "",
+   "d": "Home Tab 1 of 6",
+   "r": "view",
+   "b": [
+    45,
+    2698,
+    195,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 63,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    57,
+    2821,
+    182,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 64,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    240,
+    2698,
+    480,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 65,
+   "t": "",
+   "d": "Your Amazon.com Tab 2 of 6",
+   "r": "view",
+   "b": [
+    285,
+    2698,
+    435,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 66,
+   "t": "You",
+   "d": "",
+   "r": "text",
+   "b": [
+    317,
+    2821,
+    403,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 67,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    480,
+    2698,
+    720,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 68,
+   "t": "",
+   "d": "Wallet Tab 3 of 6",
+   "r": "view",
+   "b": [
+    525,
+    2698,
+    675,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 69,
+   "t": "Wallet",
+   "d": "",
+   "r": "text",
+   "b": [
+    533,
+    2821,
+    667,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 70,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    720,
+    2698,
+    960,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 71,
+   "t": "",
+   "d": "Cart 0 item Tab 4 of 6",
+   "r": "view",
+   "b": [
+    765,
+    2698,
+    915,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 72,
+   "t": "0",
+   "d": "",
+   "r": "text",
+   "b": [
+    834,
+    2718,
+    865,
+    2788
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "cart_count"
+  },
+  {
+   "i": 73,
+   "t": "Cart",
+   "d": "",
+   "r": "text",
+   "b": [
+    790,
+    2821,
+    889,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 74,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    960,
+    2698,
+    1200,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 75,
+   "t": "",
+   "d": "Browse menu Tab 5 of 6",
+   "r": "view",
+   "b": [
+    1005,
+    2698,
+    1155,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 76,
+   "t": "Menu",
+   "d": "",
+   "r": "text",
+   "b": [
+    1021,
+    2821,
+    1139,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 77,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    1200,
+    2698,
+    1440,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 78,
+   "t": "",
+   "d": "Amazon Rufus Tab 6 of 6",
+   "r": "view",
+   "b": [
+    1245,
+    2698,
+    1395,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 79,
+   "t": "Rufus",
+   "d": "",
+   "r": "text",
+   "b": [
+    1256,
+    2821,
+    1383,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  }
+ ]
+}

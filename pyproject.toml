@@ -1,6 +1,6 @@
 [project]
 name = "otto-cli-agent"
-version = "0.2.0"
+version = "0.1.2"
 description = "Otto: a terminal AI agent built around measured results -- one agent loop, a rubric-first evaluator, tiered memory, multi-vendor routing, and six benchmark harnesses."
 readme = "docs/pypi.md"
 license = { file = "LICENSE" }
@@ -26,7 +26,13 @@ dependencies = [
     "langchain-openai>=1.6.0",
     "langfuse>=4.15.1",
     "langgraph>=1.2.11",
-    "numpy>=2.5.3",
+    # 1.26.2 because that is the newest numpy Android has: PyPI publishes no Android wheel for any
+    # version, and numpy's own Android support landed after 2.5.3 shipped (upstream f67f65a1,
+    # 2026-07-16), so 2.5.3 cannot be cross-built -- its meson runs test binaries to find the long
+    # double format, and bionic has no long double complex maths (2026-09-16, six CI attempts).
+    # Nothing here needs a newer numpy: this package uses ndarray, linalg, float32, asarray, where,
+    # stack, argsort, frombuffer and dot, all of them long-settled API.
+    "numpy>=1.26.2",
     # The document exports (agent/pipeline/research.py) run in a subprocess
     # on a desktop; none of the three has an Android wheel and none is needed
     # where there is no subprocess to run them in.

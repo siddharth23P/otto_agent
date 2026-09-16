@@ -1,0 +1,1522 @@
+{
+ "snapshot_id": "amazon_results_sorted",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "",
+   "d": "Back",
+   "r": "button",
+   "b": [
+    0,
+    125,
+    165,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_back_icon"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    165,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_box"
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "Search",
+   "r": "button",
+   "b": [
+    248,
+    200,
+    338,
+    290
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_action_bar_search_disabled"
+  },
+  {
+   "i": 4,
+   "t": "apple iphone",
+   "d": "",
+   "r": "text",
+   "b": [
+    368,
+    163,
+    945,
+    328
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_search_hint_view"
+  },
+  {
+   "i": 5,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    945,
+    163,
+    1110,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_camera_icon_cxi_inside"
+  },
+  {
+   "i": 6,
+   "t": "",
+   "d": "Voice Search, tap and say what you want to search for. Double tap anywhere to cancel when finished.",
+   "r": "view",
+   "b": [
+    1110,
+    163,
+    1275,
+    328
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_voice_icon_cxi_inside"
+  },
+  {
+   "i": 7,
+   "t": "",
+   "d": "scan it",
+   "r": "view",
+   "b": [
+    1275,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "chrome_scan_icon_cxi_outside"
+  },
+  {
+   "i": 8,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    515,
+    1440,
+    2863
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 9,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    515,
+    1440,
+    848
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "All Filters Icon",
+   "r": "button",
+   "b": [
+    135,
+    560,
+    228,
+    650
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": "s-all-filters-announce"
+  },
+  {
+   "i": 11,
+   "t": "",
+   "d": "Prime Filter, unselected",
+   "r": "button",
+   "b": [
+    30,
+    695,
+    345,
+    807
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "Up to ₹1,800",
+   "d": "",
+   "r": "text",
+   "b": [
+    926,
+    567,
+    1245,
+    642
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 13,
+   "t": "₹1,800 - ₹145,000",
+   "d": "",
+   "r": "text",
+   "b": [
+    1350,
+    567,
+    1440,
+    642
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "",
+   "d": "Popular",
+   "r": "button",
+   "b": [
+    378,
+    695,
+    690,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "multipt"
+  },
+  {
+   "i": 15,
+   "t": "",
+   "d": "Brands",
+   "r": "button",
+   "b": [
+    708,
+    695,
+    1001,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "91049095031"
+  },
+  {
+   "i": 16,
+   "t": "",
+   "d": "Storage Capacity",
+   "r": "button",
+   "b": [
+    1020,
+    695,
+    1440,
+    818
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "44349045031"
+  },
+  {
+   "i": 17,
+   "t": "Results",
+   "d": "",
+   "r": "text",
+   "b": [
+    0,
+    875,
+    228,
+    972
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 18,
+   "t": "",
+   "d": "ref=sr_1_1?dib=eyJ2IjoiMSJ9.IHQ-MXM1JUhWE26W0nrtwv7n3NsD4XndZxcObPEzd1yZB1oM60BDws9pGAuf2gh5SH8gffAck704uQe5bf8J1f7FRbLtk1txOQ5tn48Zorm2b43TeXLqQDbHPzt69UaiCQixlIjAmeRGFOcwHl9hVMdYxv4x0UiqO_t4nhL3H2X8R2CiRmssU1Fj1xxXuCAg0pXVUPbZI-XsjEXE7E3spg",
+   "r": "view",
+   "b": [
+    15,
+    893,
+    607,
+    1703
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "",
+   "d": "[Apple MFi Certified Lightning Male to Type-C Female Adapter for iPhone Headphone Mic Support Compatible with iPhone 14/13/ 12/11/ Mini/Pro/ProMax, SE/XS/XR/X/ 8/7/ 6/ Plus, i-Pad & Airp0ds",
+   "r": "view",
+   "b": [
+    618,
+    923,
+    1383,
+    1077
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 20,
+   "t": "",
+   "d": "[Apple MFi Certified Lightning Male to Type-C Female Adapter for iPhone Headphone Mic Support Compatible with iPhone 14/13/ 12/11/ Mini/Pro/ProMax, SE/XS/XR/X/ 8/7/ 6/ Plus, i-Pad & Airp0ds",
+   "r": "view",
+   "b": [
+    618,
+    923,
+    1383,
+    1077
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "",
+   "d": "[Apple MFi Certified Lightning Male to Type-C Female Adapter for iPhone Headphone Mic Support Compatible with iPhone 14/13/ 12/11/ Mini/Pro/ProMax, SE/XS/XR/X/ 8/7/ 6/ Plus, i-Pad & Airp0ds",
+   "r": "text",
+   "b": [
+    618,
+    923,
+    1383,
+    1077
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "",
+   "d": "Auxiliary, USB Type C",
+   "r": "view",
+   "b": [
+    618,
+    1073,
+    1383,
+    1160
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "Auxiliary, USB Type C",
+   "d": "",
+   "r": "text",
+   "b": [
+    637,
+    1100,
+    1005,
+    1152
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "",
+   "d": "₹99 M.R.P: ₹999 (90% off)",
+   "r": "view",
+   "b": [
+    618,
+    1171,
+    1383,
+    1317
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 25,
+   "t": "₹99",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1175,
+    768,
+    1276
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 26,
+   "t": "M.R.P: ₹999",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1257,
+    866,
+    1317
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 27,
+   "t": "(90% off)",
+   "d": "",
+   "r": "text",
+   "b": [
+    1016,
+    1205,
+    1211,
+    1265
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 28,
+   "t": "",
+   "d": "Bazaar FREE delivery Sun, 20 Sept",
+   "r": "view",
+   "b": [
+    618,
+    1328,
+    1383,
+    1497
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 29,
+   "t": "",
+   "d": "Bazaar",
+   "r": "image",
+   "b": [
+    618,
+    1328,
+    1068,
+    1422
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "FREE delivery",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    1433,
+    911,
+    1493
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "Sun, 20 Sept",
+   "d": "",
+   "r": "text",
+   "b": [
+    903,
+    1433,
+    1177,
+    1493
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 32,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    622,
+    1553,
+    1383,
+    1673
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 33,
+   "t": "",
+   "d": "More like this",
+   "r": "button",
+   "b": [
+    60,
+    2390,
+    183,
+    2513
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 34,
+   "t": "",
+   "d": "ref=sr_1_2?dib=eyJ2IjoiMSJ9.IHQ-MXM1JUhWE26W0nrtwv7n3NsD4XndZxcObPEzd1yZB1oM60BDws9pGAuf2gh5SH8gffAck704uQe5bf8J1f7FRbLtk1txOQ5tn48Zorm2b43TeXLqQDbHPzt69UaiCQixlIjAmeRGFOcwHl9hVMdYxv4x0UiqO_t4nhL3H2X8R2CiRmssU1Fj1xxXuCAg0pXVUPbZI-XsjEXE7E3spg",
+   "r": "view",
+   "b": [
+    15,
+    1737,
+    607,
+    2540
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "",
+   "d": "Mahadev Design 3D Printed Hard Back Case Cover for Apple iPhone 5 / 5S",
+   "r": "view",
+   "b": [
+    618,
+    1767,
+    1383,
+    1921
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "",
+   "d": "Mahadev Design 3D Printed Hard Back Case Cover for Apple iPhone 5 / 5S",
+   "r": "view",
+   "b": [
+    618,
+    1767,
+    1383,
+    1921
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 37,
+   "t": "",
+   "d": "Mahadev Design 3D Printed Hard Back Case Cover for Apple iPhone 5 / 5S",
+   "r": "text",
+   "b": [
+    618,
+    1767,
+    1383,
+    1921
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "",
+   "d": "5.0 out of 5 stars 1 ratings",
+   "r": "view",
+   "b": [
+    618,
+    1932,
+    1383,
+    1996
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 39,
+   "t": "5.0 out of 5 stars",
+   "d": "",
+   "r": "text",
+   "b": [
+    690,
+    1936,
+    918,
+    1985
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "(1)",
+   "d": "",
+   "r": "text",
+   "b": [
+    926,
+    1936,
+    986,
+    1992
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 41,
+   "t": "",
+   "d": "₹109 M.R.P: ₹999 (89% off)",
+   "r": "view",
+   "b": [
+    618,
+    2007,
+    1383,
+    2153
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 42,
+   "t": "₹109",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2011,
+    817,
+    2112
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 43,
+   "t": "M.R.P: ₹999",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2093,
+    866,
+    2153
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 44,
+   "t": "(89% off)",
+   "d": "",
+   "r": "text",
+   "b": [
+    1065,
+    2045,
+    1260,
+    2101
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 45,
+   "t": "",
+   "d": "Prime FREE delivery Sat, 19 Sept",
+   "r": "view",
+   "b": [
+    618,
+    2165,
+    1383,
+    2311
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 46,
+   "t": "",
+   "d": "Prime",
+   "r": "image",
+   "b": [
+    618,
+    2165,
+    821,
+    2225
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 47,
+   "t": "FREE delivery",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2251,
+    911,
+    2311
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 48,
+   "t": "Sat, 19 Sept",
+   "d": "",
+   "r": "text",
+   "b": [
+    903,
+    2251,
+    1162,
+    2311
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "WVCRIAFWG"
+  },
+  {
+   "i": 49,
+   "t": "",
+   "d": "Add to cart",
+   "r": "button",
+   "b": [
+    622,
+    2371,
+    1383,
+    2487
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 50,
+   "t": "",
+   "d": "ref=sr_1_3?dib=eyJ2IjoiMSJ9.IHQ-MXM1JUhWE26W0nrtwv7n3NsD4XndZxcObPEzd1yZB1oM60BDws9pGAuf2gh5SH8gffAck704uQe5bf8J1f7FRbLtk1txOQ5tn48Zorm2b43TeXLqQDbHPzt69UaiCQixlIjAmeRGFOcwHl9hVMdYxv4x0UiqO_t4nhL3H2X8R2CiRmssU1Fj1xxXuCAg0pXVUPbZI-XsjEXE7E3spg",
+   "r": "view",
+   "b": [
+    15,
+    2570,
+    607,
+    2863
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 51,
+   "t": "",
+   "d": "Basic Case for Apple iPhone 7 Logo Cut (Hard Multicolor)",
+   "r": "view",
+   "b": [
+    618,
+    2600,
+    1383,
+    2757
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 52,
+   "t": "",
+   "d": "Basic Case for Apple iPhone 7 Logo Cut (Hard Multicolor)",
+   "r": "view",
+   "b": [
+    618,
+    2600,
+    1383,
+    2757
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 53,
+   "t": "",
+   "d": "Basic Case for Apple iPhone 7 Logo Cut (Hard Multicolor)",
+   "r": "text",
+   "b": [
+    618,
+    2600,
+    1383,
+    2757
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 54,
+   "t": "",
+   "d": "5.0 out of 5 stars 1 ratings",
+   "r": "view",
+   "b": [
+    618,
+    2765,
+    1383,
+    2832
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 55,
+   "t": "5.0 out of 5 stars",
+   "d": "",
+   "r": "text",
+   "b": [
+    690,
+    2772,
+    918,
+    2821
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 56,
+   "t": "(1)",
+   "d": "",
+   "r": "text",
+   "b": [
+    926,
+    2768,
+    986,
+    2828
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 57,
+   "t": "",
+   "d": "₹109 ( ₹10,900 /100 g) M.R.P: ₹999 (89% off)",
+   "r": "view",
+   "b": [
+    618,
+    2840,
+    1383,
+    2863
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 58,
+   "t": "₹109",
+   "d": "",
+   "r": "text",
+   "b": [
+    618,
+    2843,
+    817,
+    2863
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 59,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    19,
+    350,
+    1421,
+    515
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "glow_subnav_ingress"
+  },
+  {
+   "i": 60,
+   "t": "Deliver to Person - Person 000000 ⌵",
+   "d": "",
+   "r": "text",
+   "b": [
+    132,
+    398,
+    1084,
+    466
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "glow_subnav_label"
+  },
+  {
+   "i": 61,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    0,
+    2698,
+    240,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 62,
+   "t": "",
+   "d": "Home Tab 1 of 6",
+   "r": "view",
+   "b": [
+    45,
+    2698,
+    195,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 63,
+   "t": "Home",
+   "d": "",
+   "r": "text",
+   "b": [
+    57,
+    2821,
+    182,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 64,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    240,
+    2698,
+    480,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 65,
+   "t": "",
+   "d": "Your Amazon.com Tab 2 of 6",
+   "r": "view",
+   "b": [
+    285,
+    2698,
+    435,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 66,
+   "t": "You",
+   "d": "",
+   "r": "text",
+   "b": [
+    317,
+    2821,
+    403,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 67,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    480,
+    2698,
+    720,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 68,
+   "t": "",
+   "d": "Wallet Tab 3 of 6",
+   "r": "view",
+   "b": [
+    525,
+    2698,
+    675,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 69,
+   "t": "Wallet",
+   "d": "",
+   "r": "text",
+   "b": [
+    533,
+    2821,
+    667,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 70,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    720,
+    2698,
+    960,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 71,
+   "t": "",
+   "d": "Cart 0 item Tab 4 of 6",
+   "r": "view",
+   "b": [
+    765,
+    2698,
+    915,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 72,
+   "t": "0",
+   "d": "",
+   "r": "text",
+   "b": [
+    834,
+    2718,
+    865,
+    2788
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "cart_count"
+  },
+  {
+   "i": 73,
+   "t": "Cart",
+   "d": "",
+   "r": "text",
+   "b": [
+    790,
+    2821,
+    889,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 74,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    960,
+    2698,
+    1200,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 75,
+   "t": "",
+   "d": "Browse menu Tab 5 of 6",
+   "r": "view",
+   "b": [
+    1005,
+    2698,
+    1155,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 76,
+   "t": "Menu",
+   "d": "",
+   "r": "text",
+   "b": [
+    1021,
+    2821,
+    1139,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  },
+  {
+   "i": 77,
+   "t": "",
+   "d": "",
+   "r": "tab",
+   "b": [
+    1200,
+    2698,
+    1440,
+    2908
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 78,
+   "t": "",
+   "d": "Amazon Rufus Tab 6 of 6",
+   "r": "view",
+   "b": [
+    1245,
+    2698,
+    1395,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 79,
+   "t": "Rufus",
+   "d": "",
+   "r": "text",
+   "b": [
+    1256,
+    2821,
+    1383,
+    2885
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "bottom_tab_label"
+  }
+ ]
+}

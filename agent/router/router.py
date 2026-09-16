@@ -1,5 +1,7 @@
+import contextvars
 import weakref
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
@@ -263,12 +265,32 @@ class Router:
         return tuple(p for p in self._configured if self._usable(p))
 
     def prewarm(self) -> dict[str, str]:
+        """Fetch every configured provider's catalogue, all at once.
+
+        They used to be fetched one after another, so the first turn of a
+        process waited for the sum of four vendors' model-list round trips
+        rather than the slowest one. Each is independent and cached after
+        (get_provider's lru_cache, each provider's own list cache). Same
+        result, same failures reported."""
+        names = self.usable()
         failures: dict[str, str] = {}
-        for name in self.usable():
+        if not names:
+            return failures
+
+        def fetch(name: str) -> str | None:
             try:
                 self.catalogue.models(name)
             except ProviderError as exc:
-                failures[name] = str(exc)
+                return str(exc)
+            return None
+
+        with ThreadPoolExecutor(max_workers=len(names), thread_name_prefix="otto-prewarm") as pool:
+            # One context copy per task: a Context cannot be entered by two
+            # threads at once.
+            futures = [pool.submit(contextvars.copy_context().run, fetch, name) for name in names]
+            for name, future in zip(names, futures):
+                if (problem := future.result()) is not None:
+                    failures[name] = problem
         return failures
     
     def _match(self, c: Candidate, only: str | None = None, *,
@@ -322,7 +344,9 @@ class Router:
     def _resolve(self, task: Task, *, only: str | None,
                  honour_cooldowns: bool) -> RoutingDecision:
         skips: list[Skip] = []
-        declared = TASK_ROUTES[task]
+        # A seat a host bound for this run (overrides.bind_seats -- the phone
+        # host's fast judge) leads the live chain; otherwise the live chain.
+        declared = route_overrides.bound_chain(task) or TASK_ROUTES[task]
         # Declared order, re-ordered by what this installation has actually
         # observed each seat's model achieve. A no-op until a (task, model)
         # pair has enough runs behind it to be trusted, which is most of the
@@ -330,7 +354,9 @@ class Router:
         # A pin the person set (agent/router/overrides.py) is never reordered
         # or explored away: "use this model" means this model, and an
         # evidence-based swap behind their back would make the pin a lie.
-        if declared and route_overrides.is_pin(task, declared[0]):
+        # A bound seat is the host's explicit choice and is held the same way.
+        if declared and (route_overrides.is_pin(task, declared[0])
+                         or route_overrides.is_bound(task, declared[0])):
             chain = list(declared)
         else:
             chain = seat_outcomes.reorder(task.value, declared)

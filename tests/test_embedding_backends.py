@@ -316,7 +316,7 @@ def test_an_explicit_setting_beats_the_default(monkeypatch):
 
 
 def test_a_missing_fastembed_is_an_embedding_unavailable_that_names_the_extra(monkeypatch):
-    """fastembed is an optional extra (0.2.0): on a phone it cannot be
+    """fastembed is an optional extra (0.1.2): on a phone it cannot be
     installed at all. Every caller already degrades on EmbeddingUnavailable
     (queue: None vectors; retrieval: recent, unranked), so the only thing left
     to get right is that the message says what to do."""

@@ -1,0 +1,807 @@
+{
+ "snapshot_id": "amazon_checkout_payment",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "settled": true,
+ "page": {
+  "seq": 0,
+  "activity": "",
+  "offscreen_ids": [
+   "pagelet-inlined-purchase-level-messages",
+   "checkout-pagelet-container",
+   "checkout-primary-continue-button-id",
+   "checkout-psp-sticky-action-bar",
+   "checkout-snappy-registry"
+  ]
+ },
+ "nodes": [
+  {
+   "i": 1,
+   "t": "CANCEL",
+   "d": "Cancel",
+   "r": "button",
+   "b": [
+    1110,
+    125,
+    1440,
+    350
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "top_bar_cancel_text_button"
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "",
+   "r": "web",
+   "b": [
+    0,
+    350,
+    1441,
+    2908
+   ],
+   "c": false,
+   "e": false,
+   "s": true,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    0,
+    353,
+    480,
+    545
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 4,
+   "t": "",
+   "d": "Address",
+   "r": "view",
+   "b": [
+    142,
+    470,
+    337,
+    545
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 5,
+   "t": "Address",
+   "d": "",
+   "r": "text",
+   "b": [
+    142,
+    473,
+    337,
+    541
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 6,
+   "t": "Payment",
+   "d": "",
+   "r": "view",
+   "b": [
+    480,
+    353,
+    960,
+    545
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 7,
+   "t": "Confirm order",
+   "d": "",
+   "r": "view",
+   "b": [
+    960,
+    353,
+    1441,
+    545
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 8,
+   "t": "Delivering to Person Person, Person",
+   "d": "",
+   "r": "text",
+   "b": [
+    240,
+    612,
+    1170,
+    751
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "address-context-deliver-to",
+   "g": true
+  },
+  {
+   "i": 9,
+   "t": "Person House , Near Person,, Person, Person, Person, BIHAR, 000000, India",
+   "d": "",
+   "r": "text",
+   "b": [
+    240,
+    762,
+    1170,
+    833
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "deliver-to-address-text"
+  },
+  {
+   "i": 10,
+   "t": "",
+   "d": "Change",
+   "r": "view",
+   "b": [
+    1207,
+    683,
+    1395,
+    762
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "change-delivery-address-link"
+  },
+  {
+   "i": 11,
+   "t": "Change",
+   "d": "",
+   "r": "text",
+   "b": [
+    1207,
+    691,
+    1395,
+    758
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 12,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    912,
+    1395,
+    1081
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "checkout-primary-continue-button-id"
+  },
+  {
+   "i": 13,
+   "t": "Submit",
+   "d": "",
+   "r": "button",
+   "b": [
+    48,
+    916,
+    1391,
+    1077
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 14,
+   "t": "Save up to ₹15 with offers.",
+   "d": "",
+   "r": "text",
+   "b": [
+    191,
+    1178,
+    926,
+    1253
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-231"
+  },
+  {
+   "i": 15,
+   "t": "See all offers",
+   "d": "",
+   "r": "text",
+   "b": [
+    945,
+    1178,
+    1301,
+    1253
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-237"
+  },
+  {
+   "i": 16,
+   "t": "RECOMMENDED",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    1336,
+    1395,
+    1415
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 17,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    1441,
+    1395,
+    2022
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-242"
+  },
+  {
+   "i": 18,
+   "t": "Best offer",
+   "d": "",
+   "r": "text",
+   "b": [
+    315,
+    1497,
+    1323,
+    1576
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 19,
+   "t": "Amazon Pay ICICI Bank Credit Card",
+   "d": "",
+   "r": "text",
+   "b": [
+    337,
+    1583,
+    1155,
+    1737
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-243"
+  },
+  {
+   "i": 20,
+   "t": "",
+   "d": "Visa",
+   "r": "image",
+   "b": [
+    330,
+    1745,
+    461,
+    1797
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 21,
+   "t": "••••",
+   "d": "",
+   "r": "text",
+   "b": [
+    465,
+    1733,
+    551,
+    1801
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 22,
+   "t": "0000",
+   "d": "",
+   "r": "text",
+   "b": [
+    547,
+    1733,
+    675,
+    1801
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 23,
+   "t": "|",
+   "d": "",
+   "r": "text",
+   "b": [
+    693,
+    1733,
+    712,
+    1801
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 24,
+   "t": "Person",
+   "d": "",
+   "r": "text",
+   "b": [
+    727,
+    1733,
+    967,
+    1801
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-244"
+  },
+  {
+   "i": 25,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1267,
+    1572,
+    1361,
+    1662
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": true,
+   "v": "pp-8nHSTX-245"
+  },
+  {
+   "i": 26,
+   "t": "Save ₹15.00 as cashback on full payment.",
+   "d": "",
+   "r": "text",
+   "b": [
+    337,
+    1820,
+    1095,
+    1962
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-250"
+  },
+  {
+   "i": 27,
+   "t": "Details",
+   "d": "",
+   "r": "text",
+   "b": [
+    558,
+    1895,
+    742,
+    1962
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-255"
+  },
+  {
+   "i": 28,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2018,
+    1395,
+    2378
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-266"
+  },
+  {
+   "i": 29,
+   "t": "Previously used",
+   "d": "",
+   "r": "text",
+   "b": [
+    311,
+    2067,
+    1327,
+    2146
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 30,
+   "t": "Amazon Pay UPI",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    2153,
+    783,
+    2228
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 31,
+   "t": "State Bank of India •••• 0000",
+   "d": "",
+   "r": "text",
+   "b": [
+    397,
+    2236,
+    1068,
+    2303
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 32,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    2142,
+    1365,
+    2232
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-268"
+  },
+  {
+   "i": 33,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    45,
+    2367,
+    1395,
+    2843
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-301"
+  },
+  {
+   "i": 34,
+   "t": "Featured",
+   "d": "",
+   "r": "text",
+   "b": [
+    311,
+    2420,
+    1327,
+    2502
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 35,
+   "t": "Amazon Pay Balance: ₹99.00",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    2510,
+    1117,
+    2585
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 36,
+   "t": "",
+   "d": "Details",
+   "r": "view",
+   "b": [
+    333,
+    2592,
+    495,
+    2663
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-303"
+  },
+  {
+   "i": 37,
+   "t": "Details",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    2592,
+    495,
+    2663
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 38,
+   "t": "",
+   "d": "",
+   "r": "button",
+   "b": [
+    1275,
+    2495,
+    1365,
+    2588
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": false,
+   "v": "pp-8nHSTX-305"
+  },
+  {
+   "i": 39,
+   "t": "Add ₹206.00 to proceed",
+   "d": "",
+   "r": "text",
+   "b": [
+    333,
+    2660,
+    915,
+    2783
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 40,
+   "t": "",
+   "d": "",
+   "r": "view",
+   "b": [
+    911,
+    2660,
+    1327,
+    2783
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-306"
+  },
+  {
+   "i": 41,
+   "t": "Add Now",
+   "d": "",
+   "r": "button",
+   "b": [
+    915,
+    2663,
+    1323,
+    2780
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "pp-8nHSTX-306-announce"
+  }
+ ]
+}

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "denied_packages": [
     "com.phonepe.app", "com.google.android.apps.nbu.paisa.user", "net.one97.paytm",
     "in.org.npci.upiapp", "com.dreamplug.androidapp", "com.mobikwik_new",
@@ -19,40 +19,101 @@
     "amazon pay", "paypal", "venmo", "cash app", "revolut", "wise", "coinbase", "binance",
     "zerodha", "kite", "upstox", "groww", "angel one", "samsung pay", "google wallet"
   ],
-  "package_words": [
-    "bank", "pay", "upi", "wallet", "finance", "fintech", "loan", "credit", "trading",
-    "invest", "insurance", "mutual", "broker", "crypto", "lend", "emi", "cashback"
-  ],
+  "package_words": {
+    "whole": ["upi", "emi", "lend", "loan", "loans", "nbfc"],
+    "affix": ["bank", "banking", "pay", "wallet", "finance", "fintech", "credit", "trading", "invest",
+              "insurance", "mutual", "broker", "crypto", "cashback"]
+  },
   "package_word_exceptions": ["payload", "paypal.shopping"],
-  "sensitive_patterns": [
-    "\\bupi\\s*pin\\b", "\\bm?pin\\b", "\\bpasscode\\b", "\\botp\\b",
-    "\\bone[- ]time\\s+pass(word|code)\\b", "\\bcvv\\b", "\\bcvc\\b",
-    "\\bcard\\s+number\\b", "\\bexpiry\\b", "\\bvalid\\s+thru\\b",
-    "\\bnet\\s*banking\\b", "\\bpassword\\b", "\\bpay\\s*(₹|rs\\.?|inr|\\$|€|£)\\s*[\\d,]+",
-    "\\bauthori[sz]e\\s+payment\\b", "\\benter\\s+(your\\s+)?(m?pin|passcode|cvv|otp)\\b"
+  "secure_activities": [
+    "^org\\.npci\\.upi\\.", "^com\\.android\\.vending\\.billing\\.", "^com\\.google\\.android\\.gms\\.wallet\\.",
+    "^com\\.razorpay\\.", "^com\\.payu\\.", "^com\\.phonepe\\.", "^com\\.cashfree\\.",
+    "(pinactivity|upipin|enterpin|getcredential)"
   ],
-  "pay_words": [
-    "pay now", "proceed to pay", "proceed to payment", "place order", "place your order",
-    "confirm order", "confirm and pay", "confirm payment", "complete payment", "make payment",
-    "pay with", "pay using", "swipe to pay", "slide to pay", "tap to pay", "buy now",
-    "pay ₹", "pay rs", "pay $", "subscribe now", "start free trial", "add money", "send money",
-    "transfer", "top up", "recharge now",
-    "pay", "buy", "purchase", "subscribe", "order now", "pay later"
+  "sensitive_field_patterns": [
+    "\\bupi\\s*pin\\b", "\\bm?pin\\b(?!\\s*-?\\s*code)", "\\bpasscode\\b", "\\botp\\b",
+    "\\bone[- ]time\\s+pass(word|code)\\b", "\\bverification\\s+code\\b", "\\bcvv\\b", "\\bcvc\\b",
+    "\\bsecurity\\s+code\\b", "\\bcard\\s+number\\b", "\\bexpiry\\b", "\\bexpiration\\b", "\\bmm\\s*/\\s*yy\\b",
+    "\\bvalid\\s+thru\\b", "\\bupi\\s+id\\b", "\\bvpa\\b", "\\bpassword\\b", "\\bnet\\s*banking\\b"
   ],
-  "forward_words": [
-    "continue", "proceed", "next", "confirm", "done", "review order", "go to checkout", "finish"
+  "sensitive_screen_patterns": [
+    "\\bupi\\s*pin\\b", "\\benter\\s+(your\\s+)?(m?pin|passcode|cvv|otp)\\b", "\\bone[- ]time\\s+pass(word|code)\\b",
+    "\\botp\\b", "\\bcvv\\b", "\\bcvc\\b", "\\bcard\\s+number\\b", "\\bpassword\\b", "\\bpasscode\\b",
+    "\\bauthori[sz]e\\s+payment\\b"
   ],
-  "checkout_signals": [
-    "\\b(grand|sub|order|cart|bill|amount)?\\s*total\\b", "\\border summary\\b", "\\bpayment\\b",
-    "\\bpay(ing|able)?\\b", "\\bcheckout\\b", "\\bbilling\\b", "\\bto pay\\b",
-    "\\bcard\\s+(number|details)\\b", "\\bupi\\b"
-  ],
+  "pay_controls": {
+    "exact": ["pay", "buy", "purchase", "order now", "buy it now"],
+    "phrases": ["pay now", "buy now", "place order", "place your order", "confirm order", "confirm purchase",
+                "complete purchase", "confirm and pay", "confirm payment", "complete payment", "make payment",
+                "proceed to pay", "proceed to payment", "continue to pay", "continue to payment", "pay securely",
+                "swipe to pay", "slide to pay", "tap to pay", "use this payment method", "subscribe now",
+                "start free trial", "add money", "send money", "recharge now", "pay ₹", "pay rs", "pay $"],
+    "ids": ["buy now", "place order", "place your order", "pay now", "submit order", "proceed to pay",
+            "confirm order", "slide to pay"]
+  },
+  "entry_controls": {
+    "exact": ["checkout", "check out"],
+    "phrases": ["proceed to checkout", "proceed to buy", "go to checkout", "continue to checkout",
+                "secure checkout"],
+    "ids": ["ptc", "proceed to checkout", "go to checkout", "checkout button"]
+  },
+  "forward_controls": {
+    "exact": ["continue", "next", "proceed", "confirm", "done", "submit", "save", "review order",
+              "deliver here", "ok"],
+    "prefixes": ["continue", "proceed", "deliver to this", "use this address", "save and", "save &"],
+    "ids": ["continue", "next", "proceed", "submit"]
+  },
   "commit_words": [
-    "send", "delete", "confirm", "submit", "remove", "unsubscribe", "sign out", "log out",
-    "uninstall", "factory reset", "erase", "block", "report", "post", "publish", "share",
-    "accept", "agree", "allow", "turn off", "disable", "cancel order", "return item",
-    "checkout", "check out"
+    "send", "delete", "confirm", "submit", "remove", "unsubscribe", "subscribe", "sign out", "log out",
+    "uninstall", "factory reset", "erase", "block", "report", "post", "publish", "share", "accept",
+    "agree", "allow", "turn off", "disable", "cancel order", "return item"
   ],
+  "commit_max_words": 4,
+  "control_max_words": 6,
+  "page": {
+    "payment_min": 5,
+    "checkout_min": 5,
+    "cart_min": 5,
+    "weights": {
+      "final_pay_control": 5, "bare_pay_control": 3, "payment_method_list": 4, "masked_card": 2,
+      "payment_title": 3, "total_with_amount": 2, "primary_after_total": 1, "listing": -3, "product_page": -2,
+      "checkout_title": 3, "address_choice": 3, "checkout_total": 1, "checkout_listing": -3,
+      "entry_control": 3, "cart_total": 2, "cart_structure": 2, "cart_title": 2, "no_clickable_amounts": 1,
+      "cart_listing": -3
+    },
+    "final_pay_phrases": ["pay now", "place order", "place your order", "confirm order", "confirm and pay",
+                          "confirm payment", "complete payment", "make payment", "proceed to pay",
+                          "proceed to payment", "continue to pay", "continue to payment", "pay securely",
+                          "use this payment method", "swipe to pay", "slide to pay", "pay ₹", "pay rs", "pay $"],
+    "amount": "(₹|\\brs\\.?|\\binr\\b|\\$|€|£)\\s?\\d[\\d,]*(\\.\\d+)?",
+    "total": "\\b(grand |sub|order |cart |bill |item |items )?total\\b|\\bamount (payable|to pay|due)\\b|\\bto pay\\b|\\byou pay\\b",
+    "payment_titles": ["payment", "payments", "payment method", "payment methods", "select a payment method",
+                       "choose a payment method", "payment options", "select payment", "choose payment",
+                       "review your order", "review order", "order summary", "confirm order", "place your order"],
+    "payment_methods": ["\\bupi\\b", "\\bcredit\\b", "\\bdebit\\b", "\\bcard\\b", "\\bnet\\s*banking\\b",
+                        "\\b(cash|pay) on delivery\\b", "\\bcod\\b", "\\bemi\\b", "\\bwallet\\b", "\\bpay later\\b",
+                        "\\bgift card\\b", "\\bbalance\\b", "\\brupay\\b", "\\bvisa\\b", "\\bmastercard\\b",
+                        "\\bamerican express\\b"],
+    "masked_card": "(^|\\s)[•*x]{4}\\s*(\\d{4})?$|[•*]{2,}\\s*\\d{4}\\b",
+    "checkout_titles": ["checkout", "select a delivery address", "choose a delivery address", "delivery address",
+                        "shipping address", "select address", "select an address", "add a new address",
+                        "delivering to", "shipping"],
+    "address_choices": ["deliver to this address", "use this address", "deliver here", "add a new address",
+                        "add new address", "change address", "select this address"],
+    "address_ids": ["change delivery address", "delivery address", "shipping address", "address select"],
+    "cart_titles": ["cart", "shopping cart", "your cart", "my cart", "basket", "your basket", "shopping bag",
+                    "bag"],
+    "cart_structure": ["^(delete|remove|save for later|move to wishlist)\\b", "\\b(increase|decrease) quantity\\b",
+                       "^qty\\b"],
+    "cart_ids": ["^sc-", "activecartviewform", "^cart-item"],
+    "product_ids": ["addtocart", "buynow", "add-to-cart-button", "buy-now-button"],
+    "add_to_cart": "^(add to (cart|basket|bag)|add)\\b",
+    "top_region": 0.25,
+    "wide_control": 0.6,
+    "title_max_words": 5,
+    "row_band": 120,
+    "row_container_max": 700
+  },
   "settings_pages": [
     "display", "font", "wifi", "bluetooth", "apps", "sound", "battery", "notifications",
     "accessibility", "location", "storage", "date", "language", "security", "app_details"

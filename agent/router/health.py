@@ -58,6 +58,15 @@ BREAKER_THRESHOLD = 3
 #: to cost nothing.
 MAX_COOLDOWN_S = 300.0
 
+#: How long a vendor whose account is out of credit or quota is passed over. Not doubled or capped
+#: like a rate limit: topping up takes a person, and the half-open probe after it finds out.
+EXHAUSTED_COOLDOWN_S = 3600.0
+
+#: What a 429 says when it is the account, not the minute: Gemini's "prepayment credits are depleted",
+#: OpenAI's insufficient_quota, a billing page.
+_EXHAUSTED_MARKERS = ("credits are depleted", "insufficient_quota", "exceeded your current quota",
+                      "billing", "credit balance is too low", "out of credits")
+
 
 @dataclass
 class _Cooling:
@@ -107,6 +116,19 @@ class Health:
         record.until = _now() + min(wait, MAX_COOLDOWN_S)
         record.why = f"rate limited, cooling {min(wait, MAX_COOLDOWN_S):.0f}s"
         logger.info("%s:%s %s", provider, model_id, record.why)
+
+    def note_exhausted(self, provider: str, detail: str = "") -> None:
+        """The account behind this vendor is out of credit or quota: every model of it will refuse
+        until the person tops up, which is not a matter of seconds. Cooled for [EXHAUSTED_COOLDOWN_S]
+        so a seat bound to it (the phone's judge, 2026-09-16: Gemini prepayment credits depleted) falls
+        back to its usual chain instead of being refused again every twenty seconds."""
+        if not provider:
+            return
+        record = self._providers.setdefault(provider, _Cooling())
+        record.strikes += 1
+        record.until = _now() + EXHAUSTED_COOLDOWN_S
+        record.why = f"out of credit or quota, cooling {EXHAUSTED_COOLDOWN_S:.0f}s"
+        logger.warning("provider %s: %s (%s)", provider, record.why, detail[:160])
 
     def note_transport_failure(self, provider: str, detail: str = "") -> None:
         """A five-hundred, a timeout, a refused connection. Counts toward the
@@ -192,6 +214,11 @@ def note_failure(exc: Exception, *, provider: str, model_id: str) -> None:
     importing four vendor SDKs to ask them politely.
     """
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    # Not only a 429: a LangChain wrapper (GoogleRateLimitError) can carry the vendor's words and no
+    # status at all.
+    if status in (429, None) and _looks_exhausted(exc):
+        HEALTH.note_exhausted(provider, f"{type(exc).__name__}: {exc}")
+        return
     if status == 429:
         HEALTH.note_rate_limit(provider, model_id, retry_after=_retry_after(exc))
         return
@@ -200,6 +227,11 @@ def note_failure(exc: Exception, *, provider: str, model_id: str) -> None:
         return
     if status is None and _looks_like_transport(exc):
         HEALTH.note_transport_failure(provider, f"{type(exc).__name__}: {exc}")
+
+
+def _looks_exhausted(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _EXHAUSTED_MARKERS)
 
 
 _TRANSPORT_MARKERS = ("timeout", "connection", "unavailable", "apierror",

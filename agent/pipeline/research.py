@@ -68,6 +68,7 @@ from langgraph.types import Command
 
 from agent.pipeline import nodes as pn
 from agent.pipeline.budget import Budget, current_budget
+from agent.pipeline.profile import disabled_tools
 from agent.pipeline.progress import report as report_progress
 from agent.pipeline.state import AgentState
 from agent.pipeline.tools import execute_python, reachable_tools, write_file
@@ -785,7 +786,14 @@ def _wanted_format(task_text: str, outline: Outline) -> str | None:
 
 def _convert(dir_rel: str, fmt: str) -> tuple[bool, str]:
     """document.md -> document.<fmt> in the same directory, by a script on
-    the workspace's own interpreter. (ok, detail)."""
+    the workspace's own interpreter. (ok, detail).
+
+    Not where the host has switched code execution off (agent/pipeline/
+    profile.py): Otto embedded in the phone app has no interpreter to hand
+    the script to, and a conversion that spawned one anyway would be the one
+    subprocess that host asked never to see. The Markdown stands either way."""
+    if "execute_python" in disabled_tools():
+        return False, "code execution is off in this host"
     try:
         source = resolve_in_workspace(f"{dir_rel}/document.md")
         target = resolve_in_workspace(f"{dir_rel}/document.{fmt}")

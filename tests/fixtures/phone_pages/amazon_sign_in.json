@@ -1,0 +1,99 @@
+{
+ "snapshot_id": "amazon_sign_in",
+ "app": {
+  "package": "in.amazon.mShop.android.shopping",
+  "label": "Amazon"
+ },
+ "screen": {
+  "w": 1440,
+  "h": 3088
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Sign in",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    400,
+    1395,
+    480
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": "",
+   "g": true
+  },
+  {
+   "i": 2,
+   "t": "Password",
+   "d": "",
+   "r": "text",
+   "b": [
+    45,
+    560,
+    1395,
+    620
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 3,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    45,
+    630,
+    1395,
+    740
+   ],
+   "c": true,
+   "e": true,
+   "s": false,
+   "p": true,
+   "f": true,
+   "k": null,
+   "v": "",
+   "n": "pw"
+  },
+  {
+   "i": 4,
+   "t": "Sign in",
+   "d": "",
+   "r": "button",
+   "b": [
+    45,
+    800,
+    1395,
+    960
+   ],
+   "c": true,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  }
+ ],
+ "page": {
+  "seq": 11,
+  "activity": "",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

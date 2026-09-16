@@ -1,0 +1,61 @@
+{
+ "snapshot_id": "bank_pin_numpw",
+ "app": {
+  "package": "com.example.rewards",
+  "label": "Rewards"
+ },
+ "screen": {
+  "w": 1080,
+  "h": 2400
+ },
+ "keyboard": false,
+ "secure": false,
+ "nodes": [
+  {
+   "i": 1,
+   "t": "Confirm",
+   "d": "",
+   "r": "text",
+   "b": [
+    60,
+    300,
+    700,
+    360
+   ],
+   "c": false,
+   "e": false,
+   "s": false,
+   "p": false,
+   "f": false,
+   "k": null,
+   "v": ""
+  },
+  {
+   "i": 2,
+   "t": "",
+   "d": "",
+   "r": "edit-field",
+   "b": [
+    60,
+    400,
+    1020,
+    500
+   ],
+   "c": false,
+   "e": true,
+   "s": false,
+   "p": false,
+   "f": true,
+   "k": null,
+   "v": "",
+   "n": "numpw",
+   "m": 4
+  }
+ ],
+ "page": {
+  "seq": 1,
+  "activity": "com.example.rewards.MainActivity",
+  "offscreen_ids": []
+ },
+ "settled": true
+}

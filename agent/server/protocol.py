@@ -4,21 +4,65 @@ One JSON object per WebSocket text frame, every object a `type`. Versioned by
 `PROTOCOL_VERSION`; the server accepts any client from `MIN_PROTOCOL` up, so
 an app pinned to an older otto keeps working across one bump.
 
+Protocol 2 (2026-09-15) adds, without changing a protocol-1 exchange:
+  - `hello_ok.features`, the names of what this server does beyond protocol 1
+    (`FEATURES`), sent to every client, so an app gates each screen on a name
+    rather than on a version number.
+  - an optional request `id` (a string of at most 64 characters, or an
+    integer) on any client message but `hello` and `device_result`, echoed as
+    `id` on the `*_result`, `pong` or `error` it causes, and on the `started`
+    event frame of a turn. A message without one is answered byte for byte as
+    in protocol 1. Because a protocol-1 `sessions_result{op: transcript}`
+    already used `id` for the session, a transcript asked for WITH a request
+    id carries the session's id as `session_id` instead.
+
 client -> server
     hello           {protocol_version, token, device?, capabilities?: ["phone"]}
-    turn            {session_id?, text}              start a turn (one at a time per session)
+    turn            {session_id?, text, phone?}      start a turn (one at a time per session);
+                                                     phone: auto (default) | on | off
     answer          {session_id, thread_id, text}    answer an `ask`
     cancel          {session_id}
     device_result   {id, ok, data?, error?}          the reply to a `device_call`
     sessions        {op: list|open|delete|transcript, ref?, session_id?, limit?}
+                    {op: close|rename|export|usage, session_id, title?}   protocol 2
+                    {op: import, data}                                   protocol 2
+    setup           {op: status | set_key | probe, name?, value?}        protocol 2
+    routing         {op: list | options | pin | clear, task?, spec?}     protocol 2
+    lessons         {op: list | delete | clear, kind, lesson_id?}        protocol 2
+                    kind: lesson | phone_lesson | app_note:<package>; lesson_id: 64 hex
+    notes           {op: list | get | delete, package?, lesson_id?}      protocol 2
+    files           {op?: get, session_id, name}                        protocol 2
+                    name: document.<md|docx|pdf|xlsx> (newest) or otto_research/<slug>/document.<fmt>
+    doctor          {}                                                   protocol 2
+    models          {}                                                   protocol 2
     ping            {}
 
 server -> client
-    hello_ok        {otto_version, api_version, protocol_version, min_protocol}
-    event           {session_id, event}              an agent/embed.py event dict
+    hello_ok        {otto_version, api_version, protocol_version, min_protocol, features}
+    event           {session_id, event}              an agent/embed.py event dict, after
+                                                     {type: started, session_id, budget_max}
     device_call     {id, method, args, timeout}      run a PhoneBackend method on the phone
     sessions_result {op, ...}
-    error           {code, message}
+                    close  {session_id, closed}      rename {session_id, title}
+                    export {session_id, filename, data}   import {session_id, title, turns}
+                    usage  {session_id, usage, turn_tokens, turn, title, turns}
+    setup_result    status  {ready, keys: {VAR: masked}, vendors: [...], version, setup_write}
+                    set_key {name, masked, ready}     probe {name, ok, status, detail, model_count, models}
+    routing_result  list    {routes: [{task, pin, default, provider_only: {provider, reason}?, phone_seat}]}
+                    options {task, pin, options: [{label, spec}]}   ("" spec is no pin)
+                    pin / clear {task, pin, problems}
+    lessons_result  list   {kind, lessons: [{lesson_id, cue, action, outcome, text}]}
+                    delete {kind, lesson_id, deleted}    clear {kind, removed}
+    notes_result    list   {notes: [{package, seeded, learned}]}
+                    get    {package, seeded, learned: [{lesson_id, cue, action, outcome, text}], shown: [...]}
+                    delete {package, lesson_id, deleted}
+    files_result    {op: get, session_id, name, path, format, mime, size, data (base64, <= 8 MB)}
+    doctor_result   {providers: [{provider, status, models, detail}], ready, required, also_configured}
+    models_result   {models: [{spec, provider, id, display_name, capabilities, context_window,
+                               max_output_tokens}]}
+    error           {code, message}                  codes include invalid_session, busy,
+                                                     no_session, invalid, no_phone, forbidden,
+                                                     invalid_pin, not_found, too_large
     pong            {}
 """
 from __future__ import annotations
@@ -26,8 +70,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MIN_PROTOCOL = 1
+
+#: `hello_ok.features`. A client checks for a name before offering what it
+#: unlocks; a server older than a name simply does not send it.
+FEATURES: tuple[str, ...] = (
+    "ids", "turn.phone",
+    "sessions.close", "sessions.rename", "sessions.export", "sessions.import", "sessions.usage",
+    "setup", "doctor", "models", "routing", "lessons", "notes", "files",
+)
+
+#: The longest string request id echoed back.
+MAX_REQUEST_ID_CHARS = 64
 
 #: How long a device call may take before the tool reports a timeout. A
 #: Play Store install waits on the network; everything else is sub-second.
@@ -38,8 +93,31 @@ INSTALL_TIMEOUT_S = 180.0
 MAX_FRAME_BYTES = 12 * 1024 * 1024
 
 
-def encode(kind: str, **fields: Any) -> str:
+def encode(kind: str, /, **fields: Any) -> str:
+    # Positional-only: a frame may carry a field called `kind` (lessons).
     return json.dumps({"type": kind, **fields}, ensure_ascii=False)
+
+
+def reply(kind: str, request_id: str | int | None = None, /, **fields: Any) -> str:
+    """`encode`, with the request's id when it had one -- and exactly
+    `encode` when it did not, which is what keeps protocol 1 unchanged."""
+    if request_id is None:
+        return encode(kind, **fields)
+    return encode(kind, id=request_id, **fields)
+
+
+def request_id(message: dict[str, Any]) -> str | int | None:
+    """The message's request id, None when it has none, ValueError when it
+    has one that is not a short string or an integer (a bool is neither,
+    whatever Python thinks)."""
+    rid = message.get("id")
+    if rid is None:
+        return None
+    if isinstance(rid, int) and not isinstance(rid, bool) and abs(rid) < 2 ** 53:
+        return rid
+    if isinstance(rid, str) and 0 < len(rid) <= MAX_REQUEST_ID_CHARS:
+        return rid
+    raise ValueError(f"a request id is a string of 1-{MAX_REQUEST_ID_CHARS} characters or an integer")
 
 
 def decode(raw: str | bytes) -> dict[str, Any]:

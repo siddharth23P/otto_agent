@@ -80,8 +80,12 @@ going badly.
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import re
+import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
 import json
@@ -99,7 +103,8 @@ from agent.memory.hashing import content_hash
 from agent.memory.retrieval import EVICTED_KIND
 from agent.memory.session import current_store
 from agent.memory.lessons import (
-    Lesson, learning_enabled, parse_distilled, recall_lessons, record_lessons,
+    KIND as LESSON_KIND, PHONE_KIND, Lesson, bind_kind, learning_enabled, parse_app_notes, parse_distilled, recall_lessons,
+    record_lessons,
 )
 from agent.pipeline.evidence import Ledger, render_note as render_unproven
 from agent.pipeline.state import AgentState
@@ -111,7 +116,7 @@ from agent.pipeline.tools import (
     MUTATING, READ_ONLY, THIRD_PARTY, TOOL_DISPATCH, TOOL_TIERS, ToolResult,
 )
 from agent.pipeline.progress import (
-    check_cancelled, report as report_progress, watching as anyone_watching,
+    bind_progress, check_cancelled, report as report_progress, watching as anyone_watching,
 )
 from agent.pipeline.toolkit import current_extra_tools, dispatch_table, render_note
 from agent.pipeline.python_session import fresh_python_session, python_session_note
@@ -723,6 +728,43 @@ CONTRAST_NOTE = (
     "kind nobody can act on."
 )
 
+#: Sent with a run that drove a phone. The distiller sees a trajectory and
+#: nothing about where it ran, and a phone run's friction ("the results would
+#: not read") came back as "switch browser, clear cache, use a direct URL" --
+#: steps the next phone run has no tool for.
+PHONE_DISTIL_NOTE = (
+    "THIS RUN WAS ON A PHONE: a person's Android phone, driven through phone_* "
+    "tools that read a screen of numbered elements and tap, type, swipe and "
+    "scroll on it. Write lessons for the next phone run, in those terms -- a "
+    "screen, a list, a button, a sort or filter control, a sponsored result, "
+    "what phone_screen showed -- and never tell it to use a browser, a cache, "
+    "a URL, a shell or a file: a phone run has none of them."
+)
+
+#: Sent after PHONE_DISTIL_NOTE when the run read an app's screens, naming
+#: those apps. A note is shown to every later run in that app
+#: (agent/phone/notes.py), so it is asked for as a fact about the app, never
+#: about the person or what they bought.
+APP_NOTE_NOTE = (
+    "THE APPS WHOSE SCREENS THIS RUN READ: {packages}. Besides the lessons, you may add up to two notes on "
+    "how one of THESE apps' screens work, as {{\"app\": \"<package>\", \"cue\": \"<which screen>\", "
+    "\"action\": \"<what works there>\", \"outcome\": \"worked\"|\"failed\"}}. Only facts a person could "
+    "check in that app -- never a product, a price, or anything about this person."
+)
+
+
+def _phone_run() -> bool:
+    """Whether the host bound agent/phone's tools for this run. One test, so
+    the lesson bank, the prompt and the reminders cannot disagree about it."""
+    return "phone_screen" in current_extra_tools()
+
+
+def _lesson_kind() -> str:
+    """The lessons this run reads and writes: a phone's own, when the host
+    bound agent/phone's tools, else the workspace bank. See
+    agent/memory/lessons.py PHONE_KIND for why the two are kept apart."""
+    return PHONE_KIND if _phone_run() else LESSON_KIND
+
 
 #: The whole agent, in one prompt.
 #:
@@ -790,6 +832,67 @@ def compose_agent_prompt(live=None, *, may_delegate: bool = True) -> str:
 #: character cap is measured against, and what a caller gets if it does not
 #: say which tools are live.
 AGENT_PROMPT = compose_agent_prompt()
+
+
+#: The standing tools a phone run is offered by name. Everything else a
+#: phone run could still reach (complete_code, predict_edit) is a code tool
+#: with nothing to act on; the dispatch table keeps serving it if named.
+_PHONE_STANDING_TOOLS = ("web_search", "recall_memory")
+
+
+def compose_phone_prompt(live_tool_names) -> str:
+    """The agent prompt for a run on a person's phone.
+
+    compose_agent_prompt is an engineer's prompt: four diagnostic habits, the
+    minimality ladder, modes, `exercise` before FINAL. On a phone none of it
+    applies -- there is no shell, nothing is written, the mode never changes
+    -- and all of it rides on every loop call, which on a phone is one call
+    per tap. Measured with the phone tools and PHONE_DISABLED_STANDING_TOOLS
+    bound: compose_agent_prompt(reachable_tools()) is 3107 characters, this is
+    851 (906 since it says phone_do shares the one call), and the phone guidance in render_note (the next system message) is
+    unchanged and still says how to use each tool. With the MODE message it
+    no longer needs, a scripted ten-action search's largest loop call went
+    from 75518 characters to 72808 (tests/test_phone_call_budget.py).
+
+    The same ACTION/CODE/FINAL protocol, in the same words, so
+    _parse_worker_reply needs nothing new. Composed once per run from what is
+    bound, like compose_agent_prompt, and for the same reason: the seed and
+    the resume must produce the same bytes.
+    """
+    names = list(dict.fromkeys(live_tool_names))
+    phone = [n for n in names if n.startswith("phone_")]
+    standing = [n for n in _PHONE_STANDING_TOOLS if n in names]
+    menu = "|".join((*phone, *standing, *(("ask_user",) if "ask_user" in names else ())))
+    hints = [_BODY_HINTS[n] for n in standing if n in _BODY_HINTS]
+    hints.append("phone_*: one JSON object on one line, as listed below.")
+    if "ask_user" in names:
+        hints.append(_ASK_HINT)
+    return (
+        "You are working on a person's Android phone for them through the "
+        "phone_* tools: read the screen, do what was asked, and check the "
+        "screen shows it done.\n\n"
+        "reply with exactly\nACTION: <" + menu + ">\nCODE:\n<" + " ".join(hints)
+        + ">\nand you will be shown the result, then you can continue. "
+        "One tool call per reply."
+        + (" phone_do runs several steps in that one call." if "phone_do" in names else "")
+        + "\n\n"
+        "Before FINAL, the last screen you read must show the result. When it "
+        "does, reply with exactly\nFINAL:\n<the answer itself -- what is on "
+        "the screen now, or what the person has to do next. No recap of your "
+        "steps.>"
+    )
+
+
+def _system_prompt(*, may_delegate: bool = True) -> str:
+    """The first system message of an agent conversation, for what is bound.
+
+    Every place that builds one goes through here -- the seed, the resume and
+    a delegated child -- because the resume has to rebuild the seed's bytes
+    exactly, and two call sites choosing between two prompts is how they
+    drift apart. A coding run gets compose_agent_prompt exactly as before."""
+    if _phone_run():
+        return compose_phone_prompt([*current_extra_tools(), *reachable_tools(), "ask_user"])
+    return compose_agent_prompt(reachable_tools(), may_delegate=may_delegate)
 
 
 #: What a result is wrapped in when the tool that produced it went outside.
@@ -1551,7 +1654,9 @@ def _reminders(iteration: int, checklist: list[dict] | None) -> str:
     """
     if iteration == 0 or iteration % REMINDER_EVERY:
         return ""
-    parts = [TOOL_BUILDING_NOTE]
+    # Not on a phone: there is no script to write there, and the note asked
+    # a phone run to consider writing one every REMINDER_EVERY taps.
+    parts = [] if _phone_run() else [TOOL_BUILDING_NOTE]
     # `seen` is not open. Something has already been written for it, and
     # re-listing it is how a reminder turns into wallpaper.
     open_items = [i for i in (checklist or []) if i.get("status") == "pending"]
@@ -1625,13 +1730,17 @@ def _mode_message(name: str) -> HumanMessage:
     )
 
 
-def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
+def _seed_transcript(state: AgentState, task_text: str, checklist=None, *,
+                     lessons: str | None = None) -> list:
     """The conversation a run starts from. Built once per run, never rebuilt.
 
     The two system messages are adjacent at indices 0 and 1 on purpose: a run of
     system messages at the very start is legal on every vendor here, and the
     moment one appears later it is not (see _mode_message). Everything after
     them is Human/AI for the life of the run.
+
+    `lessons` is `_lessons_block(task_text)` when the caller already has it
+    (agent() looks it up beside the rubric call); None looks it up here.
     """
     history = _conversation_so_far(state)
     context = state.get("context") or ""
@@ -1639,7 +1748,7 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
         f"CONVERSATION SO FAR:\n{history}" if history else "",
         f"CONTEXT GATHERED SO FAR:\n{context}" if context else "",
         f"TASK:\n{task_text}",
-        _lessons_block(task_text),
+        _lessons_block(task_text) if lessons is None else lessons,
         _render_checklist(checklist),
     ) if part)
 
@@ -1651,13 +1760,34 @@ def _seed_transcript(state: AgentState, task_text: str, checklist=None) -> list:
     # never reaches this function. `_rubric` says so on the call that was
     # happening anyway, and the agent node answers it on the chat seat
     # without seeding a transcript at all -- see CHAT_PROMPT.
-    messages: list = [SystemMessage(compose_agent_prompt(reachable_tools()))]
+    messages: list = [SystemMessage(_system_prompt())]
     for extra in (workspace_note(), python_session_note(), render_note()):
         if extra:
             messages.append(SystemMessage(extra))
     messages.append(HumanMessage(body))
-    messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
+    # A phone run never changes mode and its prompt does not offer to, so the
+    # mode's guidance (written for engineering work) is not said to it. The
+    # mode itself is unchanged -- it still picks the model the loop runs on.
+    if not _phone_run():
+        messages.append(_mode_message(state.get("mode") or DEFAULT_MODE))
     return messages
+
+
+def _look_up_lessons_early(task_text: str) -> Future[str]:
+    """`_lessons_block(task_text)`, started on its own thread now.
+
+    A fresh run's first thing is the rubric call, and the seed that follows it
+    needs the lesson lookup -- an embedding of the task and a search of the
+    bank, which with a hosted embedder is a network round trip of its own.
+    Neither needs the other, so they need not wait for each other. In a copy
+    of this context, so the bank and the phone-or-workspace kind are the
+    run's. A turn that ends on the chat fast path simply never reads it.
+    """
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="otto-lessons")
+    try:
+        return pool.submit(contextvars.copy_context().run, _lessons_block, task_text)
+    finally:
+        pool.shutdown(wait=False)
 
 
 def _lessons_block(task_text: str) -> str:
@@ -1670,7 +1800,8 @@ def _lessons_block(task_text: str) -> str:
     is relevant -- agent/memory/lessons.py returns an empty list rather than
     the closest match, because an off-topic lesson is worse than silence.
     """
-    lessons = recall_lessons(str(task_text or ""))
+    with bind_kind(_lesson_kind()):
+        lessons = recall_lessons(str(task_text or ""))
     if not lessons:
         return ""
     return (
@@ -2054,6 +2185,66 @@ _NEVER_COMPACT = (
 )
 
 
+#: How many of a phone run's screens stay whole: the one in front of the
+#: model, and the one before it (what the last action changed).
+SCREENS_KEPT = 2
+#: Fold only once this many more have piled up, not on every action. Each
+#: fold rewrites messages in the middle of the transcript, which is the
+#: shared prefix a vendor's prompt cache keys on; folding four at a time
+#: breaks that prefix once per four actions instead of once per action.
+SCREEN_FOLD_EVERY = 4
+
+
+def _folders() -> dict[str, Callable[[str], str | None]]:
+    """The fold of every bound tool that has one -- a phone run's screen
+    tools, and nothing on any other run."""
+    return {name: tool.fold for name, tool in current_extra_tools().items() if tool.fold is not None}
+
+
+def _result_folder(messages: list, i: int, folders) -> Callable[[str], str | None] | None:
+    """The fold of the tool whose call produced the result at `i`, or None.
+
+    Asked of the call rather than of the text: a web page that happens to
+    print something shaped like a screen header is not a screen, and must not
+    have its result rewritten by the phone's fold."""
+    if not folders or i == 0 or not isinstance(messages[i - 1], AIMessage):
+        return None
+    kind, tool, _ = _parse_worker_reply(_content_text(messages[i - 1].content), allowed=dispatch_table())
+    return folders.get(tool) if kind == "action" else None
+
+
+def _fold_old_results(messages: list) -> int:
+    """Fold all but the last SCREENS_KEPT unfolded phone screens, in place,
+    once SCREENS_KEPT + SCREEN_FOLD_EVERY of them are unfolded. Returns how
+    many it folded. No model call.
+
+    Measured on tests/test_phone_call_budget.py's ten-action search: every
+    action returned a ~6k-character screen and every later call re-sent all
+    of them, so the largest call carried eleven. A folded screen keeps its
+    app, its capture id and what was priced on it -- what a shopping run
+    compares across screens it has moved past.
+    """
+    folders = _folders()
+    if not folders:
+        return 0
+    unfolded: list[tuple[int, str]] = []
+    for i, message in enumerate(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        text = _content_text(message.content)
+        if not text.startswith(THIRD_PARTY_RESULT):
+            continue
+        fold = _result_folder(messages, i, folders)
+        folded = fold(text[len(THIRD_PARTY_RESULT):]) if fold is not None else None
+        if folded is not None:
+            unfolded.append((i, folded))
+    if len(unfolded) < SCREENS_KEPT + SCREEN_FOLD_EVERY:
+        return 0
+    for i, folded in unfolded[:-SCREENS_KEPT]:
+        messages[i] = HumanMessage(THIRD_PARTY_RESULT + folded)
+    return len(unfolded) - SCREENS_KEPT
+
+
 def _compact(messages: list, actions: list[str] | None = None) -> int:
     """Shrink the oldest tool results in place. Returns how many it rewrote.
 
@@ -2078,6 +2269,7 @@ def _compact(messages: list, actions: list[str] | None = None) -> int:
     """
     rewritten = 0
     protected = len(messages) - KEEP_VERBATIM
+    folders = _folders()
     summaries = list(actions or [])
     seen_results = 0
     for i, message in enumerate(messages):
@@ -2103,7 +2295,10 @@ def _compact(messages: list, actions: list[str] | None = None) -> int:
         summary = summaries[index] if index < len(summaries) else ""
         # The full text, kept where `recall_memory` can find it again, BEFORE
         # the message is overwritten. This is the second tier.
-        kept = _keep_evicted(text)
+        # Never a phone's screen: it is a state the phone has already left,
+        # a recall that surfaced it would be describing a screen that is not
+        # there, and embedding it costs a network call on the phone's turn.
+        kept = False if _result_folder(messages, i, folders) is not None else _keep_evicted(text)
         # The stub says where the rest went -- but ONLY when it actually went
         # somewhere. A model that can see the bytes are missing and is not told
         # they are searchable will re-run the command, which is what it was
@@ -2265,6 +2460,10 @@ def _agent_loop(state: AgentState, messages: list, *, mode: str,
     llm = ROUTER.chat_model(MODES[mode].task)
 
     while max_iterations is None or iteration < max_iterations:
+        folded = _fold_old_results(messages)
+        if folded:
+            logger.info("agent loop: folded %d older screen(s)", folded)
+            _emit({"agent": {"board": [f"folded {folded} older screen(s)"]}})
         if _transcript_size(messages) > LOOP_COMPACT_AT:
             dropped = _compact(messages, actions)
             if dropped:
@@ -2560,8 +2759,7 @@ def _delegate(state: AgentState, body: str, *, actions: list[str],
     # `may_delegate=False`, matching the loop this child actually runs in.
     # It was advertised `delegate` and then refused it at the dispatch -- a
     # tool it could name, could not use, and paid an exchange to discover.
-    child: list = [SystemMessage(compose_agent_prompt(reachable_tools(),
-                                                      may_delegate=False))]
+    child: list = [SystemMessage(_system_prompt(may_delegate=False))]
     # A delegate gets none of this conversation (DELEGATE_CONTRACT), so it
     # needs the workspace said to it directly -- it cannot infer the root from
     # a parent turn it never saw.
@@ -2762,6 +2960,9 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "resear
     checklist = state.get("checklist")
     conversational = False
     kind = "agent"
+    # Only where the seed below will need it: a fresh run with no criteria
+    # yet. A resume rebuilds from its stored transcript and reads no lessons.
+    lessons_ahead = _look_up_lessons_early(task_text) if checklist is None and not resuming else None
     if checklist is None or redirected:
         report_progress("phase", "working out what done looks like")
         rubric = _rubric(ROUTER.chat_model(Task.EVALUATE), _requested(state))
@@ -2823,7 +3024,7 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "resear
         # and the bindings do not change inside a run, so the rebuilt prompt
         # is byte-identical -- which is what the stored transcript assumes.
         messages = [
-            SystemMessage(compose_agent_prompt(reachable_tools())),
+            SystemMessage(_system_prompt()),
             *(SystemMessage(extra) for extra in (workspace_note(), python_session_note(), render_note()) if extra),
             *stored,
         ]
@@ -2853,7 +3054,9 @@ def agent(state: AgentState) -> Command[Literal["evaluator", "ask_user", "resear
                 + "Fix what is still open. You have everything above."
             ))
     else:
-        messages = _seed_transcript(state, task_text, checklist)
+        messages = _seed_transcript(
+            state, task_text, checklist,
+            lessons=lessons_ahead.result() if lessons_ahead is not None else None)
 
     actions: list[str] = []
     mode_log: list[str] = []
@@ -3218,6 +3421,64 @@ def _chat_reply(state: AgentState, task_text: str) -> str:
     return _call(ROUTER.chat_model(Task.CHAT_FAST), messages).strip()
 
 
+#: Asked once per turn by a host that has a phone's tools to bind
+#: (agent/embed.py), before anything is bound. `otto serve` used to bind the
+#: phone tools, the phone prompt and the phone's seats for EVERY turn before
+#: any model had read the request, and gave the turn no workspace -- so
+#: "write a research paper", asked from the app, could not take the research
+#: route (it needs a workspace) and fell to the phone loop, which went looking
+#: for something to tap.
+PHONE_DECIDE_PROMPT = (
+    "You decide one thing about the request below: does doing it need the person's Android "
+    "phone to be operated? Yes when it asks to act on or read this device -- its screen, its "
+    "settings, its apps, installing something, messaging or calling from it, or shopping in an "
+    "app (a cart, an order). No when it can be done without touching the phone -- writing, "
+    "explaining, computing, coding, research on the web, or making a document. A short "
+    "follow-up (\"do it\", \"the second one\", \"and a cover too\") inherits what the "
+    "conversation before it was doing. Reply with exactly one line: PHONE: yes, or PHONE: no."
+)
+
+_PHONE_LINE = re.compile(r"^[\s*_-]*PHONE[*_]*:[\s*_]*(yes|no)\b", re.I | re.M)
+#: How much of the conversation the decision sees: enough for a follow-up to
+#: inherit, not enough to make the cheapest call of the turn expensive.
+PHONE_DECIDE_MESSAGES = 6
+PHONE_DECIDE_CHARS = 600
+
+
+def parse_phone_decision(reply: str) -> bool:
+    """The first PHONE: line's answer. No such line reads as yes: a turn
+    that should have had the phone and did not is a request silently not
+    done, while a wrong yes is what every turn did before this existed."""
+    found = _PHONE_LINE.search(reply or "")
+    return True if found is None else found.group(1).lower() == "yes"
+
+
+def needs_phone(text: str, history=()) -> bool:
+    """Whether this turn should run on the phone: one call on the cheap chat
+    seat. Any failure -- no route, a provider error, an empty reply -- is
+    yes, today's behaviour. `Cancelled` is not a failure and propagates, so
+    a person who pressed Stop is not made to wait for the phone loop."""
+    from agent.pipeline.progress import Cancelled
+
+    lines = []
+    for message in list(history)[-PHONE_DECIDE_MESSAGES:]:
+        speaker = "you" if isinstance(message, HumanMessage) else "otto"
+        lines.append(f"{speaker}: {_content_text(message.content)[:PHONE_DECIDE_CHARS]}")
+    body = "\n\n".join(part for part in (
+        "CONVERSATION SO FAR:\n" + "\n".join(lines) if lines else "",
+        f"REQUEST:\n{str(text)[:4 * PHONE_DECIDE_CHARS]}",
+    ) if part)
+    try:
+        reply = _call(ROUTER.chat_model(Task.CHAT_FAST),
+                      [SystemMessage(PHONE_DECIDE_PROMPT), HumanMessage(body)])
+    except Cancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- deciding must never fail a turn
+        logger.warning("phone decision failed, keeping the phone: %s", exc)
+        return True
+    return parse_phone_decision(reply)
+
+
 def _record_seat(state: AgentState, *, approved: bool) -> None:
     """Credit the seat that produced this answer, for agent/router/outcomes.py.
 
@@ -3293,9 +3554,21 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     # A retried run holds BOTH a worse attempt and a better one, which is the
     # one situation where the comparison can be asked for rather than implied.
     rejections = state.get("rejections") or 0
+    on_phone = _lesson_kind() == PHONE_KIND
+    seen: list[str] = []
+    if on_phone:
+        from agent.phone import notes as app_notes
+
+        # Tool results only: a line the model wrote itself is not a screen
+        # it read, however it is spelled.
+        seen = app_notes.packages_seen(
+            str(entry.get("content") or "") for entry in state.get("transcript") or []
+            if isinstance(entry, dict) and entry.get("kind") != "ai")
     body = "\n\n".join(part for part in (
         f"TASK:\n{state['messages'][-1].content}",
         f"HOW IT WENT: {'the answer was accepted' if succeeded else 'it was NOT accepted'}",
+        PHONE_DISTIL_NOTE if on_phone else "",
+        APP_NOTE_NOTE.format(packages=", ".join(seen)) if seen else "",
         (f"IT WAS REJECTED AND RETRIED {rejections} time(s). The earlier attempt "
          f"and the later one are both above.\n{CONTRAST_NOTE}" if rejections else ""),
         _actions_block(state),
@@ -3312,9 +3585,78 @@ def _distil(state: AgentState, *, succeeded: bool) -> list[Lesson]:
     except Exception as exc:  # noqa: BLE001 -- never fail a finished run
         logger.info("distilling lessons failed, learning nothing: %s", exc)
         return []
-    return record_lessons(parse_distilled(
-        reply, outcome_default="worked" if succeeded else "failed",
-    ))
+    with bind_kind(_lesson_kind()):
+        kept = record_lessons(parse_distilled(
+            reply, outcome_default="worked" if succeeded else "failed",
+        ))
+    if seen:
+        try:
+            app_notes.record_app_notes(parse_app_notes(reply), seen=seen)
+        except Exception as exc:  # noqa: BLE001 -- never fail a finished run
+            logger.info("recording app notes failed: %s", exc)
+    return kept
+
+
+#: Phone runs still distilling their lesson after their answer went out.
+_LEARNING: set[threading.Thread] = set()
+_LEARNING_LOCK = threading.Lock()
+
+
+def _detach_from_trace() -> None:
+    """Forget the finished run's trace, in the learning thread's own copy of
+    its context: LangChain hands the parent runnable config (and with it the
+    Langfuse callback) to any model call made under it, and a span attached
+    to a trace that has already been scored and closed is noise at best."""
+    try:
+        from langchain_core.runnables.config import var_child_runnable_config
+
+        var_child_runnable_config.set(None)
+    except Exception:  # noqa: BLE001 -- tracing is never worth failing over
+        pass
+    try:
+        from opentelemetry import context as otel_context
+
+        otel_context.attach(otel_context.Context())
+    except Exception:  # noqa: BLE001 -- not installed
+        pass
+
+
+def _learn_in_background(state: AgentState, *, succeeded: bool) -> threading.Thread:
+    """`_distil` on a daemon thread, in a copy of this context -- so the bank,
+    read_only, the tools that make it a phone run (and so PHONE_KIND), the
+    budget and the usage ledger are the run's -- with nobody watching its
+    progress: the person has their answer, and a sink that already delivered
+    "final" must not hear from this run again."""
+    ctx = contextvars.copy_context()
+
+    def work() -> None:
+        _detach_from_trace()
+        try:
+            with bind_progress(None):
+                _distil(state, succeeded=succeeded)
+        except Exception:  # noqa: BLE001 -- a lesson is never worth a crash
+            logger.exception("learning from a finished phone run failed")
+        finally:
+            with _LEARNING_LOCK:
+                _LEARNING.discard(threading.current_thread())
+
+    thread = threading.Thread(target=ctx.run, args=(work,), name="otto-distil", daemon=True)
+    with _LEARNING_LOCK:
+        _LEARNING.add(thread)
+    thread.start()
+    return thread
+
+
+def wait_for_learning(timeout: float | None = None) -> bool:
+    """Wait for background lessons to land, at most `timeout` seconds in all.
+    Returns whether every one finished. A host calls this before it closes
+    the stores a lesson is written to (agent/embed.py SessionHandle.close)."""
+    deadline = None if timeout is None else time.monotonic() + timeout
+    with _LEARNING_LOCK:
+        threads = list(_LEARNING)
+    for thread in threads:
+        thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+    return not any(thread.is_alive() for thread in threads)
 
 
 def evaluator(state: AgentState) -> Command[Literal["agent", "research", "evaluator", "__end__", "ask_user"]]:
@@ -3505,7 +3847,18 @@ def evaluator(state: AgentState) -> Command[Literal["agent", "research", "evalua
         """Board lines for whatever the run leaves behind. The distilling call
         happens HERE, at a terminal edge, so a run that is going back to the
         agent for another attempt does not pay for a lesson about work that is
-        not finished."""
+        not finished.
+
+        On a phone it happens AFTER the answer goes out. The distil is one
+        more model call on the PLAN seat, and a person holding their phone
+        waited for it before seeing an answer that was already approved; no
+        part of the answer depends on it. A coding run keeps it synchronous,
+        where the lesson lines on the board are part of what a person reads."""
+        if _phone_run():
+            if not learning_enabled():
+                return []
+            _learn_in_background(dict(state), succeeded=succeeded)
+            return ["learning from this run in the background"]
         return [f"learned: {lesson.rendered()}"
                 for lesson in _distil(state, succeeded=succeeded)]
 
