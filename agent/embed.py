@@ -999,7 +999,8 @@ def _document(workspace: str | None, relative: str | None) -> dict[str, Any] | N
         return None
     files = [f"{path.stem}.{fmt}" for fmt in DOCUMENT_FORMATS if path.with_suffix(f".{fmt}").is_file()]
     return {"path": path.relative_to(root).as_posix(), "format": "md",
-            "markdown": data[:DOCUMENT_MAX_BYTES].decode("utf-8", errors="ignore"),
+            # A report written on Windows has CRLF line ends; the phone renders one kind.
+            "markdown": data[:DOCUMENT_MAX_BYTES].decode("utf-8", errors="ignore").replace("\r\n", "\n"),
             "truncated": len(data) > DOCUMENT_MAX_BYTES, "files": files}
 
 

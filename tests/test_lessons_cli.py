@@ -40,7 +40,8 @@ def test_phone_lessons_are_listed_only_with_phone(tmp_path, monkeypatch):
         buf = io.StringIO()
         monkeypatch.setattr(cli, "out", Console(file=buf, width=120, force_terminal=False))
         cli.lessons_cmd(bank=path, **kw)
-        return buf.getvalue()
+        # One line per sentence: a long temporary path (Windows) makes the console wrap.
+        return " ".join(buf.getvalue().split())
 
     assert "has no phone lessons yet" in listed(phone=True)
     store = MemoryStore(path)

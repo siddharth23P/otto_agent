@@ -1,0 +1,3 @@
+# The page corpus manifest records each fixture's sha256 over its bytes, so no checkout may
+# rewrite their line ends (Windows, core.autocrlf).
+tests/fixtures/phone_pages/*.json -text
