@@ -979,7 +979,7 @@ def test_a_research_document_is_fetched_from_the_sessions_workspace_and_nowhere_
     newer = root / "otto_research" / "tides"
     for folder in (older, newer):
         folder.mkdir(parents=True)
-        (folder / "document.md").write_text(f"# {folder.name}\n")
+        (folder / "document.md").write_bytes(f"# {folder.name}\n".encode())  # served byte for byte
     (newer / "document.docx").write_bytes(b"PK\x03\x04docx")
     past = time.time() - 60
     os.utime(older / "document.md", (past, past))
