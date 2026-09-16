@@ -180,6 +180,27 @@ class AuthError(ProviderError):
     """Key missing, malformed, or rejected by the vendor."""
 
 
+def connection_detail(exc: BaseException) -> str:
+    """A vendor SDK's message for a failed connection, with what failed underneath it.
+
+    The SDKs say only "Connection error."; the reason -- a name that did not resolve, a
+    certificate that was not trusted, a timeout -- is the exception theirs was raised from, and
+    that is what a person can act on. Every probe from a phone read "Connection error." and
+    nothing else (2026-09-16). Exception messages from the transport name hosts, never keys."""
+    shown = str(exc) or type(exc).__name__
+    root, seen = exc, {id(exc)}
+    for _ in range(8):
+        underneath = root.__cause__ or root.__context__
+        if underneath is None or id(underneath) in seen:
+            break
+        seen.add(id(underneath))
+        root = underneath
+    if root is exc:
+        return shown
+    reason = f"{type(root).__name__}: {root}".strip().rstrip(":")
+    return shown if str(root) and str(root) in shown else f"{shown} ({reason[:300]})"
+
+
 class ProviderUnavailable(ProviderError):
     """Network failure, timeout, or vendor-side outage."""
 

@@ -71,6 +71,7 @@ from agent.router.llm_provider.base import (
     ModelInfo,
     ProviderError,
     ProviderUnavailable,
+    connection_detail,
 )
 
 __all__ = ["ChatInception", "InceptionProvider", "build_edit_prompt"]
@@ -137,7 +138,7 @@ def _translate(exc: Exception) -> ProviderError:
     if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
         return AuthError(f"inception: key rejected ({exc})")
     if isinstance(exc, APIConnectionError):  # APITimeoutError subclasses this
-        return ProviderUnavailable(f"inception: {exc}")
+        return ProviderUnavailable(f"inception: {connection_detail(exc)}")
     if isinstance(exc, APIStatusError):
         if exc.status_code in (401, 403):
             return AuthError(f"inception: HTTP {exc.status_code}")
