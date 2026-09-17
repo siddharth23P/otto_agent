@@ -34,7 +34,7 @@ from typing import Any, Protocol, runtime_checkable
 #: capability the device lacks (no accessibility service running, no
 #: screenshot permission); `timeout` a gesture or capture that never
 #: completed.
-ERROR_CODES = ("guard", "refused", "stale", "unsupported", "failed", "timeout")
+ERROR_CODES = ("guard", "refused", "stale", "unsupported", "invalid", "failed", "timeout")
 
 
 class PhoneError(Exception):

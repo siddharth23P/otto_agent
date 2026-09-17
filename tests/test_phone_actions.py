@@ -1,38 +1,45 @@
-"""agent/phone/tools.py phone_action: the phone's own action registry, offered as one tool."""
+"""agent/phone/actions.py and the phone_find / phone_action tools: the phone's premapped actions as a
+dictionary the agent searches, never listed in the prompt."""
 import json
 import logging
 
 from agent.phone import JsonBackend, phone_tools
-from agent.phone.tools import _action_description, _action_groups
-from agent.pipeline.toolkit import MAX_TOOL_DESCRIPTION_CHARS
+from agent.phone import actions
+from agent.pipeline.toolkit import MAX_TOOL_DESCRIPTION_CHARS, bind_extra_tools, render_note
 from tests.phone_fakes import FakePhone
 
 
-def _a(group, name, summary, *params, effect="change"):
+def _a(group, name, summary, *params, effect="change", keywords=()):
+    # "name", "name?" optional, "name#" integer, "name[]" list, "name:a|b" choices.
     fields = []
     for p in params:
         key, _, choices = p.partition(":")
-        fields.append({"name": key.rstrip("?"), "type": "string", "required": not key.endswith("?"),
+        required = not key.endswith("?")
+        key = key.rstrip("?")
+        kind = "integer" if key.endswith("#") else "string_list" if key.endswith("[]") else "string"
+        fields.append({"name": key.rstrip("#[]"), "type": kind, "required": required,
                        **({"choices": choices.split("|")} if choices else {})})
-    return {"name": name, "summary": summary, "effect": effect, "group": group, "params": fields}
+    return {"name": name, "summary": summary, "effect": effect, "group": group, "keywords": list(keywords),
+            "params": fields}
 
 
 #: The Android app's catalog (otto_android actions/ActionCatalog.kt) as its bridge sends it, 2026-09-17.
 APP_MENU = [
-    _a("clock", "alarm.set", "set an alarm in the clock app", "hour", "minute", "label?",
-       "days?:mon|tue|wed|thu|fri|sat|sun"),
+    _a("clock", "alarm.set", "set an alarm in the clock app", "hour#", "minute#", "label?",
+       "days[]?:mon|tue|wed|thu|fri|sat|sun", keywords=["wake", "morning"]),
     _a("clock", "timer.set", "start a countdown timer", "seconds", "label?"),
     _a("clock", "alarm.show", "open the clock app's alarms", effect="read"),
     _a("clock", "calendar.add", "open a new calendar event for the person to save", "title", "start", "end?",
        "location?", "notes?", effect="confirm"),
-    _a("device", "flashlight", "turn the torch on or off", "on"),
+    _a("device", "flashlight", "turn the torch on or off", "on", keywords=["light"]),
     _a("device", "volume", "set a volume (0-100) or step it", "stream:media|ring|alarm|notification|call",
        "level?", "step?:up|down|mute|unmute"),
     _a("device", "media", "control what is playing", "command:play|pause|toggle|next|previous|stop"),
     _a("device", "dnd", "set Do Not Disturb", "mode:off|on|priority|alarms"),
     _a("device", "panel", "open a quick panel for the person to switch (apps cannot switch these)",
        "name:internet|wifi|bluetooth|nfc|volume", effect="confirm"),
-    _a("message", "sms.compose", "write an SMS for the person to send", "to", "body", effect="confirm"),
+    _a("message", "sms.compose", "write an SMS for the person to send", "to", "body", effect="confirm",
+       keywords=["text", "message"]),
     _a("message", "email.compose", "write an email for the person to send", "to", "subject?", "body?", "cc?",
        effect="confirm"),
     _a("message", "whatsapp.compose", "write a WhatsApp message for the person to send", "phone", "text",
@@ -47,19 +54,6 @@ APP_MENU = [
     _a("files", "note.create", "write a note (Keep) for the person to save", "text", "title?", effect="confirm"),
 ]
 
-
-def test_the_apps_whole_menu_fits_in_four_tools():
-    groups = _action_groups(APP_MENU)
-    assert list(groups) == ["phone_clock", "phone_device", "phone_message", "phone_files"]
-    for offered in groups.values():
-        text = _action_description(offered)
-        assert len(text) <= MAX_TOOL_DESCRIPTION_CHARS
-        for action in offered:  # every action and every field is named
-            assert action["name"] + "{" in text
-            for p in action["params"]:
-                assert p["name"] in text
-    assert "volume{stream:media|ring|alarm|notification|call,level?,step?:up|down|mute|unmute}" in \
-        _action_description(groups["phone_device"])
 
 MENU = [
     {"name": "alarm.set", "summary": "set an alarm", "effect": "change",
@@ -91,54 +85,79 @@ class ActionPhone(FakePhone):
         return self._reply("run_action", self.replies.get(name, {"done": f"did {name}"}))
 
 
-def _tools(phone):
-    return {t.name: t for t in phone_tools(JsonBackend(phone))}
-
-
-class _AnyGroup:
-    """Calls the tool that offers the body's action, as the model would."""
-
-    def __init__(self, tools):
-        self.tools = tools
-
-    def call(self, body):
-        action = json.loads(body).get("action")
-        for tool in self.tools.values():
-            if action in tool.schema.get("properties", {}).get("action", {}).get("enum", ()):
-                return tool.call(body)
-        return self.tools["phone_clock"].call(body)
-
-
 def _tool(phone):
-    tools = _tools(phone)
-    return tools, (_AnyGroup(tools) if "phone_clock" in tools else None)
+    tools = {t.name: t for t in phone_tools(JsonBackend(phone))}
+    return tools, tools.get("phone_action")
 
 
-def test_no_registry_no_tool():
-    tools, action = _tool(FakePhone())
-    assert action is None and "phone_screen" in tools
+def test_search_finds_by_name_keyword_summary_and_field():
+    def names(query):
+        return [e["name"] for e in actions.search(APP_MENU, query)]
+    assert names("alarm.set") == ["alarm.set"]
+    assert names("set an alarm for 7am")[0] == "alarm.set"
+    assert names("wake me up tomorrow")[0] == "alarm.set"
+    assert names("text Asha that I'm late")[0] == "sms.compose"
+    assert names("turn on the flashlight")[0] == "flashlight"
+    assert names("light")[0] == "flashlight"
+    assert names("share the pdf")[0] == "share"
+    assert names("navigate to the airport")[0] == "maps"
+    assert names("mute the ringer")[0] == "volume"
+    assert names("zzz qqq") == [] and names("   ") == [] and names("please the") == []
+    assert len(actions.search(APP_MENU, "the person to send")) <= actions.MAX_FOUND
 
 
-def test_a_failing_registry_is_no_tool():
-    _, action = _tool(ActionPhone(fail={"actions": {"message": "boom", "code": "failed"}}))
-    assert action is None
+def test_an_entry_is_described_in_full():
+    alarm = actions.describe(actions.search(APP_MENU, "alarm.set")[0])
+    assert alarm.splitlines()[0] == "alarm.set -- set an alarm in the clock app"
+    assert "  days: list of mon|tue|wed|thu|fri|sat|sun, optional" in alarm
+    assert "  label: text, optional" in alarm
+    sms = actions.describe(actions.search(APP_MENU, "sms.compose")[0])
+    assert "the person finishes it" in sms.splitlines()[0]
+    ranged = actions.describe({"name": "x", "summary": "y", "params": [
+        {"name": "hour", "type": "integer", "min": 0.0, "max": 23.0, "doc": "0-23"}]})
+    assert "  hour: integer 0..23, required -- 0-23" in ranged
+    assert actions.describe({"name": "alarm.show", "summary": "open alarms"}).endswith("(no fields)")
 
 
-def test_the_menu_is_in_the_descriptions():
-    tools = _tools(ActionPhone())
-    assert list(tools)[:4] == ["phone_clock", "phone_message", "phone_files", "phone_screen"]
-    assert not any(tools[n].mutates for n in ("phone_clock", "phone_message", "phone_files"))
-    assert "alarm.set{hour,minute,label?} set an alarm." in tools["phone_clock"].description
-    message = tools["phone_message"]
-    assert "sms.compose{to,body} write an SMS for the person to send (you); contacts.find{name}" in message.description
-    assert message.schema["properties"]["action"]["enum"] == ["sms.compose", "contacts.find"]
+def test_a_bad_menu_is_no_menu():
+    assert actions.clean_menu(None) == [] and actions.clean_menu([1, {"name": ""}, {"summary": "x"}]) == []
+    assert actions.clean_menu([{"name": "a"}]) == [{"name": "a"}]
 
 
-def test_an_action_from_another_group_is_refused():
-    phone = ActionPhone()
-    result = _tools(phone)["phone_clock"].call('{"action": "sms.compose", "to": "1", "body": "x"}')
-    assert not result.ok and "one of alarm.set" in result.stderr
-    assert not any(c[0] == "run_action" for c in phone.calls)
+def test_no_registry_no_tools():
+    tools, _ = _tool(FakePhone())
+    assert "phone_find" not in tools and "phone_action" not in tools and "phone_screen" in tools
+    tools, _ = _tool(ActionPhone(fail={"actions": {"message": "boom", "code": "failed"}}))
+    assert "phone_find" not in tools
+
+
+def test_the_prompt_does_not_grow_with_the_menu():
+    class BigPhone(ActionPhone):
+        def actions(self):
+            return self._reply("actions", {"actions": APP_MENU * 10})
+    small, _ = _tool(ActionPhone())
+    big, _ = _tool(BigPhone())
+    assert list(small)[:2] == ["phone_find", "phone_action"]
+    assert not small["phone_find"].mutates and not small["phone_action"].mutates
+    with bind_extra_tools(list(small.values())):
+        small_note = render_note()
+    with bind_extra_tools(list(big.values())):
+        big_note = render_note()
+    assert small_note == big_note and "alarm.set" not in small_note
+    for t in small.values():
+        assert len(t.description) <= MAX_TOOL_DESCRIPTION_CHARS
+
+
+def test_find_returns_entries_and_the_whole_list():
+    tools, _ = _tool(ActionPhone())
+    found = tools["phone_find"].call('{"query": "set an alarm"}')
+    assert found.ok and found.stdout.startswith("alarm.set -- set an alarm")
+    assert "hour: integer, required" in found.stdout and found.stdout.endswith("...fields}.")
+    listing = tools["phone_find"].call("{}")
+    assert listing.stdout.splitlines() == ["4 actions; search one to see its fields.", "clock: alarm.set",
+                                           "message: sms.compose, contacts.find", "files: share"]
+    nothing = tools["phone_find"].call('{"query": "order a pizza"}')
+    assert nothing.ok and "use the screen tools" in nothing.stdout
 
 
 def test_a_change_runs_with_its_arguments():
@@ -153,7 +172,7 @@ def test_a_confirm_action_hands_over():
     phone = ActionPhone({"sms.compose": {"done": "SMS ready for the person to send", "handed_over": True}})
     _, action = _tool(phone)
     result = action.call('{"action": "sms.compose", "to": "+911234567890", "body": "on my way"}')
-    assert result.ok and result.stdout.startswith("GUARD: phone_message: SMS ready")
+    assert result.ok and result.stdout.startswith("GUARD: phone_action: SMS ready")
     assert "handed control to the person" in result.stdout
 
 
@@ -164,14 +183,15 @@ def test_data_comes_back_as_json():
     assert result.stdout.split("\n", 1) == ["1 contact", json.dumps(data)]
 
 
-def test_unknown_actions_and_phone_refusals():
+def test_unknown_actions_and_bad_fields():
     phone = ActionPhone(fail={"run_action": {"message": "hour is at most 23", "code": "invalid"}})
     _, action = _tool(phone)
-    unknown = action.call('{"action": "teleport"}')
-    assert not unknown.ok and "one of alarm.set" in unknown.stderr
-    assert ("run_action", "teleport", {}) not in phone.calls
+    unknown = action.call('{"action": "alarm.create"}')
+    assert not unknown.ok and "no action 'alarm.create'; nearest: alarm.set" in unknown.stderr
+    assert not any(c[0] == "run_action" for c in phone.calls)
     refused = action.call('{"action": "alarm.set", "hour": 30, "minute": 0}')
     assert not refused.ok and "at most 23" in refused.stderr and not refused.stderr.startswith("GUARD")
+    assert "alarm.set -- set an alarm" in refused.stderr and "minute: integer, required" in refused.stderr
 
 
 def test_sharing_into_a_payment_app_is_refused_before_the_phone():
