@@ -21,6 +21,9 @@ After judging pages whole (2026-09-16): the guidance says shopping goes through 
 page and what a declined control means: 40029 -> 40320, 31544 -> 31835 characters. The results screen
 is an ordinary page, so its digest is unchanged.
 
+After making the phone the last resort (2026-09-17): the guidance says to use phone_* only for steps
+that need the device and to make files with make_document: 40320 -> 40420, 31835 -> 31935 characters.
+
 after the phone's own agent prompt: 12 calls, largest 72808 chars.
 after folding old screens: 12 calls, largest 38370 chars.
 after phone_do: the one-action-per-call script is unchanged in calls, and
@@ -45,9 +48,9 @@ from agent.pipeline.toolkit import bind_extra_tools
 from tests.phone_fakes import FakePhone, node, snapshot
 
 MAX_LOOP_CALLS = 12
-MAX_LARGEST_CALL_CHARS = 40320
+MAX_LARGEST_CALL_CHARS = 40420
 MAX_BATCHED_LOOP_CALLS = 5
-MAX_BATCHED_LARGEST_CALL_CHARS = 31835
+MAX_BATCHED_LARGEST_CALL_CHARS = 31935
 
 SCRIPT = [
     "ACTION: phone_screen\nCODE:\n{}",

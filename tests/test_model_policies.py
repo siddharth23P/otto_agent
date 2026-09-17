@@ -149,19 +149,21 @@ def test_a_model_that_serves_a_different_api_reads_as_permanently_unusable():
     assert looks_retired(Exception("400 INVALID_ARGUMENT: This model only supports Interactions API"))
 
 
-def test_vision_keeps_a_capability_fallback_so_a_withdrawal_is_survivable():
-    """A pin is right at the head of a chain -- cost is a property of the exact
-    id -- but brittle against exactly what the retirement filter does. The
-    query candidate keeps the capability when the pin goes away."""
+def test_vision_is_named_gemini_flash_versions_then_other_vendors_never_a_text_model():
+    """The person's order (2026-09-17): Gemini 3.8, 3.7, 3.6 Flash -- released names, no preview,
+    no -latest alias -- and then Claude and GPT-5-mini, which also see. Never Inception."""
     from agent.router.llm_provider.base import Capability
     from agent.router.mapping import TASK_ROUTES, Task
 
     chain = TASK_ROUTES[Task.VISION]
 
-    assert chain[0].spec, "the head should be a pin, for predictable cost"
-    assert chain[-1].is_query, "the tail should be a capability query"
-    assert Capability.VISION in chain[-1].requires
-    assert chain[-1].provider == "gemini"
+    assert [c.spec for c in chain] == [
+        "gemini:gemini-3.8-flash", "gemini:gemini-3.7-flash", "gemini:gemini-3.6-flash",
+        "anthropic:claude-haiku-4-5-20251001", "openai:gpt-5-mini",
+    ]
+    assert all(Capability.VISION in c.requires for c in chain)
+    assert not any("preview" in c.spec or "latest" in c.spec for c in chain)
+    assert "temperature" not in chain[-1].params, "a reasoning model takes no temperature"
 
 
 def test_a_vendors_own_published_ceiling_beats_the_provider_default():

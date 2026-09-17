@@ -22,7 +22,7 @@ EDIT2 = m("mercury-edit-2", "inception", {Capability.FIM, Capability.EDIT}, 128_
 GPT = m("gpt-5-mini", "openai", {CHAT, R, V, T}, 400_000)
 HAIKU = m("claude-haiku-4-5-20251001", "anthropic", {CHAT, R, T}, 200_000)
 FLASH_LITE = m("gemini-flash-lite-latest", "gemini", {CHAT, V, T}, 1_000_000)
-FLASH3 = m("gemini-3-flash-preview", "gemini", {CHAT, V, T, R}, 1_000_000)
+FLASH3 = m("gemini-3.8-flash", "gemini", {CHAT, V, T, R}, 1_000_000)
 LOCAL_SMALL = m("llama3.2:latest", "local", {CHAT, T}, 8_000)
 LOCAL_R1 = m("deepseek-r1:32b", "local", {CHAT, T, R}, 64_000)
 LOCAL_BIG = m("llama3.3:70b", "local", {CHAT, T}, 128_000)
@@ -32,7 +32,7 @@ def test_the_shipped_head_is_kept_when_it_resolves():
     p = automap.propose([MERCURY, EDIT2, GPT, HAIKU, FLASH_LITE, FLASH3])
     assert p[Task.REASON].spec == "openai:gpt-5-mini" and p[Task.REASON].source == "shipped"
     assert p[Task.CODE_COMPLETE].spec == "inception:mercury-edit-2"
-    assert p[Task.VISION].spec == "gemini:gemini-3-flash-preview"
+    assert p[Task.VISION].spec == "gemini:gemini-3.8-flash"
     assert not p[Task.REASON].needs_pin
 
 

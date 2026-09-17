@@ -140,6 +140,12 @@ class Candidate:
 # and produces garbage -- the renderer must REPLACE the previous frame.
 # `chat.py` selects its renderer on this flag.
 
+
+def _vision(spec: str) -> Candidate:
+    """A pinned vision candidate: deterministic, room for a full transcription."""
+    return Candidate(spec=spec, requires=frozenset({Capability.CHAT, Capability.VISION}),
+                     params={"temperature": 0.0, "max_tokens": 4096})
+
 TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
     # `reasoning_effort` is the dial every chat route tunes, cheapest to most
     # thoughtful: "instant" for a swarm node's fast turnaround (classify,
@@ -260,42 +266,23 @@ TASK_ROUTES: dict[Task, tuple[Candidate, ...]] = {
     ),
 
     Task.VISION: (
-        # Pinned to an id that was verified to actually SERVE a request, not
-        # merely to appear in the catalogue: Gemini's model list still returns
-        # gemini-2.5-flash and gemini-2.5-flash-lite, both of which answer
-        # generateContent with 404 "no longer available". Router._select can
-        # only check that a pin exists in the catalogue, so a retired id
-        # resolves cleanly and then fails at call time.
-        #
-        # Deliberately NO Inception fallback. Mercury has no vision, and a
-        # chain that quietly fell through to a text model would answer
-        # confidently about an image it never saw. NoViableRoute -> a failing
-        # ToolResult is the correct outcome when no Gemini key is configured.
-        Candidate(
-            spec="gemini:gemini-3-flash-preview",
-            requires=frozenset({Capability.CHAT, Capability.VISION}),
-            params={"temperature": 0.0, "max_tokens": 4096},
-        ),
-        # Capability query, not a pin -- the first use of the machinery this
-        # module has carried unused since it was written. A pin is right for
-        # the head of a chain because cost is a property of the exact id, but
-        # it is brittle against exactly what retired.py now filters: if the
-        # pinned model is withdrawn, VISION has no route at all and every
-        # image task fails. This says "any Gemini model that can still see",
-        # preferring the smallest context that qualifies, so the capability
-        # survives a retirement even though the cost guarantee does not.
-        Candidate(
-            provider="gemini",
-            requires=frozenset({Capability.CHAT, Capability.VISION}),
-            # Narrowed to the flash family as well as the capability. The
-            # unusable-model filter removes what is obviously not a chat model,
-            # but capability tags alone are too generous to pick a replacement
-            # blind -- this keeps the fallback inside the family the pin was
-            # chosen from, so a withdrawal changes the model without changing
-            # the class of model.
-            name_contains="flash",
-            params={"temperature": 0.0, "max_tokens": 4096},
-        ),
+        # Named, released Gemini Flash versions only, newest first -- never a
+        # "-preview" and never a "-latest" alias, whose model changes under the
+        # route (the person's choice, 2026-09-17). Each is pinned to an id that
+        # serves generateContent: Gemini's list still returns retired ids that
+        # answer 404, and Router._select can only check that a pin is listed.
+        _vision("gemini:gemini-3.8-flash"),
+        _vision("gemini:gemini-3.7-flash"),
+        _vision("gemini:gemini-3.6-flash"),
+        # Then the other vendors' small vision models, so an image is still read
+        # when the Gemini account is out of credit (2026-09-17). Deliberately
+        # NO Inception: Mercury has no vision, and a chain that fell through to
+        # a text model would answer confidently about an image it never saw.
+        # agent/pipeline/vision.py `describe_with_fallback` walks this chain
+        # when a call fails; resolve() alone only skips what is known unwell.
+        _vision("anthropic:claude-haiku-4-5-20251001"),
+        # A reasoning model: no temperature, and no token cap its reasoning could use up.
+        Candidate(spec="openai:gpt-5-mini", requires=frozenset({Capability.CHAT, Capability.VISION})),
     ),
 
     Task.WEB: (

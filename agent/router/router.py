@@ -384,6 +384,23 @@ class Router:
             )
         raise NoViableRoute(task, tuple(skips))
     
+    def chain(self, task: Task) -> list[RoutingDecision]:
+        """Every candidate this installation could use for `task`, in the order to try them: the
+        ones not cooling first, as `resolve` would pick them, then the cooling ones. For a caller
+        that moves down the chain when a call fails (agent/pipeline/vision.py), where `resolve`
+        only knows what was already known to be unwell."""
+        self.require_ready()
+        declared = route_overrides.bound_chain(task) or TASK_ROUTES[task]
+        ready, cooling = [], []
+        for i, c in enumerate(declared):
+            outcome = self._match(c, honour_cooldowns=False)
+            if isinstance(outcome, str):
+                continue
+            decision = RoutingDecision(task=task, provider=outcome.provider, model=outcome,
+                                       endpoint=c.endpoint, params=dict(c.params), index=i, skipped=())
+            (cooling if provider_health.HEALTH.cooling(outcome.provider, outcome.id) else ready).append(decision)
+        return ready + cooling
+
     def model_for(self, d: RoutingDecision, **overrides) -> BaseChatModel:
         if d.endpoint is not Endpoint.CHAT:
             raise CapabilityNotSupported(f"{d.task.value} routes to {d.endpoint.value}, not chat")

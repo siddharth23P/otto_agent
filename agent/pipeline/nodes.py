@@ -335,18 +335,16 @@ _TOOL_MENU = "|".join((*TOOL_DISPATCH, "ask_user", "switch_mode", "delegate"))
 #: is unchanged from when this was one string -- the split is mechanical.
 _BODY_HINTS: dict[str, str] = {
     "read_file": "read_file: a path, optionally `path:START-END`.",
-    "list_files": "list_files: a directory.",
-    "write_file": ("write_file: the path on the FIRST line, the file's whole "
-                   "content after it -- no separator, no JSON."),
-    "edit_file": ("edit_file: the path, then a line `---OLD---`, the exact "
-                  "text to replace, a line `---NEW---`, the replacement."),
+    # No list_files or recall_memory hint: a directory and a query are what their names say
+    # (2026-09-17, room for make_document under the prompt ceiling).
+    "write_file": "write_file: path on the FIRST line, then the whole content -- no separator, no JSON.",
+    "make_document": "make_document: `pdf|docx|xlsx|pptx <name>`, then Markdown or `from <path>`.",
+    "edit_file": ("edit_file: the path, a line `---OLD---`, the exact old text, "
+                  "a line `---NEW---`, the new text."),
     "complete_code": ("complete_code: code, optionally `---SUFFIX---` then "
                       "trailing code."),
     "predict_edit": "predict_edit: code only, no instruction.",
-    "recall_memory": "recall_memory: a search query.",
-    "code_map": ("code_map: `define <name>`, `uses <name>`, "
-                 "`imports <module>` or `outline <path>` -- exact names, "
-                 "Python only."),
+    "code_map": "code_map: `define|uses <name>`, `imports <module>` or `outline <path>`; Python only.",
     # Short, because AGENT_PROMPT has a measured ceiling. The one thing a
     # caller cannot guess: a workspace path opens too, and a page that
     # throws is a failed call.
@@ -3430,13 +3428,45 @@ def _chat_reply(state: AgentState, task_text: str) -> str:
 #: for something to tap.
 PHONE_DECIDE_PROMPT = (
     "You decide one thing about the request below: does doing it need the person's Android "
-    "phone to be operated? Yes when it asks to act on or read this device -- its screen, its "
-    "settings, its apps, installing something, messaging or calling from it, or shopping in an "
-    "app (a cart, an order). No when it can be done without touching the phone -- writing, "
-    "explaining, computing, coding, research on the web, or making a document. A short "
+    "phone to be operated? Operating the phone is the last resort: slow, and it acts in the "
+    "person's own apps. Yes only when the request cannot be done any other way -- it asks to act "
+    "on or read this device: its screen, its settings, its apps, installing something, messaging "
+    "or calling from it, or shopping in an app (a cart, an order). No when it can be done without "
+    "touching the phone -- writing, explaining, computing, coding, research on the web, or making "
+    "or converting a document (PDF, Word, Excel, PowerPoint: otto makes those itself). A short "
     "follow-up (\"do it\", \"the second one\", \"and a cover too\") inherits what the "
-    "conversation before it was doing. Reply with exactly one line: PHONE: yes, or PHONE: no."
+    "conversation before it was doing. A file the person attached is shown only by its name: "
+    "reviewing, summarising or answering about a file is no, unless they ask for something to "
+    "be done on the phone with it. Reply with exactly one line: PHONE: yes, or PHONE: no."
 )
+
+#: A file a host attached to the message (the Android app's Attachments.compose): its content is
+#: data, never part of the question "does this need the phone" (2026-09-17: a CV's text ran a
+#: review on the phone and wrote it into a note).
+_ATTACHED_FILE = re.compile(r'<attached-file name="([^"]*)"[^>]*>.*?</attached-file>\s*', re.S)
+
+
+#: A request that plainly asks to act on the device, for when no model could decide.
+_PHONE_WORDS = re.compile(
+    r"\b(turn (on|off)|switch (on|off)|enable|disable|toggle|open (the )?\w+ app|open (my )?\w+$|"
+    r"settings?|wi-?fi|bluetooth|hotspot|airplane mode|dark mode|brightness|volume|ringtone|"
+    r"do not disturb|dnd|flashlight|torch|alarm|timer|install|uninstall|update (the )?app|"
+    r"notifications?|screen ?shot|my screen|on (my|the) (phone|screen)|tap|swipe|scroll|"
+    r"call|dial|text (him|her|them)|send (a )?(message|sms|whatsapp)|whatsapp|"
+    r"add to (my )?cart|my cart|order (on|from)|blinkit|zepto|swiggy|zomato|amazon|flipkart|"
+    r"play store|youtube|spotify|maps?|navigate)\b", re.I)
+
+
+def _without_attached_files(text: str) -> tuple[str, int]:
+    """The request as the person typed it, each attached file reduced to its name, and how many."""
+    count = 0
+
+    def name(match: re.Match) -> str:
+        nonlocal count
+        count += 1
+        return f"[attached file: {match.group(1)}]\n"
+
+    return _ATTACHED_FILE.sub(name, str(text)), count
 
 _PHONE_LINE = re.compile(r"^[\s*_-]*PHONE[*_]*:[\s*_]*(yes|no)\b", re.I | re.M)
 #: How much of the conversation the decision sees: enough for a follow-up to
@@ -3455,10 +3485,15 @@ def parse_phone_decision(reply: str) -> bool:
 
 def needs_phone(text: str, history=()) -> bool:
     """Whether this turn should run on the phone: one call on the cheap chat
-    seat. Any failure -- no route, a provider error, an empty reply -- is
-    yes, today's behaviour. `Cancelled` is not a failure and propagates, so
+    seat, and the next seat in that chain when a call fails. When none
+    answers -- no route, provider errors, an empty reply -- a plain request is
+    yes, today's behaviour, and one carrying attached files is no: acting on the
+    phone is what a document request must never do by accident. Attached files
+    are judged by name only. `Cancelled` is not a failure and propagates, so
     a person who pressed Stop is not made to wait for the phone loop."""
     from agent.pipeline.progress import Cancelled
+
+    text, attached = _without_attached_files(text)
 
     lines = []
     for message in list(history)[-PHONE_DECIDE_MESSAGES:]:
@@ -3468,15 +3503,27 @@ def needs_phone(text: str, history=()) -> bool:
         "CONVERSATION SO FAR:\n" + "\n".join(lines) if lines else "",
         f"REQUEST:\n{str(text)[:4 * PHONE_DECIDE_CHARS]}",
     ) if part)
+    messages = [SystemMessage(PHONE_DECIDE_PROMPT), HumanMessage(body)]
     try:
-        reply = _call(ROUTER.chat_model(Task.CHAT_FAST),
-                      [SystemMessage(PHONE_DECIDE_PROMPT), HumanMessage(body)])
-    except Cancelled:
-        raise
+        seats = ROUTER.chain(Task.CHAT_FAST)
     except Exception as exc:  # noqa: BLE001 -- deciding must never fail a turn
-        logger.warning("phone decision failed, keeping the phone: %s", exc)
-        return True
-    return parse_phone_decision(reply)
+        logger.warning("phone decision has no route: %s", exc)
+        seats = []
+    for decision in seats:
+        try:
+            reply = _call(ROUTER.model_for(decision), messages)
+        except Cancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- deciding must never fail a turn
+            logger.warning("phone decision via %s:%s failed: %s", decision.provider, decision.model.id, exc)
+            continue
+        return parse_phone_decision(reply)
+    # Nothing could decide: the phone only for a request that plainly names acting on the device --
+    # it is the last resort, and a wrong yes acts in the person's own apps (2026-09-17: a document
+    # request, with the decision's key refused, drove My Files and Google Docs for minutes).
+    fallback = attached == 0 and bool(_PHONE_WORDS.search(text))
+    logger.warning("phone decision failed on every seat; %s the phone", "keeping" if fallback else "not using")
+    return fallback
 
 
 def _record_seat(state: AgentState, *, approved: bool) -> None:

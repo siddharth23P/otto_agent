@@ -11,7 +11,8 @@ and binds these through [agent/embed.py](../embed.py).
 | `backend.py` | `PhoneBackend`, the Protocol a host implements (tree, tap, type, press, swipe, scroll, screenshot, apps, launch, settings, install); `PhoneError` with a code and a hand-over flag; `JsonBackend`, the adapter over a bridge whose methods return JSON envelopes |
 | `digest.py` | the accessibility snapshot as bounded, inert text: one `[index] "label" role flags @x,y` line per element, password fields never shown; `find_node` resolves a text target (exact, then unique substring, else the candidates) |
 | `guard.py` + `assets/guard_rules.json` | the rules the phone enforces and this side pre-checks: denied packages, money words, sensitive-screen patterns (two signals required), pay words (never tappable), forward words that become pay words next to a checkout signal, commit words (only through `phone_commit`); a broken rules file is a `GuardRulesError` on every verdict |
-| `tools.py` | `phone_tools(backend)`: nine `ExtraTool`s, `PHONE_GUIDANCE`, and the standing tools a phone cannot run |
+| `actions.py` | the phone's premapped actions as a searchable dictionary: `search`, `describe`; never listed in the prompt |
+| `tools.py` | `phone_tools(backend)`: nine `ExtraTool`s, plus `phone_find` / `phone_action` when the bridge offers `actions()`; `PHONE_GUIDANCE`, and the standing tools a phone cannot run |
 | `notes.py` + `assets/app_notes/` | per-app notes shown after an app's screen the first time it is in front in a run: seeded `<package>.md` files (facts checked on a real phone; Amazon and Settings only) and notes learned by earlier runs, 800 characters in all; guidance only, never read by the guard |
 
 ## The tools

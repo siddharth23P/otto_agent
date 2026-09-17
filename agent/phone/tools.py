@@ -42,6 +42,7 @@ from collections.abc import Callable
 from typing import Any
 
 from agent.phone import digest as _digest
+from agent.phone import actions as _actions
 from agent.phone import guard
 from agent.phone import notes as _notes
 from agent.phone.backend import PhoneBackend, PhoneError
@@ -61,6 +62,8 @@ PHONE_DISABLED_STANDING_TOOLS: frozenset[str] = frozenset({
 #: Bound with the tools (agent/pipeline/toolkit.py `guidance=`).
 PHONE_GUIDANCE = (
     "You are working on the person's Android phone through phone_* tools. "
+    "The phone is the last resort: use phone_* only for steps that need the device, and make "
+    "files with make_document, never in an app. "
     "Look, act, look again: phone_screen shows what is on screen with a [number] per element; "
     "phone_act acts on one element by its text and shows the screen after. "
     "When you already know the next few steps (tap the search box, type the query, press enter -- the "
@@ -128,14 +131,13 @@ def _default_vision(question: str, data: bytes, media_type: str) -> str:
     """The `look` tool's path: the routed vision model, words back, vendor
     exceptions translated into Otto's own so the loop reads a failed call."""
     from agent.pipeline import tools as pt
-    from agent.pipeline.vision import describe_image
-    from agent.router.mapping import Task
+    from agent.pipeline.vision import describe_with_fallback
 
-    llm = pt._get_router().chat_model(Task.VISION)
-    try:
-        return describe_image(llm, base64.b64encode(data).decode(), media_type, question)
-    except Exception as exc:
-        raise pt._translated(llm, exc) from exc
+    # Down the VISION chain (Gemini 3.8/3.7/3.6 Flash, then Claude, then GPT-5-mini) when a model
+    # cannot answer; one retry each, so an account out of credit costs seconds, not a minute.
+    answer, _ = describe_with_fallback(pt._get_router(), base64.b64encode(data).decode(), media_type,
+                                       question, max_retries=1)
+    return answer
 
 
 def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[ExtraTool]:
@@ -735,6 +737,54 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         except PhoneError as exc:
             return _failed(name, exc)
 
+    def phone_find(body: str) -> ToolResult:
+        name = "phone_find"
+        parsed = json_body(name, body)
+        if isinstance(parsed, ToolResult):
+            return parsed
+        query = str(parsed.get("query") or "").strip()
+        if not query:
+            groups: dict[str, list[str]] = {}
+            for entry in menu:
+                groups.setdefault(str(entry.get("group") or "other"), []).append(entry["name"])
+            listing = "\n".join(f"{group}: {', '.join(names)}" for group, names in groups.items())
+            return ToolResult(stdout=f"{len(menu)} actions; search one to see its fields.\n{listing}", stderr="", returncode=0)
+        found = _actions.search(menu, query)
+        if not found:
+            return ToolResult(stdout=f"no premapped action for {query!r} -- use the screen tools", stderr="", returncode=0)
+        text = "\n".join(_actions.describe(entry) for entry in found)
+        return ToolResult(stdout=text + '\nRun one with phone_action {"action": name, ...fields}.', stderr="", returncode=0)
+
+    def phone_action(body: str) -> ToolResult:
+        name = "phone_action"
+        parsed = json_body(name, body)
+        if isinstance(parsed, ToolResult):
+            return parsed
+        action = str(parsed.pop("action", "") or "")
+        entry = next((e for e in menu if e["name"] == action), None)
+        if entry is None:
+            hint = ", ".join(_actions.near(menu, action)) or "none close -- search with phone_find"
+            return _bad(name, f"the phone has no action {action!r}; nearest: {hint}")
+        if (app := str(parsed.get("app") or "")) and (why := guard.package_verdict(app, "")):
+            return _refuse(name, why)
+        try:
+            result = backend.run_action(action, parsed)
+        except PhoneError as exc:
+            failed = _failed(name, exc)
+            if exc.code == "invalid":
+                # The whole entry, so the next call can be right without another search.
+                failed = dataclasses.replace(failed, stderr=f"{failed.stderr}\n{_actions.describe(entry)}")
+            return failed
+        text = str(result.get("done") or "done")
+        if result.get("data") is not None:
+            text += "\n" + json.dumps(result["data"], ensure_ascii=False)[:MAX_ACTION_DATA]
+        if result.get("handed_over"):
+            # A message, call or event the person finishes: stop, and say what is ready for them.
+            return ToolResult(stdout=f"GUARD: {name}: {text}{HANDOVER_TAIL}", stderr="", returncode=0)
+        return ToolResult(stdout=text, stderr="", returncode=0)
+
+    menu = _action_menu(backend)
+
     tools = [
         ExtraTool("phone_screen", "The phone's screen as text: the app in front and every element with a "
                   "[number], its text, role, flags and centre. Empty body {}.", phone_screen,
@@ -770,7 +820,43 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                                                             "query": {"type": "string"}}},
                   fold=_digest.fold_result),
     ]
+    # The phone's premapped actions, as a dictionary: searched, never listed in the prompt.
+    if menu:
+        tools[:0] = [
+            ExtraTool("phone_find", FIND_DESCRIPTION, phone_find, mutates=False,
+                      schema={"type": "object", "properties": {"query": {"type": "string"}}}),
+            ExtraTool("phone_action", ACTION_DESCRIPTION, phone_action, mutates=False,
+                      schema={"type": "object", "required": ["action"], "properties": {"action": {"type": "string"}}}),
+        ]
     return [dataclasses.replace(tool, call=_logged(tool.name, tool.call)) for tool in tools]
+
+
+#: How much of an action's returned data (contacts found) goes back to the model.
+MAX_ACTION_DATA = 1500
+
+
+def _action_menu(backend) -> list[dict]:
+    """The phone's action registry, or [] when this phone has none (an older app, a fake)."""
+    lister = getattr(backend, "actions", None)
+    if lister is None:
+        return []
+    try:
+        menu = lister()
+    except Exception as exc:  # noqa: BLE001 -- no registry is a phone without the tool, not a failed turn
+        logger.info("phone actions unavailable: %s", exc)
+        return []
+    return _actions.clean_menu(menu)
+
+
+FIND_DESCRIPTION = (
+    "Search the phone's premapped actions (alarms, timers, calendar, torch, volume, media, DND, messages, calls, "
+    "contacts, sharing, links, maps, clipboard, notes, more) by what you want done; returns matches with their "
+    "fields. Search before reading screens. Empty query lists all."
+)
+ACTION_DESCRIPTION = (
+    "Run an action phone_find returned: {\"action\": name, ...its fields}. One marked 'the person finishes it' "
+    "opens the screen and hands the phone to them."
+)
 
 
 #: How much of a body or a result one log line carries.
@@ -799,9 +885,9 @@ def _asked(body: str) -> str:
         if not isinstance(step, dict):
             shown.append("?")
             continue
-        fields = {k: v for k, v in step.items() if k != "text"}
-        if "text" in step:
-            fields["text"] = f"<{len(str(step['text']))} chars>"
+        # What a person would write (a typed text, a message, a note) or whom it goes to is logged as its length.
+        private = ("text", "body", "subject", "notes", "to", "cc", "phone", "number", "query")
+        fields = {k: (f"<{len(str(v))} chars>" if k in private else v) for k, v in step.items()}
         shown.append(" ".join(f"{k}={_digest.inert_text(str(v), 60)}" for k, v in fields.items()))
     return " ; ".join(shown)[:MAX_LOGGED]
 

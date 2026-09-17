@@ -475,14 +475,19 @@ def test_a_no_verdict_rejection_resubmits_the_document_unchanged(monkeypatch, tm
         assert again.update["output"].startswith("Document written")
 
 
-def test_conversion_is_refused_where_the_host_switched_code_execution_off(monkeypatch, tmp_path):
+def test_conversion_happens_in_process_where_the_host_switched_code_execution_off(monkeypatch, tmp_path):
     """Otto embedded in the phone app disables execute_python; converting a
-    document must not spawn the interpreter anyway (2026-09-15)."""
+    document must not spawn the interpreter anyway (2026-09-15) -- it is written
+    in this process instead (2026-09-17: a phone could make no file at all)."""
     from agent.pipeline.profile import bind_tool_profile
 
     def never(script, **kwargs):
         raise AssertionError("no subprocess in this host")
 
     monkeypatch.setattr(rs, "execute_python", never)
+    (tmp_path / "otto_research" / "x").mkdir(parents=True)
+    (tmp_path / "otto_research" / "x" / "document.md").write_text("# Tides\n\nThe moon pulls.\n")
     with bind_workspace(str(tmp_path)), bind_tool_profile({"execute_python"}):
-        assert rs._convert("otto_research/x", "docx") == (False, "code execution is off in this host")
+        assert rs._convert("otto_research/x", "docx") == (True, "document.docx")
+        assert rs._convert("otto_research/missing", "pdf")[0] is False
+    assert (tmp_path / "otto_research" / "x" / "document.docx").stat().st_size > 1000

@@ -788,12 +788,12 @@ def _convert(dir_rel: str, fmt: str) -> tuple[bool, str]:
     """document.md -> document.<fmt> in the same directory, by a script on
     the workspace's own interpreter. (ok, detail).
 
-    Not where the host has switched code execution off (agent/pipeline/
-    profile.py): Otto embedded in the phone app has no interpreter to hand
-    the script to, and a conversion that spawned one anyway would be the one
-    subprocess that host asked never to see. The Markdown stands either way."""
+    Where the host has switched code execution off (agent/pipeline/
+    profile.py) -- Otto embedded in the phone app has no interpreter to hand
+    the script to -- the document is written in this process instead
+    (agent/pipeline/documents.py). The Markdown stands either way."""
     if "execute_python" in disabled_tools():
-        return False, "code execution is off in this host"
+        return _convert_here(dir_rel, fmt)
     try:
         source = resolve_in_workspace(f"{dir_rel}/document.md")
         target = resolve_in_workspace(f"{dir_rel}/document.{fmt}")
@@ -807,6 +807,20 @@ def _convert(dir_rel: str, fmt: str) -> tuple[bool, str]:
         return True, f"document.{fmt}"
     detail = (result.stderr or result.stdout or "").strip().splitlines()
     return False, (detail[-1] if detail else f"exit {result.returncode}")
+
+
+def _convert_here(dir_rel: str, fmt: str) -> tuple[bool, str]:
+    from agent.pipeline import documents
+
+    try:
+        source = resolve_in_workspace(f"{dir_rel}/document.md")
+        target = resolve_in_workspace(f"{dir_rel}/document.{fmt}")
+        documents.write(source.read_text(encoding="utf-8"), target, fmt)
+    except OutsideWorkspace as exc:
+        return False, str(exc)
+    except Exception as exc:  # a missing library, a writer's complaint: the Markdown stands
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, f"document.{fmt}"
 
 
 def _report(outline: Outline, document_path: str, rows: list[dict],
