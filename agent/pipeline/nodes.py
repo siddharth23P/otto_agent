@@ -3435,8 +3435,27 @@ PHONE_DECIDE_PROMPT = (
     "app (a cart, an order). No when it can be done without touching the phone -- writing, "
     "explaining, computing, coding, research on the web, or making a document. A short "
     "follow-up (\"do it\", \"the second one\", \"and a cover too\") inherits what the "
-    "conversation before it was doing. Reply with exactly one line: PHONE: yes, or PHONE: no."
+    "conversation before it was doing. A file the person attached is shown only by its name: "
+    "reviewing, summarising or answering about a file is no, unless they ask for something to "
+    "be done on the phone with it. Reply with exactly one line: PHONE: yes, or PHONE: no."
 )
+
+#: A file a host attached to the message (the Android app's Attachments.compose): its content is
+#: data, never part of the question "does this need the phone" (2026-09-17: a CV's text ran a
+#: review on the phone and wrote it into a note).
+_ATTACHED_FILE = re.compile(r'<attached-file name="([^"]*)"[^>]*>.*?</attached-file>\s*', re.S)
+
+
+def _without_attached_files(text: str) -> tuple[str, int]:
+    """The request as the person typed it, each attached file reduced to its name, and how many."""
+    count = 0
+
+    def name(match: re.Match) -> str:
+        nonlocal count
+        count += 1
+        return f"[attached file: {match.group(1)}]\n"
+
+    return _ATTACHED_FILE.sub(name, str(text)), count
 
 _PHONE_LINE = re.compile(r"^[\s*_-]*PHONE[*_]*:[\s*_]*(yes|no)\b", re.I | re.M)
 #: How much of the conversation the decision sees: enough for a follow-up to
@@ -3455,10 +3474,15 @@ def parse_phone_decision(reply: str) -> bool:
 
 def needs_phone(text: str, history=()) -> bool:
     """Whether this turn should run on the phone: one call on the cheap chat
-    seat. Any failure -- no route, a provider error, an empty reply -- is
-    yes, today's behaviour. `Cancelled` is not a failure and propagates, so
+    seat, and the next seat in that chain when a call fails. When none
+    answers -- no route, provider errors, an empty reply -- a plain request is
+    yes, today's behaviour, and one carrying attached files is no: acting on the
+    phone is what a document request must never do by accident. Attached files
+    are judged by name only. `Cancelled` is not a failure and propagates, so
     a person who pressed Stop is not made to wait for the phone loop."""
     from agent.pipeline.progress import Cancelled
+
+    text, attached = _without_attached_files(text)
 
     lines = []
     for message in list(history)[-PHONE_DECIDE_MESSAGES:]:
@@ -3468,15 +3492,25 @@ def needs_phone(text: str, history=()) -> bool:
         "CONVERSATION SO FAR:\n" + "\n".join(lines) if lines else "",
         f"REQUEST:\n{str(text)[:4 * PHONE_DECIDE_CHARS]}",
     ) if part)
+    messages = [SystemMessage(PHONE_DECIDE_PROMPT), HumanMessage(body)]
     try:
-        reply = _call(ROUTER.chat_model(Task.CHAT_FAST),
-                      [SystemMessage(PHONE_DECIDE_PROMPT), HumanMessage(body)])
-    except Cancelled:
-        raise
+        seats = ROUTER.chain(Task.CHAT_FAST)
     except Exception as exc:  # noqa: BLE001 -- deciding must never fail a turn
-        logger.warning("phone decision failed, keeping the phone: %s", exc)
-        return True
-    return parse_phone_decision(reply)
+        logger.warning("phone decision has no route: %s", exc)
+        seats = []
+    for decision in seats:
+        try:
+            reply = _call(ROUTER.model_for(decision), messages)
+        except Cancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- deciding must never fail a turn
+            logger.warning("phone decision via %s:%s failed: %s", decision.provider, decision.model.id, exc)
+            continue
+        return parse_phone_decision(reply)
+    fallback = attached == 0
+    logger.warning("phone decision failed on every seat; %s the phone%s", "keeping" if fallback else "not using",
+                   "" if fallback else " (the request carries attached files)")
+    return fallback
 
 
 def _record_seat(state: AgentState, *, approved: bool) -> None:

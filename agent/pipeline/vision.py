@@ -82,3 +82,37 @@ def describe_image(llm, image_b64: str, media_type: str, question: str) -> str:
         create_image_block(base64=image_b64, mime_type=media_type),
     ])
     return _flatten(llm.invoke([message]).content).strip()
+
+
+def describe_with_fallback(router, image_b64: str, media_type: str, question: str,
+                           **overrides) -> tuple[str, str]:
+    """The answer from the first model in the VISION chain that gives one, and "provider:model".
+
+    A failed call is reported to agent/router/health.py -- an account out of credit cools its
+    whole vendor for an hour, a rate limit cools the model -- and the next candidate is tried.
+    When none answers, the last failure is raised with every model's reason in its message.
+    `overrides` go to each model (a retry count, a timeout)."""
+    from agent.router import health
+    from agent.router.llm_provider.base import ProviderError, translate_unknown
+    from agent.router.mapping import Task
+
+    reasons: list[str] = []
+    last: Exception | None = None
+    for decision in router.chain(Task.VISION):
+        name = f"{decision.provider}:{decision.model.id}"
+        if why := health.HEALTH.cooling(decision.provider, decision.model.id):
+            reasons.append(f"{name} skipped ({why})")
+            continue
+        try:
+            llm = router.model_for(decision, **overrides)
+            answer = describe_image(llm, image_b64, media_type, question)
+        except Exception as exc:
+            health.note_failure(exc, provider=decision.provider, model_id=decision.model.id)
+            last = exc if isinstance(exc, ProviderError) else translate_unknown(
+                exc, provider=decision.provider, model_id=decision.model.id)
+            reasons.append(f"{name}: {str(last)[:160]}")
+            continue
+        health.HEALTH.note_success(decision.provider, decision.model.id)
+        return answer, name
+    detail = "; ".join(reasons) or "no vision model is configured"
+    raise ProviderError(f"no vision model could answer -- {detail}") from last

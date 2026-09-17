@@ -237,7 +237,11 @@ def test_phone_look_uses_the_routed_vision_model_by_default(monkeypatch):
             return R()
 
     class _Router:
-        def chat_model(self, task, **kw):
+        def chain(self, task):
+            from types import SimpleNamespace
+            return [SimpleNamespace(provider="gemini", model=SimpleNamespace(id="fake-vision"))]
+
+        def model_for(self, decision, **kw):
             return _LLM()
 
     monkeypatch.setattr(pt, "_get_router", lambda: _Router())

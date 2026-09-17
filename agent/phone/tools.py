@@ -128,14 +128,13 @@ def _default_vision(question: str, data: bytes, media_type: str) -> str:
     """The `look` tool's path: the routed vision model, words back, vendor
     exceptions translated into Otto's own so the loop reads a failed call."""
     from agent.pipeline import tools as pt
-    from agent.pipeline.vision import describe_image
-    from agent.router.mapping import Task
+    from agent.pipeline.vision import describe_with_fallback
 
-    llm = pt._get_router().chat_model(Task.VISION)
-    try:
-        return describe_image(llm, base64.b64encode(data).decode(), media_type, question)
-    except Exception as exc:
-        raise pt._translated(llm, exc) from exc
+    # Down the VISION chain (Gemini 3.8/3.7/3.6 Flash, then Claude, then GPT-5-mini) when a model
+    # cannot answer; one retry each, so an account out of credit costs seconds, not a minute.
+    answer, _ = describe_with_fallback(pt._get_router(), base64.b64encode(data).decode(), media_type,
+                                       question, max_retries=1)
+    return answer
 
 
 def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[ExtraTool]:
