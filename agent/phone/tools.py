@@ -61,6 +61,8 @@ PHONE_DISABLED_STANDING_TOOLS: frozenset[str] = frozenset({
 #: Bound with the tools (agent/pipeline/toolkit.py `guidance=`).
 PHONE_GUIDANCE = (
     "You are working on the person's Android phone through phone_* tools. "
+    "The phone is the last resort: use phone_* only for steps that need the device, and make "
+    "files with make_document, never in an app. "
     "Look, act, look again: phone_screen shows what is on screen with a [number] per element; "
     "phone_act acts on one element by its text and shows the screen after. "
     "When you already know the next few steps (tap the search box, type the query, press enter -- the "

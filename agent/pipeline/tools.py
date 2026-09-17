@@ -884,6 +884,50 @@ def _remote_edit(remote, head: str, rest: str) -> ToolResult:
     return ToolResult(stdout=f"edited {path}{note}", stderr="", returncode=0)
 
 
+_DOCUMENT_HEAD = re.compile(r"^\s*(pdf|docx|xlsx|pptx|md)\s+(.+?)\s*$", re.I)
+_DOCUMENT_FROM = re.compile(r"^\s*from\s+(.+?)\s*$", re.I)
+
+
+def make_document(body: str) -> ToolResult:
+    """A PDF, Word, Excel or PowerPoint file (or Markdown) in the workspace's documents/ folder,
+    made in this process (agent/pipeline/documents.py) -- no interpreter, no app on a phone.
+    CODE: body: first line `<pdf|docx|xlsx|pptx|md> <file name>`; then either the Markdown to put
+    in it, or a line `from <workspace path>` naming a Markdown or text file to convert. Tables
+    become real tables (in xlsx, a sheet each, numbers as numbers); headings become slides in pptx."""
+    from agent.pipeline import documents
+
+    try:
+        resolve_in_workspace(documents.OUT_DIR)
+    except OutsideWorkspace as exc:
+        return _workspace_failure("make_document", str(exc))
+    head, _, rest = (body or "").partition("\n")
+    match = _DOCUMENT_HEAD.match(head)
+    if not match:
+        return _workspace_failure("make_document", "first line must be `<pdf|docx|xlsx|pptx|md> <file name>`")
+    fmt, name = match.group(1).lower(), match.group(2)
+    stem = re.sub(r"[^\w.-]+", "_", Path(name).stem).strip("._") or "document"
+    source_line, _, content = rest.partition("\n")
+    try:
+        if (source := _DOCUMENT_FROM.match(source_line)) and not content.strip():
+            markdown = resolve_in_workspace(source.group(1)).read_text(encoding="utf-8", errors="replace")
+        else:
+            markdown = rest
+        if not markdown.strip():
+            return _workspace_failure("make_document", "nothing to put in the document: give Markdown after the first line")
+        target = resolve_in_workspace(f"{documents.OUT_DIR}/{stem}.{fmt}")
+        documents.write(utf8_clean(markdown), target, fmt)
+    except OutsideWorkspace as exc:
+        return _workspace_failure("make_document", str(exc))
+    except FileNotFoundError as exc:
+        return _workspace_failure("make_document", f"no such file: {exc.filename}")
+    except ImportError as exc:
+        return _workspace_failure("make_document", f"{fmt} files cannot be made here: {exc}")
+    except Exception as exc:  # a writer's own complaint, as a result the loop can read
+        return _workspace_failure("make_document", f"could not make the {fmt} file: {type(exc).__name__}: {exc}")
+    size = target.stat().st_size
+    return ToolResult(stdout=f"made {documents.OUT_DIR}/{stem}.{fmt} ({size:,} bytes)", stderr="", returncode=0)
+
+
 def list_files(body: str) -> ToolResult:
     """List files under a workspace directory, recursively. CODE: body is the
     directory (empty means the workspace root).
@@ -1835,6 +1879,7 @@ TOOL_TIERS: dict[str, str] = {
     "view_image": READ_ONLY,
     "list_files": READ_ONLY,
     "write_file": WORKSPACE,
+    "make_document": WORKSPACE,
     "edit_file": WORKSPACE,
     "browse": READ_ONLY,
     # Only ever opens a file in the workspace and drives that one page, so
@@ -1922,6 +1967,8 @@ TOOL_NEEDS: dict[str, str] = {
     # Both index files on this machine and have no remote branch.
     "rag": NEEDS_WORKSPACE,
     "code_map": NEEDS_WORKSPACE,
+    # Written in this process, so a container's filesystem is out of its reach.
+    "make_document": NEEDS_WORKSPACE,
 }
 
 
@@ -2038,6 +2085,7 @@ TOOL_DISPATCH: dict[str, Callable[[str], ToolResult]] = {
     "view_image": view_image,
     "list_files": list_files,
     "write_file": write_file,
+    "make_document": make_document,
     "edit_file": edit_file,
     "browse": browse,
     "exercise": exercise,

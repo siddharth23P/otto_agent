@@ -33,14 +33,15 @@ dependencies = [
     # Nothing here needs a newer numpy: this package uses ndarray, linalg, float32, asarray, where,
     # stack, argsort, frombuffer and dot, all of them long-settled API.
     "numpy>=1.26.2",
-    # The document exports (agent/pipeline/research.py) run in a subprocess
-    # on a desktop; none of the three has an Android wheel and none is needed
-    # where there is no subprocess to run them in.
-    "openpyxl>=3.1.5; sys_platform != 'android'",
+    # Documents otto makes (agent/pipeline/documents.py, the make_document
+    # tool, research exports), in-process and so on a phone too: all four are
+    # pure Python, and their compiled needs (lxml, Pillow) have Android builds.
+    "openpyxl>=3.1.5",
     "prompt-toolkit>=3.0.53",
-    "python-docx>=1.1.2; sys_platform != 'android'",
+    "python-docx>=1.1.2",
     "python-dotenv>=1.2.3",
-    "reportlab>=4.2; sys_platform != 'android'",
+    "python-pptx>=1.0.2",
+    "reportlab>=4.2",
     "textual>=8.2.8",
     "tiktoken>=0.14.0",
     "typer>=0.27.2",
