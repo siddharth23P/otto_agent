@@ -33,7 +33,13 @@ from agent.router.llm_provider.base import (
     ProviderError,
     ProviderUnavailable,
     connection_detail,
+    prompt_caching,
+    with_model_kwargs,
 )
+
+#: The request-level breakpoint for automatic prompt caching (5-minute TTL: an agent loop
+#: calls again well inside it, and a 1-hour write costs 2x input instead of 1.25x).
+PROMPT_CACHE = {"type": "ephemeral"}
 
 __all__ = ["AnthropicProvider"]
 
@@ -126,4 +132,8 @@ class AnthropicProvider(BaseProvider):
     def chat_model(self, model_id: str, **kwargs: Any) -> BaseChatModel:
         if self._base_url:
             kwargs.setdefault("base_url", self._base_url)
+        if prompt_caching():
+            # Automatic caching (base.py PROMPT_CACHE_ENV): ChatAnthropic puts model_kwargs at the
+            # top level of the request, where the direct API reads `cache_control`.
+            kwargs = with_model_kwargs(kwargs, cache_control=dict(PROMPT_CACHE))
         return ChatAnthropic(model=model_id, api_key=self._api_key, **kwargs)

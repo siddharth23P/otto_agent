@@ -117,6 +117,10 @@ class GeminiProvider(BaseProvider):
         return found
 
     def chat_model(self, model_id: str, **kwargs: Any) -> BaseChatModel:
+        # Prompt caching is implicit on Gemini 2.5 and later: a repeated prefix is billed at the
+        # cached rate with nothing sent, and ChatGoogleGenerativeAI reports it as
+        # input_token_details.cache_read (base.py PROMPT_CACHE_ENV). Explicit `cached_content`
+        # caches are not used -- they are stored, and billed, per hour.
         return ChatGoogleGenerativeAI(
             model=model_id, google_api_key=self._api_key, **kwargs
         )

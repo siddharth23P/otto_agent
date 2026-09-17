@@ -138,6 +138,7 @@ one interpreter per run), `OTTO_PYTHON_SESSION_MEMORY_MB` (that interpreter's
 address-space ceiling on Linux, default 8192, 0 for none),
 `OTTO_EMBEDDING_MODEL` (`provider:model`; local BGE is the floor),
 `OTTO_MODEL_PRICES` (a JSON file that overrides the price table),
+`OTTO_PROMPT_CACHE=0` (turn off input-token caching, on by default for all four vendors),
 `OTTO_IGNORE_ROUTES=1` (use the shipped routing table untouched; evals do),
 `OTTO_BROWSER_PYTHON` (an interpreter with Playwright and `pyte`, which
 enables the browser and terminal tools), `OTTO_HOME` (where state lives,

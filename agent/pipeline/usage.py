@@ -139,7 +139,13 @@ class UsageLedger:
         details = usage.get("input_token_details")
         if isinstance(details, Mapping):
             entry.cached_input_tokens += _int(details.get("cache_read"))
-            entry.cache_write_tokens += _int(details.get("cache_creation"))
+            # langchain-anthropic reports a write by its TTL (ephemeral_5m/_1h_input_tokens) and then
+            # leaves cache_creation at 0; either shape is a write. Priced at the 5-minute write rate,
+            # the TTL otto asks for.
+            entry.cache_write_tokens += max(
+                _int(details.get("cache_creation")),
+                _int(details.get("ephemeral_5m_input_tokens")) + _int(details.get("ephemeral_1h_input_tokens")),
+            )
         entry.reported = entry.reported or got
 
     @property
@@ -192,6 +198,7 @@ class UsageLedger:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cached_input_tokens": self.cached_input_tokens,
+            "cache_write_tokens": sum(m.cache_write_tokens for m in self.by_model.values()),
             "total_tokens": self.total_tokens,
             "cost": self.cost,
             "fully_priced": self.fully_priced,
@@ -202,6 +209,7 @@ class UsageLedger:
                     "input_tokens": m.input_tokens,
                     "output_tokens": m.output_tokens,
                     "cached_input_tokens": m.cached_input_tokens,
+                    "cache_write_tokens": m.cache_write_tokens,
                     "total_tokens": m.total_tokens,
                     "reported": m.reported,
                     "cost": m.cost,
