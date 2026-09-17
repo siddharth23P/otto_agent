@@ -150,6 +150,18 @@ class JsonBackend:
     def install(self, package: str = "", query: str = "") -> dict:
         return self._call("install", str(package or ""), str(query or ""))
 
+    # Optional, not part of PhoneBackend: the phone's own action registry (the Android app's
+    # actions/ActionCatalog.kt). A backend without it simply offers no phone_action tool.
+
+    def actions(self) -> list[dict]:
+        """[{"name", "summary", "effect": read|change|confirm, "params": [{"name", "type", ...}]}]."""
+        reply = self._call("actions")
+        return list(reply.get("actions") or []) if isinstance(reply, dict) else []
+
+    def run_action(self, name: str, args: dict) -> dict:
+        """{"done", "handed_over"?, "data"?}"""
+        return self._call("run_action", str(name), json.dumps(args or {}))
+
 
 def _unwrap(method: str, reply: Any) -> Any:
     """The `data` of an ok envelope, a PhoneError for an error envelope, and

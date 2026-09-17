@@ -45,7 +45,7 @@ from agent.phone import digest as _digest
 from agent.phone import guard
 from agent.phone import notes as _notes
 from agent.phone.backend import PhoneBackend, PhoneError
-from agent.pipeline.toolkit import ExtraTool, json_body, validate_against
+from agent.pipeline.toolkit import MAX_TOOL_DESCRIPTION_CHARS, ExtraTool, json_body, validate_against
 from agent.pipeline.tools import ToolResult
 from agent.pipeline.vision import sniff_media_type
 
@@ -736,6 +736,31 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
         except PhoneError as exc:
             return _failed(name, exc)
 
+    def run_action(name: str, offered: list[dict]) -> Callable[[str], ToolResult]:
+        def call(body: str) -> ToolResult:
+            parsed = json_body(name, body)
+            if isinstance(parsed, ToolResult):
+                return parsed
+            action = str(parsed.pop("action", "") or "")
+            if not any(a["name"] == action for a in offered):
+                return _bad(name, f"no action {action!r}; one of {', '.join(a['name'] for a in offered)}")
+            if (app := str(parsed.get("app") or "")) and (why := guard.package_verdict(app, "")):
+                return _refuse(name, why)
+            try:
+                result = backend.run_action(action, parsed)
+            except PhoneError as exc:
+                return _failed(name, exc)
+            text = str(result.get("done") or "done")
+            if result.get("data") is not None:
+                text += "\n" + json.dumps(result["data"], ensure_ascii=False)[:MAX_ACTION_DATA]
+            if result.get("handed_over"):
+                # A message, call or event the person finishes: stop, and say what is ready for them.
+                return ToolResult(stdout=f"GUARD: {name}: {text}{HANDOVER_TAIL}", stderr="", returncode=0)
+            return ToolResult(stdout=text, stderr="", returncode=0)
+        return call
+
+    menu = _action_menu(backend)
+
     tools = [
         ExtraTool("phone_screen", "The phone's screen as text: the app in front and every element with a "
                   "[number], its text, role, flags and centre. Empty body {}.", phone_screen,
@@ -771,7 +796,72 @@ def phone_tools(backend: PhoneBackend, *, vision: Vision | None = None) -> list[
                                                             "query": {"type": "string"}}},
                   fold=_digest.fold_result),
     ]
+    # The phone's premapped actions come first: one tool per group, so each menu fits a tool description.
+    tools[:0] = [ExtraTool(name, _action_description(offered), run_action(name, offered), mutates=False,
+                           schema={"type": "object", "required": ["action"],
+                                   "properties": {"action": {"type": "string", "enum": [a["name"] for a in offered]}}})
+                 for name, offered in _action_groups(menu).items()]
     return [dataclasses.replace(tool, call=_logged(tool.name, tool.call)) for tool in tools]
+
+
+#: How much of an action's returned data (contacts found) goes back to the model.
+MAX_ACTION_DATA = 1500
+
+
+def _action_menu(backend) -> list[dict]:
+    """The phone's action registry, or [] when this phone has none (an older app, a fake)."""
+    lister = getattr(backend, "actions", None)
+    if lister is None:
+        return []
+    try:
+        menu = lister()
+    except Exception as exc:  # noqa: BLE001 -- no registry is a phone without the tool, not a failed turn
+        logger.info("phone actions unavailable: %s", exc)
+        return []
+    return [a for a in menu if isinstance(a, dict) and a.get("name")]
+
+
+#: The groups the app files its actions under, and the tool each becomes.
+ACTION_TOOLS = {"clock": "phone_clock", "device": "phone_device", "message": "phone_message", "files": "phone_files"}
+_ACTION_OPENING = "Before screens. {\"action\",...}: "
+_ACTION_CLOSING = ". (you)=the person finishes"
+
+
+def _action_groups(menu: list[dict]) -> dict[str, list[dict]]:
+    """Tool name -> its actions, in menu order; an unknown group joins phone_more."""
+    groups: dict[str, list[dict]] = {}
+    for action in menu:
+        groups.setdefault(ACTION_TOOLS.get(str(action.get("group") or ""), "phone_more"), []).append(action)
+    return groups
+
+
+def _action_description(offered: list[dict]) -> str:
+    """The group's menu within a tool description: choices first (they cannot be guessed), then each
+    action's summary while it still fits."""
+    def render(choices: bool, said: set[int]) -> str:
+        return _ACTION_OPENING + "; ".join(_signature(a, choices, i in said) for i, a in enumerate(offered)) + _ACTION_CLOSING
+
+    choices = len(render(True, set())) <= MAX_TOOL_DESCRIPTION_CHARS
+    said: set[int] = set()
+    for i in range(len(offered)):
+        if len(render(choices, said | {i})) <= MAX_TOOL_DESCRIPTION_CHARS:
+            said.add(i)
+    return render(choices, said)[:MAX_TOOL_DESCRIPTION_CHARS]
+
+
+def _signature(action: dict, choices: bool = True, summary: bool = True) -> str:
+    """`volume{stream:media|ring,level?} set a volume`; (you) marks what the person finishes."""
+    fields = []
+    for p in action.get("params") or []:
+        if not isinstance(p, dict):
+            continue
+        field = str(p.get("name")) + ("" if p.get("required", True) else "?")
+        if choices and p.get("choices"):
+            field += ":" + "|".join(map(str, p["choices"]))
+        fields.append(field)
+    said = f" {action.get('summary', '')}" if summary else ""
+    you = " (you)" if action.get("effect") == "confirm" else ""
+    return f"{action['name']}{{{','.join(fields)}}}{said}{you}".rstrip()
 
 
 #: How much of a body or a result one log line carries.
@@ -800,9 +890,9 @@ def _asked(body: str) -> str:
         if not isinstance(step, dict):
             shown.append("?")
             continue
-        fields = {k: v for k, v in step.items() if k != "text"}
-        if "text" in step:
-            fields["text"] = f"<{len(str(step['text']))} chars>"
+        # What a person would write (a typed text, a message, a note) or whom it goes to is logged as its length.
+        private = ("text", "body", "subject", "notes", "to", "cc", "phone", "number", "query")
+        fields = {k: (f"<{len(str(v))} chars>" if k in private else v) for k, v in step.items()}
         shown.append(" ".join(f"{k}={_digest.inert_text(str(v), 60)}" for k, v in fields.items()))
     return " ; ".join(shown)[:MAX_LOGGED]
 
