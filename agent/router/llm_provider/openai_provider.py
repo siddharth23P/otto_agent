@@ -31,7 +31,12 @@ from agent.router.llm_provider.base import (
     ProviderError,
     ProviderUnavailable,
     connection_detail,
+    prompt_caching,
+    with_model_kwargs,
 )
+
+#: prompt_cache_key is this plus the model id: one cache per model, shared by its calls.
+PROMPT_CACHE_KEY_PREFIX = "otto:"
 
 __all__ = ["OpenAIProvider"]
 
@@ -132,6 +137,11 @@ class OpenAIProvider(BaseProvider):
         # No hand-rolled chat method. Returning a BaseChatModel is what makes
         # this provider interchangeable inside a LangGraph node and visible to
         # Langfuse without any extra wiring.
+        if prompt_caching() and self._base_url is None:
+            # OpenAI caches long prefixes by itself; the key sends a model's calls to the same cache
+            # (base.py PROMPT_CACHE_ENV). Only for OpenAI itself: an OpenAI-compatible server
+            # (custom.py) may reject a field it does not know.
+            kwargs = with_model_kwargs(kwargs, prompt_cache_key=f"{PROMPT_CACHE_KEY_PREFIX}{model_id}")
         return ChatOpenAI(
             model=model_id,
             api_key=self._api_key,

@@ -184,6 +184,36 @@ class AuthError(ProviderError):
     """Key missing, malformed, or rejected by the vendor."""
 
 
+#: Prompt (input-token) caching, on unless OTTO_PROMPT_CACHE is 0/false/off.
+#: What "on" means differs by vendor, because their caches do:
+#:   anthropic  opt-in: top-level `cache_control` (automatic caching) -- the
+#:              breakpoint follows the last block, so an agent loop re-reads its
+#:              whole transcript at 0.1x input and writes only the new part.
+#:   openai     automatic for prefixes over 1024 tokens; `prompt_cache_key`
+#:              routes a model's calls to the same cache.
+#:   gemini     implicit for 2.5 and later -- nothing to send; the discount
+#:              arrives as `cached_content_token_count`, already counted.
+#:   inception  automatic on Mercury; the provider now reports its
+#:              `cached_input_tokens` so the ledger prices them.
+PROMPT_CACHE_ENV = "OTTO_PROMPT_CACHE"
+
+
+def prompt_caching() -> bool:
+    return os.environ.get(PROMPT_CACHE_ENV, "1").strip().lower() not in ("0", "false", "off", "no")
+
+
+def with_model_kwargs(kwargs: dict[str, Any], **defaults: Any) -> dict[str, Any]:
+    """`kwargs` with `defaults` merged under its `model_kwargs`; a route that set one of them wins,
+    and a route that set it to None removes it."""
+    extra = dict(kwargs.pop("model_kwargs", None) or {})
+    for key, value in defaults.items():
+        extra.setdefault(key, value)
+    extra = {k: v for k, v in extra.items() if v is not None}
+    if extra:
+        kwargs["model_kwargs"] = extra
+    return kwargs
+
+
 def connection_detail(exc: BaseException) -> str:
     """A vendor SDK's message for a failed connection, with what failed underneath it.
 

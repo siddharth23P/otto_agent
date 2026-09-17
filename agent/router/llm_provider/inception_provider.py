@@ -98,6 +98,28 @@ def _field(obj: Any, key: str) -> Any:
     return getattr(obj, key, None)
 
 
+def _cached_tokens(u: Any) -> int | None:
+    """Mercury's cache hits: `prompt_tokens_details.cached_tokens` (what the API sends, as OpenAI
+    does) or the SDK's own `cached_input_tokens`."""
+    direct = _field(u, "cached_input_tokens")
+    if direct:
+        return direct
+    details = _field(u, "prompt_tokens_details")
+    if details is None and isinstance(getattr(u, "model_extra", None), Mapping):
+        details = u.model_extra.get("prompt_tokens_details")
+    return _field(details, "cached_tokens")
+
+
+def _usage_metadata(input_tokens: int, output_tokens: int, total_tokens: int, cached: Any) -> dict:
+    """LangChain's usage shape. Mercury caches repeated prefixes by itself and reports the hits as
+    `cached_input_tokens`; they go to input_token_details.cache_read, where the ledger prices them
+    (agent/pipeline/usage.py)."""
+    metadata: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
+    if isinstance(cached, int) and cached > 0:
+        metadata["input_token_details"] = {"cache_read": cached}
+    return metadata
+
+
 def _usage(u: Any) -> dict[str, int] | None:
     """Vendor usage payload -> Langfuse's usage_details key names."""
     if u is None:
@@ -110,11 +132,10 @@ def _usage(u: Any) -> dict[str, int] | None:
     details = {k: v for k, v in details.items() if v is not None}
     if not details:
         return None
-    for attr, key in (("cached_input_tokens", "cached_input"),
-                      ("reasoning_tokens", "reasoning")):
-        value = _field(u, attr)
-        if value:
-            details[key] = value
+    if cached := _cached_tokens(u):
+        details["cached_input"] = cached
+    if reasoning := _field(u, "reasoning_tokens"):
+        details["reasoning"] = reasoning
     return details
 
 
@@ -380,11 +401,10 @@ class ChatInception(BaseChatModel):
                 "finish_reason": choice.finish_reason,
                 "warning": completion.warning,
             },
-            usage_metadata={
-                "input_tokens": usage.prompt_tokens,
-                "output_tokens": usage.completion_tokens,
-                "total_tokens": usage.total_tokens,
-            },
+            usage_metadata=_usage_metadata(
+                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
+                _cached_tokens(usage),
+            ),
         )
         return ChatResult(
             generations=[
@@ -449,12 +469,11 @@ class ChatInception(BaseChatModel):
                         yield ChatGenerationChunk(
                             message=AIMessageChunk(
                                 content="",
-                                usage_metadata={
-                                    "input_tokens": input_tokens,
-                                    "output_tokens": output_tokens,
-                                    "total_tokens": _field(usage, "total_tokens")
-                                    or input_tokens + output_tokens,
-                                },
+                                usage_metadata=_usage_metadata(
+                                    input_tokens, output_tokens,
+                                    _field(usage, "total_tokens") or input_tokens + output_tokens,
+                                    _cached_tokens(usage),
+                                ),
                             )
                         )
                     continue
