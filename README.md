@@ -6,6 +6,7 @@
 [![PyPI](https://img.shields.io/pypi/v/otto-cli-agent?label=pypi)](https://pypi.org/project/otto-cli-agent/)
 ![tests](https://img.shields.io/badge/tests-1685%20passed-brightgreen)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/otto-cli-agent?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/otto-cli-agent)
+
 Otto is a terminal AI agent that works on a codebase, a container, a browser
 or a desktop, uses what it built, and judges its own work against criteria it
 wrote before it started. It runs as a full-screen TUI or a REPL, routes each
